@@ -50,6 +50,7 @@ import {
 } from './ownership.js';
 import type { TraceRecorder, TraceSpan } from './trace.js';
 import { createTrace } from './trace.js';
+import { normalizeRepoPath } from './paths.js';
 import { OUTPUT_SCHEMA_VERSION } from './schema.js';
 
 export type PlanStepKind = 'create' | 'update' | 'delete' | 'release';
@@ -152,7 +153,13 @@ export type PlanNoticeKind =
    * Базы трёхстороннего мерджа нет — мердж будет двухсторонним.
    * Контракт требует НАЗВАТЬ это, а не выродиться молча.
    */
-  | 'baseline-missing';
+  | 'baseline-missing'
+  /**
+   * Поданное подтверждение не понадобилось: по этому `dest` отказа не было
+   * (или он вовсе не объявлен). Названо, чтобы «подтвердил, а ничего не
+   * изменилось» не выглядело как молчание движка.
+   */
+  | 'confirmation-unused';
 
 /**
  * Извещение: состояние, которое обязано быть НАЗВАНО, но не является ни шагом,
@@ -173,6 +180,8 @@ export interface NoticeDetail {
   readonly version?: string | null;
   /** `baseline-missing`: почему база не восстановлена. */
   readonly cause?: 'no-version' | 'unresolved';
+  /** `confirmation-unused`: почему подтверждение не пригодилось. */
+  readonly confirmation?: 'not-required' | 'not-declared';
 }
 
 /**
@@ -215,11 +224,23 @@ export interface PlanOptions {
   /** База трёхстороннего мерджа; по умолчанию базы нет. */
   readonly baseline?: CanonBaseline;
   /**
-   * Забрать владение силой (семантика `--force-conflicts` из Kubernetes SSA).
-   * Отдельное ЯВНОЕ действие: по умолчанию конфликт = отказ (§4 контракта).
-   * Инвариант класса `product` силой НЕ снимается — он не про конфликт.
+   * ПЕРЕЧЕНЬ `dest`, для которых отнятие прав у продукта подтверждено
+   * (семантика `--force-conflicts` из Kubernetes SSA, но адресная).
+   *
+   * Подтверждение — согласие на КОНКРЕТНОЕ действие, а не режим прогона
+   * (`kb:BASER-5`, «Подтверждение адресно, а не глобально»). Булев флаг
+   * превращал бы санкционированный escape hatch в оружие по площадям:
+   * подтвердив одно сужение владения, потребитель молча усыновлял и переписывал
+   * все прочие чужие файлы декларации. **Согласие не масштабируется само** —
+   * артефакт вне перечня остаётся под отказом.
+   *
+   * Что подтверждать — план называет сам: конфликты с `detail.resolution`
+   * несут `dest`, по которым подаётся этот список. Формы «подтвердить всё» нет
+   * намеренно; перечислить всё — осознанное действие раннера.
+   *
+   * Инвариант класса `product` подтверждением НЕ снимается — он не про конфликт.
    */
-  readonly force?: boolean;
+  readonly confirm?: readonly string[];
   readonly scan?: ScanOptions;
   readonly trace?: TraceRecorder;
 }
@@ -237,6 +258,13 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
   const source =
     options.source ?? createTreeSource(tree, declaration.contentRoot);
   const baseline = options.baseline ?? EMPTY_BASELINE;
+
+  const confirm = new Set(
+    (options.confirm ?? []).map((dest, index) =>
+      normalizeRepoPath(dest, `confirm[${index}]`),
+    ),
+  );
+  const consumed = new Set<string>();
 
   const steps: PlanStep[] = [];
   const conflicts: PlanConflict[] = [];
@@ -277,7 +305,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
           registry,
           source,
           baseline,
-          force: options.force === true,
+          confirmed: confirm.has(entry.dest),
         });
 
         if (outcome.step !== undefined) {
@@ -289,13 +317,39 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
         if (outcome.notice !== undefined) {
           notices.push(outcome.notice);
         }
+        if (outcome.confirmationUsed === true) {
+          consumed.add(entry.dest);
+        }
       }
     },
     { entries: declaration.frame.length },
   );
 
+  for (const dest of confirm) {
+    if (consumed.has(dest)) {
+      continue;
+    }
+    const declared = claimed.has(dest);
+    notices.push({
+      kind: 'confirmation-unused',
+      dest,
+      detail: { confirmation: declared ? 'not-required' : 'not-declared' },
+      message: declared
+        ? `подтверждение по "${dest}" не понадобилось: отказа по этому артефакту нет`
+        : `подтверждение по "${dest}" ни к чему не относится: такой записи нет в frame`,
+    });
+  }
+
   const owned = trace.span('plan.scan-ownership', () =>
-    scanOwnership(tree, options.scan),
+    scanOwnership(tree, {
+      ...options.scan,
+      // Объявленные `dest` всегда в зоне видимости скана, каким бы ни был
+      // список пропуска: собственный артефакт не имеет права стать невидимым.
+      declared: [
+        ...(options.scan?.declared ?? []),
+        ...declaration.frame.map((entry) => entry.dest),
+      ],
+    }),
   );
   trace.event('plan.owned', { files: owned.size });
 
@@ -341,7 +395,8 @@ interface EntryContext {
   readonly registry: StrategyRegistry;
   readonly source: CanonSource;
   readonly baseline: CanonBaseline;
-  readonly force: boolean;
+  /** Подтверждено ли отнятие прав именно по ЭТОМУ `dest`. */
+  readonly confirmed: boolean;
 }
 
 /** Исход одной записи `frame`: не более одного шага, отказа и извещения. */
@@ -349,10 +404,12 @@ interface EntryOutcome {
   readonly step?: PlanStep;
   readonly conflict?: PlanConflict;
   readonly notice?: PlanNotice;
+  /** Подтверждение по этому `dest` пригодилось: отказ снят именно им. */
+  readonly confirmationUsed?: boolean;
 }
 
 function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
-  const { tree, registry, source, baseline, declaration, force } = context;
+  const { tree, registry, source, baseline, declaration, confirmed } = context;
 
   const strategy = registry.get(entry.mode);
   if (strategy === undefined) {
@@ -454,22 +511,28 @@ function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
     };
   }
 
-  if (strategy.ownership === 'engine' && raw !== null && !owned && !force) {
-    return {
-      conflict: {
-        kind: 'foreign-dest',
-        dest: entry.dest,
-        src: entry.src,
-        mode: entry.mode,
-        ownership: 'engine',
-        detail: { resolution: 'force' },
-        message:
-          `конфликт владения: "${entry.dest}" уже существует и не помечен как ` +
-          `материализованный движком, а режим "${entry.mode}" требует единоличного владения. ` +
-          'Отказ вместо тихой перезаписи: прими файл в канон осознанно (force) ' +
-          'или сними запись из frame',
-      },
-    };
+  // Подтверждение адресно: снимает отказ ТОЛЬКО по своему `dest`.
+  let confirmationUsed = false;
+
+  if (strategy.ownership === 'engine' && raw !== null && !owned) {
+    if (!confirmed) {
+      return {
+        conflict: {
+          kind: 'foreign-dest',
+          dest: entry.dest,
+          src: entry.src,
+          mode: entry.mode,
+          ownership: 'engine',
+          detail: { resolution: 'force' },
+          message:
+            `конфликт владения: "${entry.dest}" уже существует и не помечен как ` +
+            `материализованный движком, а режим "${entry.mode}" требует единоличного ` +
+            'владения. Отказ вместо тихой перезаписи: подтверди этот dest поимённо ' +
+            'или сними запись из frame',
+        },
+      };
+    }
+    confirmationUsed = true;
   }
 
   // СУЖЕНИЕ владения до единоличного требует явного подтверждения
@@ -483,28 +546,30 @@ function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
   if (
     strategy.ownership === 'engine' &&
     record !== null &&
-    record.own !== 'engine' &&
-    !force
+    record.own !== 'engine'
   ) {
-    return {
-      conflict: {
-        kind: 'ownership-narrowing',
-        dest: entry.dest,
-        src: entry.src,
-        mode: entry.mode,
-        ownership: 'engine',
-        detail: {
-          resolution: 'force',
-          fromOwnership: record.own,
-          toOwnership: 'engine',
+    if (!confirmed) {
+      return {
+        conflict: {
+          kind: 'ownership-narrowing',
+          dest: entry.dest,
+          src: entry.src,
+          mode: entry.mode,
+          ownership: 'engine',
+          detail: {
+            resolution: 'force',
+            fromOwnership: record.own,
+            toOwnership: 'engine',
+          },
+          message:
+            `конфликт владения: "${entry.dest}" материализован как совместный ` +
+            `(${record.own}), а режим "${entry.mode}" требует единоличного владения — ` +
+            'вклад продукта будет стёрт. Отнять права у продукта можно только ' +
+            'подтвердив этот dest поимённо; иначе оставь режим совместного владения',
         },
-        message:
-          `конфликт владения: "${entry.dest}" материализован как совместный ` +
-          `(${record.own}), а режим "${entry.mode}" требует единоличного владения — ` +
-          'вклад продукта будет стёрт. Отнять права у продукта можно только ' +
-          'осознанно (force); иначе оставь режим совместного владения',
-      },
-    };
+      };
+    }
+    confirmationUsed = true;
   }
 
   const baselineContent =
@@ -530,11 +595,12 @@ function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
       : undefined;
 
   if (decision.kind === 'keep') {
-    return { notice };
+    return { notice, confirmationUsed };
   }
   if (decision.kind === 'conflict') {
     return {
       notice,
+      confirmationUsed,
       conflict: {
         kind: 'strategy',
         dest: entry.dest,
@@ -560,6 +626,7 @@ function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
     if (error instanceof UnmarkableContentError) {
       return {
         notice,
+        confirmationUsed,
         conflict: {
           kind: 'unmarkable-dest',
           dest: entry.dest,
@@ -583,11 +650,12 @@ function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
     format,
   });
   if (reason === null) {
-    return { notice };
+    return { notice, confirmationUsed };
   }
 
   return {
     notice,
+    confirmationUsed,
     step: {
       kind: raw === null ? 'create' : 'update',
       dest: entry.dest,

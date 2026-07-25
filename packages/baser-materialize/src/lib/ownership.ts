@@ -306,16 +306,21 @@ export function readOwnership(
   return content === null ? null : format.parse(content);
 }
 
-/** Каталоги, которые не сканируются на владение (не артефакты потребителя). */
+/**
+ * Каталоги, которые не сканируются на владение.
+ *
+ * Список сознательно КОРОТКИЙ: сюда попадает только то, что не может быть целью
+ * материализации в принципе (`kb:BASER-5`, «У скана нет слепых зон над
+ * собственными артефактами»). Каталоги сборки (`dist`, `build`, `coverage`,
+ * `out-tsc`, `tmp`) из него убраны намеренно: конфиги сборки и публикуемые
+ * артефакты — нормальные цели материализации, а пропуск делал наш собственный
+ * артефакт в них ВЕЧНОЙ СИРОТОЙ (запись снята, файл остался, план рапортует
+ * сходимость). Тихий сирота хуже громкого конфликта.
+ */
 export const DEFAULT_SCAN_IGNORE: readonly string[] = [
   'node_modules',
   '.git',
   '.nx',
-  'dist',
-  'build',
-  'coverage',
-  'out-tsc',
-  'tmp',
 ];
 
 export interface ScanOptions {
@@ -323,6 +328,13 @@ export interface ScanOptions {
   readonly roots?: readonly string[];
   /** Имена каталогов, которые скан пропускает. */
   readonly ignore?: readonly string[];
+  /**
+   * Объявленные `dest`: их каталоги сканируются ВСЕГДА, даже если попадают под
+   * пропуск. Пропуск применяется только там, где движок ничего не объявлял —
+   * иначе оптимизация скана создаёт зону, где движок не видит собственных
+   * артефактов.
+   */
+  readonly declared?: readonly string[];
 }
 
 /**
@@ -337,16 +349,19 @@ export function scanOwnership(
   options: ScanOptions = {},
 ): Map<string, OwnershipRecord> {
   const ignore = new Set(options.ignore ?? DEFAULT_SCAN_IGNORE);
+  const declared = declaredDirectories(options.declared ?? []);
   const owned = new Map<string, OwnershipRecord>();
   const queue: string[] = [...(options.roots ?? [''])];
 
   while (queue.length > 0) {
     const dir = queue.pop() as string;
     for (const child of tree.children(dir)) {
-      if (ignore.has(child)) {
+      const path = joinRepoPath(dir, child);
+      // Пропуск действует только там, где движок ничего не объявлял: над
+      // собственными артефактами слепых зон у скана нет.
+      if (ignore.has(child) && !declared.has(path)) {
         continue;
       }
-      const path = joinRepoPath(dir, child);
       if (tree.isFile(path)) {
         const record = readOwnership(tree, path);
         if (record !== null) {
@@ -359,4 +374,24 @@ export function scanOwnership(
   }
 
   return owned;
+}
+
+/**
+ * Каталоги-предки объявленных `dest` — те, в которые движок материализует.
+ *
+ * `dist/nested/x.yml` даёт `dist` и `dist/nested`: спуститься надо по всей
+ * цепочке, иначе пропуск на верхнем каталоге снова скроет артефакт.
+ */
+function declaredDirectories(dests: readonly string[]): Set<string> {
+  const dirs = new Set<string>();
+  for (const dest of dests) {
+    const segments = dest.split('/');
+    segments.pop();
+    let path = '';
+    for (const segment of segments) {
+      path = path === '' ? segment : `${path}/${segment}`;
+      dirs.add(path);
+    }
+  }
+  return dirs;
 }

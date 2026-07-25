@@ -274,7 +274,7 @@ describe('конфликт владения (§4 контракта)', () => {
     expect(tree.read(WORKFLOW, 'utf-8')).toBe('name: написано руками\n');
   });
 
-  it('перезапись возможна только явным действием (force)', () => {
+  it('перезапись возможна только поимённым подтверждением', () => {
     const { tree, declaration } = createWorkspace({
       frame: [exactEntry],
       sources: SOURCES,
@@ -285,7 +285,7 @@ describe('конфликт владения (§4 контракта)', () => {
       tree,
       declaration,
       strategies: ALL_DOUBLES,
-      force: true,
+      confirm: [WORKFLOW],
     });
 
     expect(plan.status).toBe('pending');
@@ -409,7 +409,7 @@ describe('движок защищает границы сам, а не добр�
     expect(tree.read('CONTRIBUTING.md', 'utf-8')).toBe('# правила продукта\n');
   });
 
-  it('небрежная стратегия не пробивает инвариант и через force', () => {
+  it('небрежная стратегия не пробивает инвариант и через подтверждение', () => {
     const { tree, declaration } = createWorkspace({
       frame: [seedEntry],
       sources: SOURCES,
@@ -420,7 +420,7 @@ describe('движок защищает границы сам, а не добр�
       tree,
       declaration,
       strategies: CARELESS_DOUBLES,
-      force: true,
+      confirm: ['CONTRIBUTING.md'],
     });
 
     expect(plan.steps).toEqual([]);
@@ -545,7 +545,7 @@ describe('первичное взятие во владение — событи
     expect(plan.steps[0]).toMatchObject({ reason: 'diverged' });
   });
 
-  it('единоличное владение берёт чужой файл только под force — тоже adopted', () => {
+  it('единоличное владение берёт чужой файл только под подтверждением — тоже adopted', () => {
     const { tree, declaration } = createWorkspace({
       frame: [exactEntry],
       sources: SOURCES,
@@ -556,7 +556,7 @@ describe('первичное взятие во владение — событи
       tree,
       declaration,
       strategies: ALL_DOUBLES,
-      force: true,
+      confirm: [WORKFLOW],
     });
 
     expect(plan.steps[0]).toMatchObject({ reason: 'adopted' });

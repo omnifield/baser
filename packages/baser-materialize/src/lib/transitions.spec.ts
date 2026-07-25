@@ -200,7 +200,7 @@ describe('переход: сменился объявленный класс в�
  * на стороне потребителя, а не на стороне удобства фундамента.
  */
 describe('переход: сужение владения shared → engine', () => {
-  it('без force — конфликт, а не шаг: у продукта отнимают право на вклад', () => {
+  it('без подтверждения — конфликт, а не шаг: у продукта отнимают право на вклад', () => {
     const { tree } = materialized(asMerge);
 
     const plan = computePlan({
@@ -223,14 +223,14 @@ describe('переход: сужение владения shared → engine', ()
     });
   });
 
-  it('под force — проходит и забирает владение', () => {
+  it('под поимённым подтверждением — проходит и забирает владение', () => {
     const { tree } = materialized(asMerge);
 
     const plan = computePlan({
       tree,
       declaration: redeclare(tree, [asExact]),
       strategies: ALL_DOUBLES,
-      force: true,
+      confirm: [CFG],
     });
     applyPlan(tree, plan);
 
@@ -269,7 +269,7 @@ describe('переход: сужение владения shared → engine', ()
  * законен — это и есть смысл `shared`, — поэтому отнять его молча нельзя.
  */
 describe('цепочка merge → вклад продукта → exact', () => {
-  it('без force вклад цел, план заблокирован; под force вклад уходит осознанно', () => {
+  it('без подтверждения вклад цел, план заблокирован; под подтверждением уходит осознанно', () => {
     const { tree } = materialized(asMerge);
     tree.write(CFG, `${tree.read(CFG, 'utf-8') as string}вклад продукта\n`);
 
@@ -286,7 +286,7 @@ describe('цепочка merge → вклад продукта → exact', () =>
       tree,
       declaration,
       strategies: ALL_DOUBLES,
-      force: true,
+      confirm: [CFG],
     });
     applyPlan(tree, forced);
 
@@ -399,7 +399,7 @@ describe('переход: сменилась версия канона', () => {
 });
 
 describe('переход: dest существует, маркера нет', () => {
-  it('engine — отказ, снимается только явным force', () => {
+  it('engine — отказ, снимается только поимённым подтверждением', () => {
     const { tree, declaration } = createWorkspace({
       frame: [asExact],
       sources: SOURCES,
@@ -410,8 +410,12 @@ describe('переход: dest существует, маркера нет', () 
       computePlan({ tree, declaration, strategies: ALL_DOUBLES }).status,
     ).toBe('blocked');
     expect(
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES, force: true })
-        .steps[0],
+      computePlan({
+        tree,
+        declaration,
+        strategies: ALL_DOUBLES,
+        confirm: [CFG],
+      }).steps[0],
     ).toMatchObject({ reason: 'adopted' });
   });
 
@@ -474,6 +478,197 @@ describe('переход: артефакт правили руками', () => {
 
     expect(plan.status).toBe('converged');
     expect(tree.read(CFG, 'utf-8')).toBe('setting: моё\n');
+  });
+});
+
+/**
+ * Оптимизация скана не имеет права создавать зону, где движок не видит
+ * СОБСТВЕННЫХ артефактов (`kb:BASER-5`, «У скана нет слепых зон над
+ * собственными артефактами»): иначе снятая запись оставляет вечную сироту,
+ * а план при этом рапортует сходимость. Тихий сирота хуже громкого конфликта.
+ */
+describe('переход: артефакт объявлен в каталоге сборки', () => {
+  const inDist: FrameEntry = {
+    src: 'cfg.yml',
+    dest: 'dist/x.yml',
+    mode: 'exact',
+  };
+
+  it('сирота в каталоге сборки обнаружена, а не потеряна навсегда', () => {
+    const { tree } = materialized(inDist);
+
+    const plan = computePlan({
+      tree,
+      declaration: redeclare(tree, []),
+      strategies: ALL_DOUBLES,
+    });
+    applyPlan(tree, plan);
+
+    expect(plan.status).toBe('pending');
+    expect(plan.steps[0]).toMatchObject({
+      kind: 'delete',
+      dest: 'dist/x.yml',
+      reason: 'orphan',
+    });
+    expect(tree.exists('dist/x.yml')).toBe(false);
+  });
+
+  it('объявленный каталог сканируется даже под явным пропуском', () => {
+    const kept: FrameEntry = {
+      src: 'cfg.yml',
+      dest: 'vendor/kept.yml',
+      mode: 'exact',
+    };
+    const dropped: FrameEntry = {
+      src: 'cfg.yml',
+      dest: 'vendor/dropped.yml',
+      mode: 'exact',
+    };
+    const { tree, declaration } = createWorkspace({
+      frame: [kept, dropped],
+      sources: SOURCES,
+    });
+    const scan = { ignore: ['vendor'] };
+    applyPlan(
+      tree,
+      computePlan({ tree, declaration, strategies: ALL_DOUBLES, scan }),
+    );
+
+    const plan = computePlan({
+      tree,
+      declaration: redeclare(tree, [kept]),
+      strategies: ALL_DOUBLES,
+      scan,
+    });
+
+    // `vendor` пропускается по просьбе раннера, но движок туда материализует —
+    // значит слепой зоны над своими артефактами там быть не может.
+    expect(plan.steps).toEqual([
+      expect.objectContaining({ dest: 'vendor/dropped.yml', kind: 'delete' }),
+    ]);
+  });
+});
+
+/**
+ * Согласие не масштабируется само (`kb:BASER-5`, «Подтверждение адресно, а не
+ * глобально»): подтверждение одного действия никогда не подтверждает соседнее,
+ * даже однотипное. Зонд ревью: подтверждение ради `b.yml` не должно усыновлять
+ * чужие `a.yml` и `c.yml`.
+ */
+describe('переход: подтверждение дано ради одного артефакта', () => {
+  const tighten = () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [{ src: 'cfg.yml', dest: 'b.yml', mode: 'merge' }],
+      sources: SOURCES,
+      existing: { 'a.yml': 'моё: a\n', 'c.yml': 'моё: c\n' },
+    });
+    applyPlan(
+      tree,
+      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
+    );
+
+    return {
+      tree,
+      declaration: redeclare(tree, [
+        { src: 'cfg.yml', dest: 'a.yml', mode: 'exact' },
+        { src: 'cfg.yml', dest: 'b.yml', mode: 'exact' },
+        { src: 'cfg.yml', dest: 'c.yml', mode: 'exact' },
+      ]),
+    };
+  };
+
+  it('без подтверждения — три отказа, ни одного шага', () => {
+    const { tree, declaration } = tighten();
+
+    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+
+    expect(plan.status).toBe('blocked');
+    expect(
+      plan.conflicts.map((conflict) => [conflict.dest, conflict.kind]),
+    ).toEqual([
+      ['a.yml', 'foreign-dest'],
+      ['b.yml', 'ownership-narrowing'],
+      ['c.yml', 'foreign-dest'],
+    ]);
+  });
+
+  it('подтверждение по одному dest НЕ снимает отказ с соседних однотипных', () => {
+    const { tree, declaration } = tighten();
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      strategies: ALL_DOUBLES,
+      confirm: ['b.yml'],
+    });
+
+    expect(plan.steps.map((step) => step.dest)).toEqual(['b.yml']);
+    expect(plan.conflicts.map((conflict) => conflict.dest)).toEqual([
+      'a.yml',
+      'c.yml',
+    ]);
+    expect(plan.status).toBe('blocked');
+
+    // План неприменим целиком — файлы продукта не трогаются даже за компанию.
+    expect(() => applyPlan(tree, plan)).toThrow(MaterializationConflictError);
+    expect(tree.read('a.yml', 'utf-8')).toBe('моё: a\n');
+    expect(tree.read('c.yml', 'utf-8')).toBe('моё: c\n');
+  });
+
+  it('перечислив все три, потребитель получает ровно то, на что согласился', () => {
+    const { tree, declaration } = tighten();
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      strategies: ALL_DOUBLES,
+      confirm: ['a.yml', 'b.yml', 'c.yml'],
+    });
+    applyPlan(tree, plan);
+
+    expect(plan.status).toBe('pending');
+    expect(plan.steps.map((step) => [step.dest, step.reason])).toEqual([
+      ['a.yml', 'adopted'],
+      ['b.yml', 'reclaimed'],
+      ['c.yml', 'adopted'],
+    ]);
+  });
+
+  it('лишнее подтверждение названо извещением, а не проглочено', () => {
+    const { tree, declaration } = tighten();
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      strategies: ALL_DOUBLES,
+      confirm: ['b.yml', 'zzz.yml'],
+    });
+
+    expect(plan.notices).toEqual([
+      expect.objectContaining({
+        kind: 'confirmation-unused',
+        dest: 'zzz.yml',
+        detail: { confirmation: 'not-declared' },
+      }),
+    ]);
+  });
+
+  it('подтверждение там, где отказа нет, тоже названо', () => {
+    const { tree, declaration } = materialized(asExact);
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      strategies: ALL_DOUBLES,
+      confirm: [CFG],
+    });
+
+    expect(plan.status).toBe('converged');
+    expect(plan.notices[0]).toMatchObject({
+      kind: 'confirmation-unused',
+      dest: CFG,
+      detail: { confirmation: 'not-required' },
+    });
   });
 });
 

@@ -93,7 +93,7 @@ describe('атомарность (§2 контракта)', () => {
       tree,
       declaration,
       strategies: ALL_DOUBLES,
-      force: true,
+      confirm: [WORKFLOW],
     });
     const before = snapshotTree(tree);
 
@@ -127,7 +127,7 @@ describe('атомарность (§2 контракта)', () => {
       tree,
       declaration: declarationAfter,
       strategies: ALL_DOUBLES,
-      force: true,
+      confirm: [WORKFLOW],
     });
     const before = snapshotTree(tree);
 
