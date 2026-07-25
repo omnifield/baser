@@ -1,0 +1,63 @@
+{
+  // baser devbox — Ф2 (kb:ADR-16 volume-workspace, kb:FUND-4 containers-only).
+  // ГРИНФИЛД на стандартном Dev Containers (adopt-not-invent, kb:ADR-20): upstream-образ +
+  // features + native "Clone Repository in Container Volume". БЕЗ skeleton-скриптов
+  // (devbox.sh/-manifest/-session/-services) и БЕЗ biome/GH-Packages — это devopser-legacy.
+  // Docker-инварианты канон-чистого девбокса сохранены (kb:DEVOPSER-3).
+  "name": "baser-devbox",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
+  "remoteUser": "node",
+
+  // Канон-чистые инварианты (kb:DEVOPSER-3): peer-alias в общей сети omnifield-gateway
+  // (видят tasker/knowledger по имени), host-gateway, НОЛЬ host-портов (single-origin —
+  // наружу только дверь :8080; verdaccio :4873 остаётся внутренним), контейнер переживает
+  // рестарт демона.
+  "runArgs": [
+    "--network=omnifield-gateway",
+    "--network-alias=baser",
+    "--add-host=host.docker.internal:host-gateway",
+    "--restart=unless-stopped"
+  ],
+
+  // Секрет-модель (kb:FUND-4): креды/кэши — в named-volume'ах, ENV указывает в /home/node/.secrets.
+  // Ничего не хардкодим в образ/репо; тома переживают recreate.
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/node/.secrets/claude",
+    "GIT_CONFIG_GLOBAL": "/home/node/.secrets/gitconfig",
+    "GH_CONFIG_DIR": "/home/node/.secrets/gh",
+    "NPM_CONFIG_USERCONFIG": "/home/node/.secrets/npmrc"
+  },
+
+  // gh — для git-flow (rulesets/PR). node/pnpm/git несёт базовый образ (pnpm-версия — из пина
+  // репо `packageManager: pnpm@10.11.0` через corepack; образ = тонкая оболочка, версии — репо).
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+  // Общие на машине named-volume'ы (одни креды/стор на все omnifield-девбоксы), переживают recreate.
+  // Workspace-ТОМ здесь НЕ объявляем: им управляет "Clone Repository in Container Volume"
+  // (kb:ADR-16) — VS Code сам создаёт том, клонирует репо, монтирует как workspace. См. runbook.
+  "mounts": [
+    "source=omnifield-secrets,target=/home/node/.secrets,type=volume",
+    "source=omnifield-pnpm-store,target=/home/node/.local/share/pnpm/store,type=volume"
+  ],
+
+  "customizations": {
+    "vscode": {
+      // baser-стек = prettier + Nx (НЕ biome). Дополняет .vscode/extensions.json репо.
+      "extensions": ["esbenp.prettier-vscode", "nrwl.angular-console"],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "typescript.tsdk": "node_modules/typescript/lib"
+      }
+    }
+  },
+
+  // Одноразовая (per-volume) настройка: corepack→pnpm-пин + глобальный ассистент
+  // (kb:FUND-4 — исполнение/ассистент живут В контейнере, не на хосте).
+  "onCreateCommand": "sudo corepack enable && npm install -g @anthropic-ai/claude-code@latest",
+
+  // Репо-зависимая настройка: права на общие тома, seed claude-онбординга, install по lock.
+  "postCreateCommand": "sudo chown -R node:node /home/node/.secrets /home/node/.local/share/pnpm/store && mkdir -p \"$CLAUDE_CONFIG_DIR\" && { [ -f \"$CLAUDE_CONFIG_DIR/.claude.json\" ] || printf '%s\\n' '{\"hasCompletedOnboarding\":true,\"hasTrustDialogAccepted\":true,\"theme\":\"dark\"}' > \"$CLAUDE_CONFIG_DIR/.claude.json\"; } && pnpm install --frozen-lockfile"
+}
