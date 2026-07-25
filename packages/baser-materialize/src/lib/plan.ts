@@ -5,15 +5,26 @@
  * (`kb:BASER-5` «две фазы»; рынок подтвердил разрыв дважды независимо —
  * `nx migrate` разносит его на две команды, схематики — на две фазы).
  *
+ * План машинночитаем в первую очередь (`kb:BASER-5`, «Вывод машинночитаем в
+ * первую очередь»): вид шага, причина шага, вид конфликта и вид извещения —
+ * стабильные МАШИННЫЕ КОДЫ, подробности причины лежат данными в `detail`, а
+ * `message` — рендер для человека. Ветвиться по тексту сообщения нельзя ни
+ * гейту, ни панели; `describePlan` — один из выходов, а не единственный.
+ *
  * Инварианты, за которые отвечает именно эта фаза:
  *   §1 идемпотентность — сошедшийся артефакт НЕ порождает шага, поэтому второй
- *      прогон даёт пустой план (операционное определение сходимости из IaC);
+ *      прогон даёт план без шагов (операционное определение сходимости из IaC);
  *   §3 отсутствие сирот — артефакт с нашим маркером, потерявший запись в
  *      `frame`, попадает в план на снятие;
  *   §4 отказ вместо тихой перезаписи — конфликт владения попадает в
- *      `conflicts`, а не в `steps`, и назван человеческим текстом;
+ *      `conflicts`, а не в `steps`, и делает план неприменимым;
  *   §5 показать расхождение — каждый шаг несёт `previous`, чтобы раннер мог
  *      показать разницу и архитектор мог принять решение `align`.
+ *
+ * Инварианты границ движок держит САМ, независимо от того, что вернула
+ * стратегия (`kb:BASER-5`, «Что движок обязан защищать сам»): инвариант,
+ * который держит только стратегия, — не инвариант, потому что стратегии
+ * приходят из другой зоны и пишутся разными сессиями.
  */
 
 import type { Tree } from '@nx/devkit';
@@ -28,6 +39,7 @@ import type { CanonBaseline, CanonSource } from './source.js';
 import { EMPTY_BASELINE, createTreeSource } from './source.js';
 import type {
   MarkerFormat,
+  OwnershipClass,
   OwnershipRecord,
   ScanOptions,
 } from './ownership.js';
@@ -38,10 +50,19 @@ import {
 } from './ownership.js';
 import type { TraceRecorder, TraceSpan } from './trace.js';
 import { createTrace } from './trace.js';
+import { OUTPUT_SCHEMA_VERSION } from './schema.js';
 
 export type PlanStepKind = 'create' | 'update' | 'delete' | 'release';
 
-export type PlanReason = 'missing' | 'diverged' | 'orphan' | 'adopted';
+export type PlanReason =
+  /** Объявленного артефакта нет — материализуем впервые. */
+  | 'missing'
+  /** Артефакт под нашим маркером разошёлся с каноном. */
+  | 'diverged'
+  /** Существовавший непомеченный файл впервые берётся во владение. */
+  | 'adopted'
+  /** Артефакт потерял объявление в `frame`. */
+  | 'orphan';
 
 /** Один шаг плана. `content === null` только у снятия артефакта. */
 export interface PlanStep {
@@ -50,6 +71,8 @@ export interface PlanStep {
   readonly reason: PlanReason;
   readonly src?: string;
   readonly mode?: MaterializeMode;
+  /** Класс владения, от имени которого выполняется шаг. */
+  readonly ownership?: OwnershipClass;
   /** Целевое содержимое (с маркером владения), `null` для `delete`. */
   readonly content: string | null;
   /** Текущее содержимое до применения — материал для показа расхождения. */
@@ -70,22 +93,100 @@ export type ConflictKind =
   /** Отказ на уровне режима. */
   | 'strategy';
 
+/**
+ * Машинные подробности причины отказа.
+ *
+ * Всё, о чём говорит `message`, доступно здесь данными: `message` — рендер, а
+ * не единственный носитель причины (`kb:BASER-5`).
+ */
+export interface ConflictDetail {
+  /** `duplicate-dest`: `src` записи, уже claim'нувшей этот `dest`. */
+  readonly claimedBy?: string;
+  /** `missing-source`: полный адрес источника, которого нет. */
+  readonly sourcePath?: string;
+  /** `unknown-mode`: режимы, для которых стратегии зарегистрированы. */
+  readonly availableModes?: readonly MaterializeMode[];
+  /** `foreign-dest`: чем отказ снимается. */
+  readonly resolution?: 'force' | 'drop-frame-entry';
+  /** `unmarkable-dest`: почему маркер невозможен. */
+  readonly unmarkable?: 'no-format-for-class' | 'content-shape';
+  /** `strategy`: причина отказа, как её назвала стратегия режима. */
+  readonly strategyReason?: string;
+}
+
 export interface PlanConflict {
   readonly kind: ConflictKind;
   readonly dest: string;
   readonly src?: string;
   readonly mode?: MaterializeMode;
-  /** Человекочитаемое объяснение: что отклонено и почему. */
+  /** Класс владения, которого требует режим (если он известен). */
+  readonly ownership?: OwnershipClass;
+  /** Машинные подробности причины — источник истины для гейта и панели. */
+  readonly detail: ConflictDetail;
+  /** Человекочитаемое объяснение: рендер поверх `kind` + `detail`. */
   readonly message: string;
 }
 
+export type PlanNoticeKind =
+  /**
+   * `dest` существует и его класс владения — `product`: движок шага не
+   * порождает, что бы ни вернула стратегия. Не отказ: так и должно быть.
+   */
+  | 'product-owned'
+  /**
+   * Базы трёхстороннего мерджа нет — мердж будет двухсторонним.
+   * Контракт требует НАЗВАТЬ это, а не выродиться молча.
+   */
+  | 'baseline-missing';
+
+/**
+ * Извещение: состояние, которое обязано быть НАЗВАНО, но не является ни шагом,
+ * ни отказом. Извещения не влияют на применимость плана и на сходимость.
+ */
+export interface PlanNotice {
+  readonly kind: PlanNoticeKind;
+  readonly dest: string;
+  readonly src?: string;
+  readonly mode?: MaterializeMode;
+  readonly ownership?: OwnershipClass;
+  readonly detail: NoticeDetail;
+  readonly message: string;
+}
+
+export interface NoticeDetail {
+  /** `baseline-missing`: версия канона из маркера (`null` — её там нет). */
+  readonly version?: string | null;
+  /** `baseline-missing`: почему база не восстановлена. */
+  readonly cause?: 'no-version' | 'unresolved';
+}
+
+/**
+ * Состояние плана.
+ *
+ * Признак сходимости ОТДЕЛЁН от признака пустоты намеренно (`kb:BASER-5`):
+ * план без шагов, но с конфликтами, сходимости НЕ означает. Гейт, построенный
+ * на «в плане нет шагов», отрапортовал бы «в каноне» при нерешённом конфликте
+ * владения — гейт, зеленеющий на конфликте, опаснее отсутствующего.
+ * Поэтому честный ответ нельзя получить случайно: спросить можно только
+ * состояние целиком, отдельного «плана нет шагов» в схеме нет.
+ */
+export type PlanStatus =
+  /** Нечего делать и нечего решать: дерево сошлось с декларацией. */
+  | 'converged'
+  /** Есть шаги, конфликтов нет — план применим. */
+  | 'pending'
+  /** Есть нерешённые конфликты — план не применяется целиком. */
+  | 'blocked';
+
 export interface MaterializationPlan {
+  /** Версия схемы вывода — контракт с панелью и скриптами. */
+  readonly schemaVersion: number;
+  /** Сходимость. `converged` учитывает и шаги, и конфликты. */
+  readonly status: PlanStatus;
   readonly steps: readonly PlanStep[];
   readonly conflicts: readonly PlanConflict[];
-  /** Нечего делать. Второй прогон обязан давать `true` (§1 контракта). */
-  readonly empty: boolean;
-  /** Применим ли план: конфликт означает отказ, а не частичное применение. */
-  readonly applicable: boolean;
+  /** Названные состояния, не требующие ни шага, ни отказа. */
+  readonly notices: readonly PlanNotice[];
   readonly trace: readonly TraceSpan[];
 }
 
@@ -101,10 +202,16 @@ export interface PlanOptions {
   /**
    * Забрать владение силой (семантика `--force-conflicts` из Kubernetes SSA).
    * Отдельное ЯВНОЕ действие: по умолчанию конфликт = отказ (§4 контракта).
+   * Инвариант класса `product` силой НЕ снимается — он не про конфликт.
    */
   readonly force?: boolean;
   readonly scan?: ScanOptions;
   readonly trace?: TraceRecorder;
+}
+
+/** Применим ли план к дереву. Производная от `status`, а не отдельный признак. */
+export function isApplicable(plan: MaterializationPlan): boolean {
+  return plan.status !== 'blocked';
 }
 
 /** Вычисляет план материализации. Дерево при этом НЕ меняется. */
@@ -118,6 +225,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
 
   const steps: PlanStep[] = [];
   const conflicts: PlanConflict[] = [];
+  let notices: PlanNotice[] = [];
   const claimed = new Map<string, FrameEntry>();
 
   trace.span(
@@ -126,17 +234,19 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
       for (const entry of declaration.frame) {
         const previousClaim = claimed.get(entry.dest);
         if (previousClaim !== undefined) {
-          // Спорный артефакт не получает шага вовсе: у файла под двойной
-          // претензией нет решённого целевого состояния — есть только отказ.
+          // Спорный артефакт не получает ни шага, ни извещения: у файла под
+          // двойной претензией нет решённого целевого состояния — есть отказ.
           const planned = steps.findIndex((step) => step.dest === entry.dest);
           if (planned >= 0) {
             steps.splice(planned, 1);
           }
+          notices = notices.filter((notice) => notice.dest !== entry.dest);
           conflicts.push({
             kind: 'duplicate-dest',
             dest: entry.dest,
             src: entry.src,
             mode: entry.mode,
+            detail: { claimedBy: previousClaim.src },
             message:
               `конфликт владения: "${entry.dest}" объявлен дважды ` +
               `(src "${previousClaim.src}" и src "${entry.src}") — ` +
@@ -146,7 +256,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
         }
         claimed.set(entry.dest, entry);
 
-        const conflictOrStep = planEntry(entry, {
+        const outcome = planEntry(entry, {
           tree,
           declaration,
           registry,
@@ -155,13 +265,14 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
           force: options.force === true,
         });
 
-        if (conflictOrStep === null) {
-          continue;
+        if (outcome.step !== undefined) {
+          steps.push(outcome.step);
         }
-        if (isConflict(conflictOrStep)) {
-          conflicts.push(conflictOrStep);
-        } else {
-          steps.push(conflictOrStep);
+        if (outcome.conflict !== undefined) {
+          conflicts.push(outcome.conflict);
+        }
+        if (outcome.notice !== undefined) {
+          notices.push(outcome.notice);
         }
       }
     },
@@ -187,14 +298,26 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
 
   steps.sort((left, right) => left.dest.localeCompare(right.dest));
   conflicts.sort((left, right) => left.dest.localeCompare(right.dest));
+  notices.sort((left, right) => left.dest.localeCompare(right.dest));
 
   return {
+    schemaVersion: OUTPUT_SCHEMA_VERSION,
+    status: statusOf(steps, conflicts),
     steps,
     conflicts,
-    empty: steps.length === 0,
-    applicable: conflicts.length === 0,
+    notices,
     trace: trace.snapshot(),
   };
+}
+
+function statusOf(
+  steps: readonly PlanStep[],
+  conflicts: readonly PlanConflict[],
+): PlanStatus {
+  if (conflicts.length > 0) {
+    return 'blocked';
+  }
+  return steps.length === 0 ? 'converged' : 'pending';
 }
 
 interface EntryContext {
@@ -206,34 +329,45 @@ interface EntryContext {
   readonly force: boolean;
 }
 
-function planEntry(
-  entry: FrameEntry,
-  context: EntryContext,
-): PlanStep | PlanConflict | null {
+/** Исход одной записи `frame`: не более одного шага, отказа и извещения. */
+interface EntryOutcome {
+  readonly step?: PlanStep;
+  readonly conflict?: PlanConflict;
+  readonly notice?: PlanNotice;
+}
+
+function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
   const { tree, registry, source, baseline, declaration, force } = context;
 
   const strategy = registry.get(entry.mode);
   if (strategy === undefined) {
     return {
-      kind: 'unknown-mode',
-      dest: entry.dest,
-      src: entry.src,
-      mode: entry.mode,
-      message:
-        `режим "${entry.mode}" не реализован: стратегия не зарегистрирована ` +
-        `(доступны: ${registry.modes.join(', ') || 'ни одной'}) — ` +
-        'режимы поставляет @omnifield/baser-modes',
+      conflict: {
+        kind: 'unknown-mode',
+        dest: entry.dest,
+        src: entry.src,
+        mode: entry.mode,
+        detail: { availableModes: registry.modes },
+        message:
+          `режим "${entry.mode}" не реализован: стратегия не зарегистрирована ` +
+          `(доступны: ${registry.modes.join(', ') || 'ни одной'}) — ` +
+          'режимы поставляет @omnifield/baser-modes',
+      },
     };
   }
 
   const sourceContent = source.read(entry.src);
   if (sourceContent === null) {
     return {
-      kind: 'missing-source',
-      dest: entry.dest,
-      src: entry.src,
-      mode: entry.mode,
-      message: `источник "${source.describe(entry.src)}" не найден — материализовать нечего`,
+      conflict: {
+        kind: 'missing-source',
+        dest: entry.dest,
+        src: entry.src,
+        mode: entry.mode,
+        ownership: strategy.ownership,
+        detail: { sourcePath: source.describe(entry.src) },
+        message: `источник "${source.describe(entry.src)}" не найден — материализовать нечего`,
+      },
     };
   }
 
@@ -241,55 +375,101 @@ function planEntry(
   const format = markerFormatFor(entry.dest);
   if (needsMarker && format === null) {
     return {
-      kind: 'unmarkable-dest',
-      dest: entry.dest,
-      src: entry.src,
-      mode: entry.mode,
-      message:
-        `владение "${entry.dest}" недоказуемо: класс файла не несёт маркер, ` +
-        `а режим "${entry.mode}" требует владения (${strategy.ownership}) — ` +
-        'движок не берёт файл во владение молча',
+      conflict: {
+        kind: 'unmarkable-dest',
+        dest: entry.dest,
+        src: entry.src,
+        mode: entry.mode,
+        ownership: strategy.ownership,
+        detail: { unmarkable: 'no-format-for-class' },
+        message:
+          `владение "${entry.dest}" недоказуемо: класс файла не несёт маркер, ` +
+          `а режим "${entry.mode}" требует владения (${strategy.ownership}) — ` +
+          'движок не берёт файл во владение молча',
+      },
     };
   }
 
   const raw = tree.exists(entry.dest) ? tree.read(entry.dest, 'utf-8') : null;
+
+  // ИНВАРИАНТ ДВИЖКА, а не добросовестности режима (`kb:BASER-5`): существующий
+  // `dest` класса `product` не порождает шага, что бы ни вернула стратегия.
+  // Стратегию для такого файла даже не спрашиваем — «однократно, если файла
+  // нет» держится проверкой здесь, а не тем, что стратегия вернёт `keep`.
+  if (strategy.ownership === 'product' && raw !== null) {
+    return {
+      notice: {
+        kind: 'product-owned',
+        dest: entry.dest,
+        src: entry.src,
+        mode: entry.mode,
+        ownership: 'product',
+        detail: {},
+        message:
+          `"${entry.dest}" уже существует и принадлежит продукту ` +
+          `(режим "${entry.mode}" материализует однократно) — движок его не трогает`,
+      },
+    };
+  }
+
   const record = raw !== null && format !== null ? format.parse(raw) : null;
   const owned = record !== null;
 
   if (strategy.ownership === 'engine' && raw !== null && !owned && !force) {
     return {
-      kind: 'foreign-dest',
-      dest: entry.dest,
-      src: entry.src,
-      mode: entry.mode,
-      message:
-        `конфликт владения: "${entry.dest}" уже существует и не помечен как ` +
-        `материализованный движком, а режим "${entry.mode}" требует единоличного владения. ` +
-        'Отказ вместо тихой перезаписи: прими файл в канон осознанно (force) ' +
-        'или сними запись из frame',
+      conflict: {
+        kind: 'foreign-dest',
+        dest: entry.dest,
+        src: entry.src,
+        mode: entry.mode,
+        ownership: 'engine',
+        detail: { resolution: 'force' },
+        message:
+          `конфликт владения: "${entry.dest}" уже существует и не помечен как ` +
+          `материализованный движком, а режим "${entry.mode}" требует единоличного владения. ` +
+          'Отказ вместо тихой перезаписи: прими файл в канон осознанно (force) ' +
+          'или сними запись из frame',
+      },
     };
   }
+
+  const baselineContent =
+    record?.version === undefined
+      ? null
+      : baseline.read(entry.src, record.version);
 
   const decision = strategy.decide({
     entry,
     declaration,
     source: sourceContent,
     current: raw === null ? null : format !== null ? format.strip(raw) : raw,
-    baseline: baseline.read(entry.src),
+    baseline: baselineContent,
     owned,
     record,
   });
 
+  // Базу мерджа спрашивают только у совместного владения, и только когда есть
+  // что мерджить: у отсутствующего `dest` третьей стороны нет по определению.
+  const notice =
+    strategy.ownership === 'shared' && raw !== null && baselineContent === null
+      ? baselineMissing(entry, record)
+      : undefined;
+
   if (decision.kind === 'keep') {
-    return null;
+    return { notice };
   }
   if (decision.kind === 'conflict') {
     return {
-      kind: 'strategy',
-      dest: entry.dest,
-      src: entry.src,
-      mode: entry.mode,
-      message: `режим "${entry.mode}" отказал по "${entry.dest}": ${decision.reason}`,
+      notice,
+      conflict: {
+        kind: 'strategy',
+        dest: entry.dest,
+        src: entry.src,
+        mode: entry.mode,
+        ownership: strategy.ownership,
+        detail: { strategyReason: decision.reason },
+        message: `режим "${entry.mode}" отказал по "${entry.dest}": ${decision.reason}`,
+      },
     };
   }
 
@@ -300,40 +480,79 @@ function planEntry(
       entry,
       strategy.ownership,
       needsMarker ? format : null,
+      source.version,
     );
   } catch (error) {
     if (error instanceof UnmarkableContentError) {
       return {
-        kind: 'unmarkable-dest',
-        dest: entry.dest,
-        src: entry.src,
-        mode: entry.mode,
-        message: `владение "${entry.dest}" недоказуемо: ${error.message}`,
+        notice,
+        conflict: {
+          kind: 'unmarkable-dest',
+          dest: entry.dest,
+          src: entry.src,
+          mode: entry.mode,
+          ownership: strategy.ownership,
+          detail: { unmarkable: 'content-shape' },
+          message: `владение "${entry.dest}" недоказуемо: ${error.message}`,
+        },
       };
     }
     throw error;
   }
 
   if (raw === content) {
-    return null;
+    return { notice };
   }
 
   return {
-    kind: raw === null ? 'create' : 'update',
+    notice,
+    step: {
+      // Первичное взятие непомеченного файла во владение — СОБЫТИЕ, отличное от
+      // расхождения (`kb:BASER-5`): «файл разошёлся с каноном» и «файл впервые
+      // взят под управление» гейт обязан показывать по-разному. Для `shared`
+      // это штатный путь, для `engine` — только под `force`.
+      kind: raw === null ? 'create' : 'update',
+      dest: entry.dest,
+      reason: raw === null ? 'missing' : owned ? 'diverged' : 'adopted',
+      src: entry.src,
+      mode: entry.mode,
+      ownership: strategy.ownership,
+      content,
+      previous: raw,
+    },
+  };
+}
+
+function baselineMissing(
+  entry: FrameEntry,
+  record: OwnershipRecord | null,
+): PlanNotice {
+  const version = record?.version ?? null;
+  return {
+    kind: 'baseline-missing',
     dest: entry.dest,
-    reason: raw === null ? 'missing' : owned || !force ? 'diverged' : 'adopted',
     src: entry.src,
     mode: entry.mode,
-    content,
-    previous: raw,
+    ownership: 'shared',
+    detail: {
+      version,
+      cause: version === null ? 'no-version' : 'unresolved',
+    },
+    message:
+      version === null
+        ? `база мерджа для "${entry.dest}" неизвестна: артефакт не несёт версии канона — ` +
+          'мердж будет двухсторонним'
+        : `база мерджа для "${entry.dest}" не восстановлена: версия канона "${version}" ` +
+          'недоступна источнику базы — мердж будет двухсторонним',
   };
 }
 
 function stampIfNeeded(
   content: string,
   entry: FrameEntry,
-  own: OwnershipRecord['own'],
+  own: OwnershipClass,
   format: MarkerFormat | null,
+  version: string | null,
 ): string {
   if (format === null) {
     return content;
@@ -342,6 +561,7 @@ function stampIfNeeded(
     src: entry.src,
     mode: entry.mode,
     own,
+    ...(version === null ? {} : { version }),
   });
 }
 
@@ -370,6 +590,7 @@ function planOrphan(
       kind: 'delete',
       dest,
       reason: 'orphan',
+      ownership: 'engine',
       content: null,
       previous: raw,
     };
@@ -390,20 +611,22 @@ function planOrphan(
     reason: 'orphan',
     mode: record.mode,
     src: record.src,
+    ownership: record.own,
     content: released,
     previous: raw,
   };
 }
 
-function isConflict(value: PlanStep | PlanConflict): value is PlanConflict {
-  return 'message' in value;
-}
-
-/** Человекочитаемый план — он обязан быть читаемым ДО применения. */
+/**
+ * Человекочитаемый рендер плана — ОДИН ИЗ выходов, а не источник.
+ *
+ * Ветвиться по этому тексту нельзя: решения принимаются по `status`, `kind`,
+ * `reason` и `detail` (`kb:BASER-5`, «Вывод машинночитаем в первую очередь»).
+ */
 export function describePlan(plan: MaterializationPlan): string {
   const lines: string[] = [];
 
-  if (plan.empty) {
+  if (plan.status === 'converged') {
     lines.push('план пуст: дерево сошлось с декларацией');
   } else {
     lines.push(`шагов: ${plan.steps.length}`);
@@ -416,6 +639,13 @@ export function describePlan(plan: MaterializationPlan): string {
     lines.push(`конфликтов: ${plan.conflicts.length} — план не применяется`);
     for (const conflict of plan.conflicts) {
       lines.push(`  ${conflict.kind}: ${conflict.message}`);
+    }
+  }
+
+  if (plan.notices.length > 0) {
+    lines.push(`извещений: ${plan.notices.length}`);
+    for (const notice of plan.notices) {
+      lines.push(`  ${notice.kind}: ${notice.message}`);
     }
   }
 

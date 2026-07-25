@@ -14,8 +14,10 @@
 import type { Tree } from '@nx/devkit';
 import { BaserMaterializeError } from './errors.js';
 import type { MaterializationPlan, PlanConflict, PlanStep } from './plan.js';
+import { isApplicable } from './plan.js';
 import type { TraceRecorder, TraceSpan } from './trace.js';
 import { createTrace } from './trace.js';
+import { OUTPUT_SCHEMA_VERSION } from './schema.js';
 
 /** План содержит конфликты владения — применение отклонено целиком. */
 export class MaterializationConflictError extends BaserMaterializeError {
@@ -48,6 +50,8 @@ export interface ApplyOptions {
 }
 
 export interface ApplyReport {
+  /** Версия схемы вывода — тот же контракт с панелью, что и у плана. */
+  readonly schemaVersion: number;
   readonly applied: readonly PlanStep[];
   readonly trace: readonly TraceSpan[];
 }
@@ -70,7 +74,7 @@ export function applyPlan(
 ): ApplyReport {
   const trace = options.trace ?? createTrace();
 
-  if (!plan.applicable) {
+  if (!isApplicable(plan)) {
     throw new MaterializationConflictError(plan.conflicts);
   }
 
@@ -112,7 +116,11 @@ export function applyPlan(
     throw new MaterializationApplyError(current ?? plan.steps[0], { cause });
   }
 
-  return { applied: plan.steps, trace: trace.snapshot() };
+  return {
+    schemaVersion: OUTPUT_SCHEMA_VERSION,
+    applied: plan.steps,
+    trace: trace.snapshot(),
+  };
 }
 
 function rollback(tree: Tree, journal: readonly JournalEntry[]): void {

@@ -32,6 +32,17 @@ export interface OwnershipRecord {
   readonly src: string;
   readonly mode: MaterializeMode;
   readonly own: OwnershipClass;
+  /**
+   * ВЕРСИЯ КАНОНА, из которой артефакт материализован (`kb:BASER-5`, «база
+   * трёхстороннего мерджа»). Это единственное состояние, которое движок хранит,
+   * и хранит он его В САМОМ АРТЕФАКТЕ: отдельный файл состояния был бы тем
+   * хранимым реестром, который канон называет анти-паттерном.
+   *
+   * По ней раннер восстанавливает базу мерджа через порт `CanonBaseline`
+   * (`source.ts`). `undefined` — версия неизвестна: источник её не назвал либо
+   * артефакт помечен движком более старой версии.
+   */
+  readonly version?: string;
 }
 
 /** Идентификатор движка в маркере. Собирается, а не пишется литералом. */
@@ -49,6 +60,7 @@ export function markerText(record: OwnershipRecord): string {
     src: record.src,
     mode: record.mode,
     own: record.own,
+    ...(record.version === undefined ? {} : { version: record.version }),
   });
   return `${MARKER_MAGIC} ${MARKER_HINT} ~~ ${payload}`;
 }
@@ -77,7 +89,7 @@ export function parseMarkerText(line: string): OwnershipRecord | null {
     return null;
   }
 
-  const { src, mode, own } = payload as Record<string, unknown>;
+  const { src, mode, own, version } = payload as Record<string, unknown>;
   if (
     typeof src !== 'string' ||
     !isMaterializeMode(mode) ||
@@ -86,7 +98,14 @@ export function parseMarkerText(line: string): OwnershipRecord | null {
     return null;
   }
 
-  return { src, mode, own };
+  // Версия — необязательная часть нагрузки: маркер без неё остаётся валидным
+  // (артефакт материализован источником, который версию не назвал).
+  return {
+    src,
+    mode,
+    own,
+    ...(typeof version === 'string' ? { version } : {}),
+  };
 }
 
 function isOwnershipClass(value: unknown): value is OwnershipClass {

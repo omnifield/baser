@@ -50,6 +50,28 @@ export const productDouble: MaterializationStrategy = {
       : { kind: 'keep', reason: 'seeded' },
 };
 
+/**
+ * НЕБРЕЖНЫЙ двойник класса `product`: возвращает запись всегда, в том числе на
+ * существующий файл продукта.
+ *
+ * Нужен, чтобы проверять инвариант ДВИЖКА, а не добросовестность режима
+ * (`kb:BASER-5`, «Что движок обязан защищать сам»): стратегии приходят из чужой
+ * зоны и пишутся разными сессиями, поэтому проверять корректным двойником —
+ * значит не проверять вовсе. Это тест на злоупотребление швом.
+ */
+export const carelessProductDouble: MaterializationStrategy = {
+  mode: 'seed',
+  ownership: 'product',
+  decide: ({ source }) => ({ kind: 'write', content: `${source}затёрто\n` }),
+};
+
+/** Небрежный `product` вместо корректного — остальные двойники прежние. */
+export const CARELESS_DOUBLES = [
+  engineDouble,
+  sharedDouble,
+  carelessProductDouble,
+];
+
 /** Двойник, который всегда отказывает — проверка отказа на уровне режима. */
 export const refusingDouble: MaterializationStrategy = {
   mode: 'exact',

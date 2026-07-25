@@ -58,16 +58,24 @@ export type {
   StrategyRegistry,
 } from './lib/strategy.js';
 
-export { computePlan, describePlan } from './lib/plan.js';
+export { computePlan, describePlan, isApplicable } from './lib/plan.js';
 export type {
+  ConflictDetail,
   ConflictKind,
   MaterializationPlan,
+  NoticeDetail,
   PlanConflict,
+  PlanNotice,
+  PlanNoticeKind,
   PlanOptions,
   PlanReason,
+  PlanStatus,
   PlanStep,
   PlanStepKind,
 } from './lib/plan.js';
+
+export { OUTPUT_SCHEMA_VERSION } from './lib/schema.js';
+export type { OutputSchemaVersion } from './lib/schema.js';
 
 export {
   MaterializationApplyError,

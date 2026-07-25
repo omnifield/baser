@@ -61,12 +61,30 @@ describe('материализация из декларации', () => {
     const second = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
     applyPlan(tree, second);
 
-    expect(second.empty).toBe(true);
-    expect(describePlan(second)).toBe(
-      'план пуст: дерево сошлось с декларацией',
-    );
+    expect(second.status).toBe('converged');
+    expect(second.steps).toEqual([]);
     expect(frame.map((entry) => tree.read(entry.dest, 'utf-8'))).toEqual(
       materialized,
     );
+  });
+
+  it('сходимость не глушит названные состояния (извещения остаются)', () => {
+    // Сошлись — но продукт владеет своим seed-файлом, а базы мерджа нет.
+    // Оба состояния обязаны быть НАЗВАНЫ, а не растворяться в «плане нет шагов».
+    const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
+    applyPlan(
+      tree,
+      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
+    );
+
+    const second = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+
+    expect(second.status).toBe('converged');
+    expect(second.notices.map((notice) => [notice.kind, notice.dest])).toEqual([
+      ['baseline-missing', '.gitignore'],
+      ['product-owned', 'CONTRIBUTING.md'],
+    ]);
+    expect(describePlan(second)).toContain('план пуст');
+    expect(describePlan(second)).toContain('baseline-missing');
   });
 });
