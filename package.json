@@ -7,13 +7,17 @@
   "dependencies": {},
   "devDependencies": {
     "@nx/js": "23.1.0",
+    "@nx/vitest": "23.1.0",
     "@swc/helpers": "~0.5.18",
     "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "~4.1.0",
     "nx": "23.1.0",
     "prettier": "~3.6.2",
     "tslib": "^2.3.0",
     "typescript": "~6.0.3",
-    "verdaccio": "^6.3.2"
+    "verdaccio": "^6.3.2",
+    "vite": "^8.0.0",
+    "vitest": "~4.1.0"
   },
   "nx": {
     "includedScripts": [],
