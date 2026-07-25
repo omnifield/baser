@@ -5,6 +5,9 @@
   "references": [
     {
       "path": "./packages/baser-release"
+    },
+    {
+      "path": "./packages/baser-materialize"
     }
   ]
 }
