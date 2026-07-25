@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Tree } from '@nx/devkit';
-import type { Declaration, FrameEntry } from './declaration.js';
-import { readDeclaration } from './declaration.js';
+import type { FrameEntry } from './declaration.js';
 import { computePlan, describePlan, isApplicable } from './plan.js';
 import { applyPlan } from './apply.js';
 import type { CanonBaseline } from './source.js';
@@ -13,7 +11,11 @@ import {
   productDouble,
   refusingDouble,
 } from './strategies.fixture.js';
-import { CONTENT_ROOT, createWorkspace } from './workspace.fixture.js';
+import {
+  CONTENT_ROOT,
+  createWorkspace,
+  redeclare,
+} from './workspace.fixture.js';
 
 const WORKFLOW = '.github/workflows/build.yml';
 
@@ -44,14 +46,6 @@ const SOURCES = {
   'repo/gitignore': 'node_modules\ndist\n',
   'docs/CONTRIBUTING.md': '# как участвовать\n',
 };
-
-/** Меняет объявленный `frame` продукта и перечитывает декларацию. */
-function redeclare(tree: Tree, frame: readonly FrameEntry[]): Declaration {
-  const manifest = JSON.parse(tree.read('package.json', 'utf-8') as string);
-  manifest.omnifield.frame = frame;
-  tree.write('package.json', `${JSON.stringify(manifest, null, 2)}\n`);
-  return readDeclaration(tree);
-}
 
 describe('computePlan — чего не хватает', () => {
   it('объявленный, но отсутствующий артефакт даёт шаг создания', () => {

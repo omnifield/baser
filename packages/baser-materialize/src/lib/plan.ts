@@ -57,10 +57,16 @@ export type PlanStepKind = 'create' | 'update' | 'delete' | 'release';
 export type PlanReason =
   /** Объявленного артефакта нет — материализуем впервые. */
   | 'missing'
-  /** Артефакт под нашим маркером разошёлся с каноном. */
+  /** Тело артефакта под нашим маркером разошлось с каноном. */
   | 'diverged'
   /** Существовавший непомеченный файл впервые берётся во владение. */
   | 'adopted'
+  /**
+   * Объявленное владение изменилось: маркер приводится к текущей декларации
+   * (`kb:BASER-5`, «Маркер обязан отражать ТЕКУЩЕЕ объявленное владение»).
+   * С `kind: 'release'` — переход в класс `product`, претензия снимается.
+   */
+  | 'reclaimed'
   /** Артефакт потерял объявление в `frame`. */
   | 'orphan';
 
@@ -391,12 +397,39 @@ function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
   }
 
   const raw = tree.exists(entry.dest) ? tree.read(entry.dest, 'utf-8') : null;
+  const record = raw !== null && format !== null ? format.parse(raw) : null;
+  const owned = record !== null;
 
   // ИНВАРИАНТ ДВИЖКА, а не добросовестности режима (`kb:BASER-5`): существующий
-  // `dest` класса `product` не порождает шага, что бы ни вернула стратегия.
-  // Стратегию для такого файла даже не спрашиваем — «однократно, если файла
-  // нет» держится проверкой здесь, а не тем, что стратегия вернёт `keep`.
+  // `dest` класса `product` не порождает шага записи, что бы ни вернула
+  // стратегия. Стратегию для такого файла даже не спрашиваем — «однократно,
+  // если файла нет» держится проверкой здесь, а не тем, что стратегия вернёт
+  // `keep`.
   if (strategy.ownership === 'product' && raw !== null) {
+    // Но молчать нельзя, если файл всё ещё несёт НАШ маркер: декларация уже
+    // отдала его продукту, а артефакт продолжает утверждать снятое владение —
+    // и следующее снятие записи из `frame` удалило бы файл продукта вместе с
+    // его правками. Смена объявленного класса на `product` — это ОТПУСКАНИЕ
+    // ПРЕТЕНЗИИ (`kb:BASER-5`, «Маркер обязан отражать ТЕКУЩЕЕ объявленное
+    // владение»), той же семантикой, что у осиротевшего `shared`.
+    if (record !== null && format !== null) {
+      const released = format.strip(raw as string);
+      if (released !== raw) {
+        return {
+          step: {
+            kind: 'release',
+            dest: entry.dest,
+            reason: 'reclaimed',
+            src: entry.src,
+            mode: entry.mode,
+            ownership: 'product',
+            content: released,
+            previous: raw,
+          },
+        };
+      }
+    }
+
     return {
       notice: {
         kind: 'product-owned',
@@ -411,9 +444,6 @@ function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
       },
     };
   }
-
-  const record = raw !== null && format !== null ? format.parse(raw) : null;
-  const owned = record !== null;
 
   if (strategy.ownership === 'engine' && raw !== null && !owned && !force) {
     return {
@@ -500,20 +530,24 @@ function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
     throw error;
   }
 
-  if (raw === content) {
+  const reason = transitionReason({
+    raw,
+    content,
+    record,
+    entry,
+    ownership: strategy.ownership,
+    format,
+  });
+  if (reason === null) {
     return { notice };
   }
 
   return {
     notice,
     step: {
-      // Первичное взятие непомеченного файла во владение — СОБЫТИЕ, отличное от
-      // расхождения (`kb:BASER-5`): «файл разошёлся с каноном» и «файл впервые
-      // взят под управление» гейт обязан показывать по-разному. Для `shared`
-      // это штатный путь, для `engine` — только под `force`.
       kind: raw === null ? 'create' : 'update',
       dest: entry.dest,
-      reason: raw === null ? 'missing' : owned ? 'diverged' : 'adopted',
+      reason,
       src: entry.src,
       mode: entry.mode,
       ownership: strategy.ownership,
@@ -521,6 +555,68 @@ function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
       previous: raw,
     },
   };
+}
+
+interface TransitionInput {
+  readonly raw: string | null;
+  readonly content: string;
+  readonly record: OwnershipRecord | null;
+  readonly entry: FrameEntry;
+  readonly ownership: OwnershipClass;
+  readonly format: MarkerFormat | null;
+}
+
+/**
+ * Что произошло с артефактом — или `null`, если делать нечего.
+ *
+ * Сравнение ведётся по ТЕЛУ артефакта и по АКТУАЛЬНОСТИ ПРЕТЕНЗИИ, а не по
+ * строке маркера целиком (`kb:BASER-5`, «Маркер обязан отражать ТЕКУЩЕЕ
+ * объявленное владение»):
+ *   - **версия канона — провенанс, а не основание для шага.** Бамп версии при
+ *     том же теле переписал бы все артефакты у всех потребителей и отрапортовал
+ *     бы расхождение там, где ничего не разошлось; версия обновляется вместе с
+ *     телом, когда шаг и так происходит;
+ *   - **claim (src · mode · класс владения) обязан отражать декларацию.**
+ *     Устаревший маркер утверждает снятое владение, а это прямой путь к потере
+ *     файла продукта на следующем снятии записи.
+ *
+ * Первичное взятие непомеченного файла во владение — отдельное событие
+ * (`adopted`), отличное от расхождения: гейт обязан показывать их по-разному.
+ */
+function transitionReason(input: TransitionInput): PlanReason | null {
+  const { raw, content, record, entry, ownership, format } = input;
+
+  if (raw === null) {
+    return 'missing';
+  }
+  if (record === null) {
+    return 'adopted';
+  }
+  // Порядок значим: если декларация сменила claim, первичное событие — именно
+  // это, а не расхождение тела (тело разошлось ВСЛЕДСТВИЕ смены объявления).
+  // Причина обязана быть правдой — на неё ветвятся гейт и панель.
+  if (!claimMatches(record, entry, ownership)) {
+    return 'reclaimed';
+  }
+  return bodyOf(raw, format) !== bodyOf(content, format) ? 'diverged' : null;
+}
+
+/** Содержимое без служебной строки владения. */
+function bodyOf(content: string, format: MarkerFormat | null): string {
+  return format === null ? content : format.strip(content);
+}
+
+/** Утверждает ли маркер ровно то владение, которое объявлено сейчас. */
+function claimMatches(
+  record: OwnershipRecord,
+  entry: FrameEntry,
+  ownership: OwnershipClass,
+): boolean {
+  return (
+    record.src === entry.src &&
+    record.mode === entry.mode &&
+    record.own === ownership
+  );
 }
 
 function baselineMissing(

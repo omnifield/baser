@@ -62,6 +62,23 @@ export function createWorkspace(
   return { tree, declaration: readDeclaration(tree) };
 }
 
+/**
+ * Меняет объявленный `frame` продукта и перечитывает декларацию.
+ *
+ * Переходы объявления — обязательная часть приёмки (`kb:BASER-5`, «Контракт
+ * проверяется ПЕРЕХОДАМИ, а не устойчивыми состояниями»), поэтому смена
+ * декларации — такой же первоклассный инструмент фикстуры, как само дерево.
+ */
+export function redeclare(
+  tree: Tree,
+  frame: readonly FrameEntry[],
+): Declaration {
+  const manifest = JSON.parse(tree.read('package.json', 'utf-8') as string);
+  manifest.omnifield.frame = frame;
+  tree.write('package.json', `${JSON.stringify(manifest, null, 2)}\n`);
+  return readDeclaration(tree);
+}
+
 /** Обёртка дерева, роняющая N-ю запись, — для проверки атомарности. */
 export function treeFailingOnWrite(tree: Tree, failAtCall: number): Tree {
   let calls = 0;
