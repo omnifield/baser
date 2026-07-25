@@ -11,7 +11,11 @@
 import { describe, expect, it } from 'vitest';
 import type { FrameEntry } from './declaration.js';
 import { computePlan } from './plan.js';
-import { applyPlan, MaterializationApplyError } from './apply.js';
+import {
+  applyPlan,
+  MaterializationApplyError,
+  MaterializationConflictError,
+} from './apply.js';
 import { createTreeSource } from './source.js';
 import { readOwnership } from './ownership.js';
 import { ALL_DOUBLES } from './strategies.fixture.js';
@@ -155,23 +159,23 @@ describe('переход: сменился объявленный класс в�
   });
 
   it('смена класса поверх расхождения тела остаётся reclaimed — причина не врёт', () => {
-    const { tree } = materialized(asMerge);
-    tree.write(CFG, `${tree.read(CFG, 'utf-8') as string}вклад продукта\n`);
+    const { tree } = materialized(asExact);
+    tree.write(CFG, `${tree.read(CFG, 'utf-8') as string}правка руками\n`);
 
     const plan = computePlan({
       tree,
-      declaration: redeclare(tree, [asExact]),
+      declaration: redeclare(tree, [asMerge]),
       strategies: ALL_DOUBLES,
     });
 
-    // Тело действительно разойдётся (exact перегенерирует), но причина шага —
-    // смена объявленного владения, а не дрейф: она первична.
+    // Тело действительно разошлось, но причина шага — смена объявленного
+    // владения, а не дрейф: она первична.
     expect(plan.steps[0]).toMatchObject({
       kind: 'update',
       reason: 'reclaimed',
-      ownership: 'engine',
+      ownership: 'shared',
     });
-    expect(plan.steps[0].previous).toContain('вклад продукта');
+    expect(plan.steps[0].previous).toContain('правка руками');
   });
 
   it('смена src при том же dest тоже обновляет претензию', () => {
@@ -186,6 +190,110 @@ describe('переход: сменился объявленный класс в�
 
     expect(plan.steps[0]).toMatchObject({ reason: 'reclaimed' });
     expect(readOwnership(tree, CFG)).toMatchObject({ src: 'other.yml' });
+  });
+});
+
+/**
+ * Подтверждения требует ЛЮБОЕ действие, отнимающее у продукта права или
+ * содержимое, и никогда — действие, права возвращающее (`kb:BASER-5`, «Сужение
+ * владения до единоличного требует явного подтверждения»). Гейт строгости стоит
+ * на стороне потребителя, а не на стороне удобства фундамента.
+ */
+describe('переход: сужение владения shared → engine', () => {
+  it('без force — конфликт, а не шаг: у продукта отнимают право на вклад', () => {
+    const { tree } = materialized(asMerge);
+
+    const plan = computePlan({
+      tree,
+      declaration: redeclare(tree, [asExact]),
+      strategies: ALL_DOUBLES,
+    });
+
+    expect(plan.status).toBe('blocked');
+    expect(plan.steps).toEqual([]);
+    expect(plan.conflicts[0]).toMatchObject({
+      kind: 'ownership-narrowing',
+      dest: CFG,
+      ownership: 'engine',
+      detail: {
+        resolution: 'force',
+        fromOwnership: 'shared',
+        toOwnership: 'engine',
+      },
+    });
+  });
+
+  it('под force — проходит и забирает владение', () => {
+    const { tree } = materialized(asMerge);
+
+    const plan = computePlan({
+      tree,
+      declaration: redeclare(tree, [asExact]),
+      strategies: ALL_DOUBLES,
+      force: true,
+    });
+    applyPlan(tree, plan);
+
+    expect(plan.steps[0]).toMatchObject({
+      kind: 'update',
+      reason: 'reclaimed',
+      ownership: 'engine',
+    });
+    expect(readOwnership(tree, CFG)).toMatchObject({ own: 'engine' });
+  });
+
+  it('обратное направление подтверждения не требует — движок отдаёт права', () => {
+    const { tree } = materialized(asExact);
+
+    const widening = computePlan({
+      tree,
+      declaration: redeclare(tree, [asMerge]),
+      strategies: ALL_DOUBLES,
+    });
+    applyPlan(tree, widening);
+    const releasing = computePlan({
+      tree,
+      declaration: redeclare(tree, [asSeed]),
+      strategies: ALL_DOUBLES,
+    });
+
+    expect(widening.status).toBe('pending');
+    expect(widening.conflicts).toEqual([]);
+    expect(releasing.conflicts).toEqual([]);
+    expect(releasing.steps[0]).toMatchObject({ kind: 'release' });
+  });
+});
+
+/**
+ * ЦЕПОЧКА из ревью №3: `merge` → вклад продукта → `exact`. Вклад продукта
+ * законен — это и есть смысл `shared`, — поэтому отнять его молча нельзя.
+ */
+describe('цепочка merge → вклад продукта → exact', () => {
+  it('без force вклад цел, план заблокирован; под force вклад уходит осознанно', () => {
+    const { tree } = materialized(asMerge);
+    tree.write(CFG, `${tree.read(CFG, 'utf-8') as string}вклад продукта\n`);
+
+    const declaration = redeclare(tree, [asExact]);
+    const blocked = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+
+    expect(blocked.status).toBe('blocked');
+    expect(() => applyPlan(tree, blocked)).toThrow(
+      MaterializationConflictError,
+    );
+    expect(tree.read(CFG, 'utf-8')).toContain('вклад продукта');
+
+    const forced = computePlan({
+      tree,
+      declaration,
+      strategies: ALL_DOUBLES,
+      force: true,
+    });
+    applyPlan(tree, forced);
+
+    expect(tree.read(CFG, 'utf-8')).not.toContain('вклад продукта');
+    expect(
+      computePlan({ tree, declaration, strategies: ALL_DOUBLES }).status,
+    ).toBe('converged');
   });
 });
 

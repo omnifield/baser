@@ -90,6 +90,11 @@ export type ConflictKind =
   | 'duplicate-dest'
   /** `dest` существует и принадлежит не движку. */
   | 'foreign-dest'
+  /**
+   * Объявление СУЖАЕТ владение до единоличного (`shared` → `engine`): у
+   * продукта отнимается право на вклад, который движок сам признавал законным.
+   */
+  | 'ownership-narrowing'
   /** Класс файла не может нести маркер владения — доказать владение нечем. */
   | 'unmarkable-dest'
   /** Источник `src` не найден под `contentRoot`. */
@@ -112,8 +117,12 @@ export interface ConflictDetail {
   readonly sourcePath?: string;
   /** `unknown-mode`: режимы, для которых стратегии зарегистрированы. */
   readonly availableModes?: readonly MaterializeMode[];
-  /** `foreign-dest`: чем отказ снимается. */
+  /** `foreign-dest` · `ownership-narrowing`: чем отказ снимается. */
   readonly resolution?: 'force' | 'drop-frame-entry';
+  /** `ownership-narrowing`: класс владения, записанный в маркере сейчас. */
+  readonly fromOwnership?: OwnershipClass;
+  /** `ownership-narrowing`: класс владения, которого требует декларация. */
+  readonly toOwnership?: OwnershipClass;
   /** `unmarkable-dest`: почему маркер невозможен. */
   readonly unmarkable?: 'no-format-for-class' | 'content-shape';
   /** `strategy`: причина отказа, как её назвала стратегия режима. */
@@ -459,6 +468,41 @@ function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
           `материализованный движком, а режим "${entry.mode}" требует единоличного владения. ` +
           'Отказ вместо тихой перезаписи: прими файл в канон осознанно (force) ' +
           'или сними запись из frame',
+      },
+    };
+  }
+
+  // СУЖЕНИЕ владения до единоличного требует явного подтверждения
+  // (`kb:BASER-5`). Забрать единоличное владение у совместного молча нельзя:
+  // продукт вносил вклад с нашего же ведома — движок сам признавал его
+  // законным, — и переход стёр бы этот вклад без следа. Строгий гейт не может
+  // стоять на слабом случае (непомеченный чужой файл) и отсутствовать на
+  // сильном. Обратное направление подтверждения НЕ требует: расширяя владение
+  // до `shared` или отпуская его в `product`, движок отдаёт права, а не
+  // отнимает, — симметрии здесь быть не должно.
+  if (
+    strategy.ownership === 'engine' &&
+    record !== null &&
+    record.own !== 'engine' &&
+    !force
+  ) {
+    return {
+      conflict: {
+        kind: 'ownership-narrowing',
+        dest: entry.dest,
+        src: entry.src,
+        mode: entry.mode,
+        ownership: 'engine',
+        detail: {
+          resolution: 'force',
+          fromOwnership: record.own,
+          toOwnership: 'engine',
+        },
+        message:
+          `конфликт владения: "${entry.dest}" материализован как совместный ` +
+          `(${record.own}), а режим "${entry.mode}" требует единоличного владения — ` +
+          'вклад продукта будет стёрт. Отнять права у продукта можно только ' +
+          'осознанно (force); иначе оставь режим совместного владения',
       },
     };
   }
