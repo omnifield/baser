@@ -216,7 +216,7 @@ describe('переход: сужение владения shared → engine', ()
       dest: CFG,
       ownership: 'engine',
       detail: {
-        resolution: 'force',
+        resolution: 'confirm',
         fromOwnership: 'shared',
         toOwnership: 'engine',
       },
@@ -669,6 +669,34 @@ describe('переход: подтверждение дано ради одно�
       dest: CFG,
       detail: { confirmation: 'not-required' },
     });
+  });
+});
+
+/**
+ * Атомарность кончается на границе дерева: сброс на диск делает раннер, и его
+ * сбой — уже вне журнала отката. Состояние, которого не бывает на реальной ФС,
+ * обязано ловиться ПЛАНОМ (`kb:BASER-5`).
+ */
+describe('переход: декларация добавляет dest внутрь пути другого dest', () => {
+  it('план блокируется, а не рапортует сходимость несуществующему состоянию', () => {
+    const { tree } = materialized(asExact);
+
+    const plan = computePlan({
+      tree,
+      declaration: redeclare(tree, [
+        asExact,
+        { src: 'cfg.yml', dest: `${CFG}/inner.yml`, mode: 'exact' },
+      ]),
+      strategies: ALL_DOUBLES,
+    });
+
+    expect(plan.status).toBe('blocked');
+    expect(plan.conflicts[0]).toMatchObject({
+      kind: 'unreachable-dest',
+      dest: `${CFG}/inner.yml`,
+      detail: { blockedBy: CFG, collision: 'declared-dest' },
+    });
+    expect(() => applyPlan(tree, plan)).toThrow(MaterializationConflictError);
   });
 });
 

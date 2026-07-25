@@ -44,6 +44,7 @@ import type {
   ScanOptions,
 } from './ownership.js';
 import {
+  DEFAULT_SCAN_IGNORE,
   UnmarkableContentError,
   markerFormatFor,
   scanOwnership,
@@ -96,6 +97,14 @@ export type ConflictKind =
    * продукта отнимается право на вклад, который движок сам признавал законным.
    */
   | 'ownership-narrowing'
+  /**
+   * Объявленное состояние физически недостижимо: сегмент пути `dest` занят
+   * файлом — объявленным другой записью или уже лежащим в дереве. Виртуальное
+   * дерево такое терпит, реальная ФС — нет (`kb:BASER-5`).
+   */
+  | 'unreachable-dest'
+  /** `dest` лежит внутри `contentRoot` — движок писал бы в собственный источник. */
+  | 'dest-in-content-root'
   /** Класс файла не может нести маркер владения — доказать владение нечем. */
   | 'unmarkable-dest'
   /** Источник `src` не найден под `contentRoot`. */
@@ -118,12 +127,24 @@ export interface ConflictDetail {
   readonly sourcePath?: string;
   /** `unknown-mode`: режимы, для которых стратегии зарегистрированы. */
   readonly availableModes?: readonly MaterializeMode[];
-  /** `foreign-dest` · `ownership-narrowing`: чем отказ снимается. */
-  readonly resolution?: 'force' | 'drop-frame-entry';
+  /**
+   * `foreign-dest` · `ownership-narrowing`: чем отказ снимается.
+   * Код совпадает с именем механизма в API (`PlanOptions.confirm`): панель,
+   * показавшая одно имя, и вызов, требующий другого, — расхождение, которое
+   * всплывёт у потребителя (`kb:BASER-5`, «Подтверждение называется одинаково
+   * везде»).
+   */
+  readonly resolution?: 'confirm' | 'drop-frame-entry';
   /** `ownership-narrowing`: класс владения, записанный в маркере сейчас. */
   readonly fromOwnership?: OwnershipClass;
   /** `ownership-narrowing`: класс владения, которого требует декларация. */
   readonly toOwnership?: OwnershipClass;
+  /** `unreachable-dest`: путь, который занят файлом и перекрывает `dest`. */
+  readonly blockedBy?: string;
+  /** `unreachable-dest`: чем именно занят перекрывающий путь. */
+  readonly collision?: 'declared-dest' | 'existing-file' | 'existing-directory';
+  /** `dest-in-content-root`: корень содержимого источника из декларации. */
+  readonly contentRoot?: string;
   /** `unmarkable-dest`: почему маркер невозможен. */
   readonly unmarkable?: 'no-format-for-class' | 'content-shape';
   /** `strategy`: причина отказа, как её назвала стратегия режима. */
@@ -159,7 +180,13 @@ export type PlanNoticeKind =
    * (или он вовсе не объявлен). Названо, чтобы «подтвердил, а ничего не
    * изменилось» не выглядело как молчание движка.
    */
-  | 'confirmation-unused';
+  | 'confirmation-unused'
+  /**
+   * Раннер сузил охват скана, поэтому движок не отвечает за полноту снятия
+   * сирот. Извещение уровня ПРОГОНА (без `dest`): потребитель обязан отличать
+   * «сирот нет» от «сирот не искали во всём дереве» (`kb:BASER-5`).
+   */
+  | 'scan-scope-narrowed';
 
 /**
  * Извещение: состояние, которое обязано быть НАЗВАНО, но не является ни шагом,
@@ -167,7 +194,8 @@ export type PlanNoticeKind =
  */
 export interface PlanNotice {
   readonly kind: PlanNoticeKind;
-  readonly dest: string;
+  /** Артефакт, которого касается извещение; нет — извещение уровня прогона. */
+  readonly dest?: string;
   readonly src?: string;
   readonly mode?: MaterializeMode;
   readonly ownership?: OwnershipClass;
@@ -182,6 +210,10 @@ export interface NoticeDetail {
   readonly cause?: 'no-version' | 'unresolved';
   /** `confirmation-unused`: почему подтверждение не пригодилось. */
   readonly confirmation?: 'not-required' | 'not-declared';
+  /** `scan-scope-narrowed`: каталоги, с которых раннер начал скан. */
+  readonly roots?: readonly string[];
+  /** `scan-scope-narrowed`: пропуски сверх умолчания движка. */
+  readonly ignored?: readonly string[];
 }
 
 /**
@@ -270,6 +302,8 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
   const conflicts: PlanConflict[] = [];
   let notices: PlanNotice[] = [];
   const claimed = new Map<string, FrameEntry>();
+  /** Каталог пути → `dest`, ради которого он обязан быть каталогом. */
+  const claimedDirs = new Map<string, string>();
 
   trace.span(
     'plan.frame',
@@ -297,7 +331,23 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
           });
           continue;
         }
+        const unreachable = reachabilityConflict(entry, {
+          tree,
+          contentRoot: declaration.contentRoot,
+          claimed,
+          claimedDirs,
+        });
+        if (unreachable !== null) {
+          conflicts.push(unreachable);
+          continue;
+        }
+
         claimed.set(entry.dest, entry);
+        for (const dir of ancestorsOf(entry.dest)) {
+          if (!claimedDirs.has(dir)) {
+            claimedDirs.set(dir, entry.dest);
+          }
+        }
 
         const outcome = planEntry(entry, {
           tree,
@@ -340,6 +390,14 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
     });
   }
 
+  // Сужение охвата скана раннером — законно, но обязано быть НАЗВАНО:
+  // движок перестаёт отвечать за полноту снятия сирот, и потребитель обязан
+  // отличать «сирот нет» от «сирот не искали во всём дереве» (`kb:BASER-5`).
+  const narrowing = scanNarrowing(options.scan);
+  if (narrowing !== null) {
+    notices.push(narrowing);
+  }
+
   const owned = trace.span('plan.scan-ownership', () =>
     scanOwnership(tree, {
       ...options.scan,
@@ -367,7 +425,9 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
 
   steps.sort((left, right) => left.dest.localeCompare(right.dest));
   conflicts.sort((left, right) => left.dest.localeCompare(right.dest));
-  notices.sort((left, right) => left.dest.localeCompare(right.dest));
+  notices.sort((left, right) =>
+    (left.dest ?? '').localeCompare(right.dest ?? ''),
+  );
 
   return {
     schemaVersion: OUTPUT_SCHEMA_VERSION,
@@ -387,6 +447,152 @@ function statusOf(
     return 'blocked';
   }
   return steps.length === 0 ? 'converged' : 'pending';
+}
+
+/**
+ * Извещение о сокращённом охвате скана; `null` — охват полный.
+ *
+ * Сокращением считается и старт не от корня (`roots`), и пропуск сверх
+ * умолчания движка (`ignore`): в обоих случаях часть дерева не просматривалась.
+ * Расширение списка пропуска в меньшую сторону извещения не требует — оно
+ * охват не сужает.
+ */
+function scanNarrowing(scan: ScanOptions | undefined): PlanNotice | null {
+  const roots = scan?.roots;
+  const extraIgnored = (scan?.ignore ?? []).filter(
+    (name) => !DEFAULT_SCAN_IGNORE.includes(name),
+  );
+  const narrowedByRoots = roots !== undefined;
+
+  if (!narrowedByRoots && extraIgnored.length === 0) {
+    return null;
+  }
+
+  return {
+    kind: 'scan-scope-narrowed',
+    detail: {
+      ...(narrowedByRoots ? { roots } : {}),
+      ...(extraIgnored.length > 0 ? { ignored: extraIgnored } : {}),
+    },
+    message:
+      'охват скана сокращён раннером ' +
+      (narrowedByRoots ? `(корни: ${roots.join(', ')}) ` : '') +
+      (extraIgnored.length > 0
+        ? `(пропуск: ${extraIgnored.join(', ')}) `
+        : '') +
+      '— движок не отвечает за полноту снятия сирот вне этого охвата: ' +
+      '«сирот нет» и «сирот не искали во всём дереве» это разные состояния',
+  };
+}
+
+interface ReachabilityContext {
+  readonly tree: Tree;
+  readonly contentRoot: string;
+  readonly claimed: ReadonlyMap<string, FrameEntry>;
+  readonly claimedDirs: ReadonlyMap<string, string>;
+}
+
+/**
+ * Достижимо ли объявленное состояние ТАМ, ГДЕ АРТЕФАКТЫ В ИТОГЕ ЖИВУТ.
+ *
+ * Атомарность движка кончается на виртуальном дереве: сброс на реальную ФС
+ * делает раннер, и его сбой происходит уже ВНЕ журнала отката. Поэтому всё, что
+ * упадёт при записи на диск, обязано быть поймано планом (`kb:BASER-5`,
+ * «Объявленное состояние обязано быть физически достижимым»). Дерево Nx терпит
+ * файл и каталог с одним путём одновременно — файловая система не терпит, и
+ * эталон реальности здесь она, а не дерево.
+ *
+ * Проверки стоят ПО СУЩЕСТВУ, а не побочно: коллизия `cfg` + `cfg/inner.yml`
+ * раньше отбивалась правилом про неразмечаемый класс файла, а `dest` внутри
+ * `contentRoot` — конфликтом чужого файла. Побочная защита отвалится, как
+ * только изменится смежное правило.
+ */
+function reachabilityConflict(
+  entry: FrameEntry,
+  context: ReachabilityContext,
+): PlanConflict | null {
+  const { tree, contentRoot, claimed, claimedDirs } = context;
+
+  if (isInside(entry.dest, contentRoot)) {
+    return {
+      kind: 'dest-in-content-root',
+      dest: entry.dest,
+      src: entry.src,
+      mode: entry.mode,
+      detail: { contentRoot },
+      message:
+        `"${entry.dest}" лежит внутри contentRoot "${contentRoot}": движок писал бы ` +
+        'в собственный источник канона — материализация в источник не имеет смысла',
+    };
+  }
+
+  for (const ancestor of ancestorsOf(entry.dest)) {
+    if (claimed.has(ancestor)) {
+      return unreachable(entry, ancestor, 'declared-dest');
+    }
+    if (tree.exists(ancestor) && tree.isFile(ancestor)) {
+      return unreachable(entry, ancestor, 'existing-file');
+    }
+  }
+
+  const blockedDest = claimedDirs.get(entry.dest);
+  if (blockedDest !== undefined) {
+    return unreachable(entry, blockedDest, 'declared-dest');
+  }
+
+  // Симметричный случай: сам `dest` уже занят КАТАЛОГОМ. Контракт его отдельно
+  // не перечисляет, но правило то же — файл на месте каталога не создать, и
+  // упадёт это опять при сбросе на диск, вне журнала отката.
+  if (tree.exists(entry.dest) && !tree.isFile(entry.dest)) {
+    return unreachable(entry, entry.dest, 'existing-directory');
+  }
+
+  return null;
+}
+
+const COLLISION_CAUSE: Record<
+  'declared-dest' | 'existing-file' | 'existing-directory',
+  string
+> = {
+  'declared-dest': 'путь занят файлом, объявленным другой записью frame',
+  'existing-file': 'путь занят файлом, который уже лежит в дереве',
+  'existing-directory': 'путь занят каталогом, который уже лежит в дереве',
+};
+
+function unreachable(
+  entry: FrameEntry,
+  blockedBy: string,
+  collision: 'declared-dest' | 'existing-file' | 'existing-directory',
+): PlanConflict {
+  return {
+    kind: 'unreachable-dest',
+    dest: entry.dest,
+    src: entry.src,
+    mode: entry.mode,
+    detail: { blockedBy, collision },
+    message:
+      `"${entry.dest}" недостижим: ${COLLISION_CAUSE[collision]} ("${blockedBy}"). ` +
+      'Виртуальное дерево такое состояние терпит, файловая система — нет',
+  };
+}
+
+/** Каталоги-предки пути, от ближнего к корню: `a/b/c.yml` → `a`, `a/b`. */
+function ancestorsOf(path: string): string[] {
+  const segments = path.split('/');
+  segments.pop();
+  const dirs: string[] = [];
+  let current = '';
+  for (const segment of segments) {
+    current = current === '' ? segment : `${current}/${segment}`;
+    dirs.push(current);
+  }
+  return dirs;
+}
+
+/** Лежит ли путь внутри каталога (или совпадает с ним). */
+function isInside(path: string, directory: string): boolean {
+  const root = directory.replace(/\/+$/, '');
+  return root !== '' && (path === root || path.startsWith(`${root}/`));
 }
 
 interface EntryContext {
@@ -523,7 +729,7 @@ function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
           src: entry.src,
           mode: entry.mode,
           ownership: 'engine',
-          detail: { resolution: 'force' },
+          detail: { resolution: 'confirm' },
           message:
             `конфликт владения: "${entry.dest}" уже существует и не помечен как ` +
             `материализованный движком, а режим "${entry.mode}" требует единоличного ` +
@@ -557,7 +763,7 @@ function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
           mode: entry.mode,
           ownership: 'engine',
           detail: {
-            resolution: 'force',
+            resolution: 'confirm',
             fromOwnership: record.own,
             toOwnership: 'engine',
           },

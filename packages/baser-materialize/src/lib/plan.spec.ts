@@ -4,7 +4,7 @@ import { computePlan, describePlan, isApplicable } from './plan.js';
 import { applyPlan } from './apply.js';
 import type { CanonBaseline } from './source.js';
 import { createTreeSource } from './source.js';
-import { readOwnership } from './ownership.js';
+import { DEFAULT_SCAN_IGNORE, readOwnership } from './ownership.js';
 import {
   ALL_DOUBLES,
   CARELESS_DOUBLES,
@@ -781,6 +781,167 @@ describe('вывод машинночитаем в первую очередь',
     expect(
       plan.trace.find((span) => span.name === 'plan.owned')?.detail,
     ).toEqual({ files: 0 });
+  });
+});
+
+/**
+ * Атомарность движка кончается на виртуальном дереве: сброс на реальную ФС
+ * делает раннер, и его сбой происходит уже ВНЕ журнала отката. Поэтому всё,
+ * что упадёт при записи на диск, обязано быть поймано ПЛАНОМ (`kb:BASER-5`,
+ * «Объявленное состояние обязано быть физически достижимым»).
+ */
+describe('объявленное состояние обязано быть физически достижимым', () => {
+  it('dest внутри пути другого dest — конфликт плана, а не сходимость', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [
+        { src: 'ci/build.yml', dest: 'cfg.yml', mode: 'exact' },
+        { src: 'ci/build.yml', dest: 'cfg.yml/inner.yml', mode: 'exact' },
+      ],
+      sources: SOURCES,
+    });
+
+    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+
+    expect(plan.status).toBe('blocked');
+    expect(plan.conflicts[0]).toMatchObject({
+      kind: 'unreachable-dest',
+      dest: 'cfg.yml/inner.yml',
+      detail: { blockedBy: 'cfg.yml', collision: 'declared-dest' },
+    });
+    expect(plan.steps.map((step) => step.dest)).toEqual(['cfg.yml']);
+  });
+
+  it('порядок объявления не спасает: вложенный объявлен первым — отказ у внешнего', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [
+        { src: 'ci/build.yml', dest: 'cfg.yml/inner.yml', mode: 'exact' },
+        { src: 'ci/build.yml', dest: 'cfg.yml', mode: 'exact' },
+      ],
+      sources: SOURCES,
+    });
+
+    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+
+    expect(plan.conflicts[0]).toMatchObject({
+      kind: 'unreachable-dest',
+      dest: 'cfg.yml',
+      detail: { blockedBy: 'cfg.yml/inner.yml', collision: 'declared-dest' },
+    });
+  });
+
+  it('родительский путь занят файлом в дереве — тоже конфликт плана', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [
+        { src: 'ci/build.yml', dest: 'cfg.yml/inner.yml', mode: 'exact' },
+      ],
+      sources: SOURCES,
+      existing: { 'cfg.yml': 'настройка: продукта\n' },
+    });
+
+    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+
+    expect(plan.status).toBe('blocked');
+    expect(plan.conflicts[0]).toMatchObject({
+      kind: 'unreachable-dest',
+      detail: { blockedBy: 'cfg.yml', collision: 'existing-file' },
+    });
+    expect(tree.read('cfg.yml', 'utf-8')).toBe('настройка: продукта\n');
+  });
+
+  it('коллизия отбивается ПО СУЩЕСТВУ, а не побочно правилом про маркер', () => {
+    // `cfg` без расширения маркер нести не может, и раньше пара отбивалась
+    // именно этим. Побочная защита отвалится, как только класс станет
+    // размечаемым, — значит проверка обязана стоять по существу.
+    const { tree, declaration } = createWorkspace({
+      frame: [
+        { src: 'ci/build.yml', dest: 'cfg', mode: 'exact' },
+        { src: 'ci/build.yml', dest: 'cfg/inner.yml', mode: 'exact' },
+      ],
+      sources: SOURCES,
+    });
+
+    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+
+    expect(
+      plan.conflicts.find((conflict) => conflict.dest === 'cfg/inner.yml'),
+    ).toMatchObject({
+      kind: 'unreachable-dest',
+      detail: { blockedBy: 'cfg', collision: 'declared-dest' },
+    });
+  });
+
+  it('dest, чей путь уже занят каталогом, — тот же класс недостижимости', () => {
+    // Контракт перечисляет обратный случай (каталог занят файлом); правило
+    // «объявленное обязано быть достижимо» покрывает и этот, а падение было бы
+    // опять при сбросе на диск — вне журнала отката.
+    const { tree, declaration } = createWorkspace({
+      frame: [{ src: 'ci/build.yml', dest: 'cfg', mode: 'exact' }],
+      sources: SOURCES,
+      existing: { 'cfg/inner.yml': 'настройка: продукта\n' },
+    });
+
+    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+
+    expect(plan.status).toBe('blocked');
+    expect(plan.conflicts[0]).toMatchObject({
+      kind: 'unreachable-dest',
+      dest: 'cfg',
+      detail: { blockedBy: 'cfg', collision: 'existing-directory' },
+    });
+  });
+
+  it('dest внутри contentRoot отбивается по существу, а не как чужой файл', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [
+        {
+          src: 'ci/build.yml',
+          dest: `${CONTENT_ROOT}/ci/build.yml`,
+          mode: 'exact',
+        },
+      ],
+      sources: SOURCES,
+    });
+
+    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+
+    expect(plan.conflicts[0]).toMatchObject({
+      kind: 'dest-in-content-root',
+      detail: { contentRoot: CONTENT_ROOT },
+    });
+    expect(plan.steps).toEqual([]);
+  });
+});
+
+describe('охват скана', () => {
+  it('сужение охвата раннером названо извещением уровня прогона', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [exactEntry],
+      sources: SOURCES,
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      strategies: ALL_DOUBLES,
+      scan: { roots: ['.github'], ignore: [...DEFAULT_SCAN_IGNORE, 'vendor'] },
+    });
+
+    expect(plan.notices[0]).toMatchObject({
+      kind: 'scan-scope-narrowed',
+      detail: { roots: ['.github'], ignored: ['vendor'] },
+    });
+    expect(plan.notices[0].dest).toBeUndefined();
+  });
+
+  it('полный охват извещения не порождает', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [exactEntry],
+      sources: SOURCES,
+    });
+
+    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+
+    expect(plan.notices).toEqual([]);
   });
 });
 
