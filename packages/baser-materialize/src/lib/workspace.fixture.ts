@@ -3,18 +3,23 @@
  * `createTreeWithEmptyWorkspace` + предварительный засев существующих файлов —
  * иначе тест проверяет не тот сценарий).
  *
+ * Декларация здесь СТРОИТСЯ, а не читается из дерева: движку её подаёт дверь
+ * готовой структурой (`tasker:BASER2-23`). Манифеста в фикстуре нет намеренно —
+ * тест, кладущий `package.json` ради движка, врал бы про то, что движку нужно.
+ *
  * Файл исключён из сборки пакета.
  */
 
 import type { Tree } from '@nx/devkit';
 import { createTreeWithEmptyWorkspace } from '@nx/devkit/testing';
-import type { Declaration, FrameEntry } from './declaration.js';
-import { readDeclaration } from './declaration.js';
+import type { Declaration, LayoutEntry } from './declaration.js';
 
 export interface WorkspaceFixtureOptions {
-  readonly frame: readonly FrameEntry[];
+  readonly layout: readonly LayoutEntry[];
   readonly contentRoot?: string;
-  /** Файлы канона: путь относительно `contentRoot` → содержимое. */
+  /** Идентичность обвеса; по умолчанию — типовая. */
+  readonly sourceId?: string;
+  /** Файлы шаблонов: путь относительно `contentRoot` → содержимое. */
   readonly sources?: Readonly<Record<string, string>>;
   /** Файлы, уже лежащие в репозитории потребителя. */
   readonly existing?: Readonly<Record<string, string>>;
@@ -26,31 +31,13 @@ export interface WorkspaceFixture {
 }
 
 export const CONTENT_ROOT = 'node_modules/@omnifield/canon-kit/content';
+export const SOURCE_ID = 'omnifield/canon-kit';
 
 export function createWorkspace(
   options: WorkspaceFixtureOptions,
 ): WorkspaceFixture {
   const tree = createTreeWithEmptyWorkspace();
   const contentRoot = options.contentRoot ?? CONTENT_ROOT;
-
-  tree.write(
-    'package.json',
-    `${JSON.stringify(
-      {
-        name: '@omnifield/consumer',
-        version: '0.0.0',
-        omnifield: {
-          kind: 'plugin',
-          target: 'repo',
-          stack: 'node',
-          contentRoot,
-          frame: options.frame,
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
 
   for (const [path, content] of Object.entries(options.sources ?? {})) {
     tree.write(`${contentRoot}/${path}`, content);
@@ -59,24 +46,29 @@ export function createWorkspace(
     tree.write(path, content);
   }
 
-  return { tree, declaration: readDeclaration(tree) };
+  return {
+    tree,
+    declaration: {
+      source: { id: options.sourceId ?? SOURCE_ID, contentRoot },
+      layout: options.layout,
+    },
+  };
 }
 
 /**
- * Меняет объявленный `frame` продукта и перечитывает декларацию.
+ * Новая декларация с другой раскладкой — переход объявления.
  *
- * Переходы объявления — обязательная часть приёмки (`kb:BASER-5`, «Контракт
- * проверяется ПЕРЕХОДАМИ, а не устойчивыми состояниями»), поэтому смена
- * декларации — такой же первоклассный инструмент фикстуры, как само дерево.
+ * Переходы объявления обязательная часть приёмки («контракт проверяется
+ * ПЕРЕХОДАМИ, а не устойчивыми состояниями»), поэтому смена декларации — такой
+ * же первоклассный инструмент фикстуры, как само дерево. Раньше она правила
+ * манифест в дереве; теперь просто отдаёт новую структуру — ровно то, что
+ * сделает дверь.
  */
 export function redeclare(
-  tree: Tree,
-  frame: readonly FrameEntry[],
+  declaration: Declaration,
+  layout: readonly LayoutEntry[],
 ): Declaration {
-  const manifest = JSON.parse(tree.read('package.json', 'utf-8') as string);
-  manifest.omnifield.frame = frame;
-  tree.write('package.json', `${JSON.stringify(manifest, null, 2)}\n`);
-  return readDeclaration(tree);
+  return { ...declaration, layout };
 }
 
 /** Обёртка дерева, роняющая N-ю запись, — для проверки атомарности. */

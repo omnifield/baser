@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { FrameEntry } from './declaration.js';
+import type { LayoutEntry } from './declaration.js';
 import { computePlan } from './plan.js';
 import {
   MaterializationApplyError,
@@ -8,6 +8,7 @@ import {
 } from './apply.js';
 import {
   createWorkspace,
+  redeclare,
   snapshotTree,
   treeFailingOnWrite,
 } from './workspace.fixture.js';
@@ -15,7 +16,7 @@ import {
 const WORKFLOW = '.github/workflows/build.yml';
 const RELEASE = '.github/workflows/release.yml';
 
-const frame: readonly FrameEntry[] = [
+const LAYOUT: readonly LayoutEntry[] = [
   { src: 'ci/build.yml', dest: WORKFLOW },
   { src: 'ci/release.yml', dest: RELEASE },
 ];
@@ -27,12 +28,9 @@ const SOURCES = {
 
 describe('applyPlan', () => {
   it('применяет шаги плана к дереву', () => {
-    const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
+    const { tree, declaration } = createWorkspace({ layout: LAYOUT, sources: SOURCES });
 
-    const report = applyPlan(
-      tree,
-      computePlan({ tree, declaration }),
-    );
+    const report = applyPlan(tree, computePlan({ tree, declaration }));
 
     expect(report.applied).toHaveLength(2);
     expect(tree.read(WORKFLOW, 'utf-8')).toContain('name: build');
@@ -40,12 +38,9 @@ describe('applyPlan', () => {
   });
 
   it('трейсит применение', () => {
-    const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
+    const { tree, declaration } = createWorkspace({ layout: LAYOUT, sources: SOURCES });
 
-    const report = applyPlan(
-      tree,
-      computePlan({ tree, declaration }),
-    );
+    const report = applyPlan(tree, computePlan({ tree, declaration }));
 
     expect(report.trace.map((span) => span.name)).toEqual(['apply.steps']);
     expect(report.trace[0].detail).toEqual({ steps: 2 });
@@ -53,7 +48,7 @@ describe('applyPlan', () => {
 
   it('план с конфликтом не применяется вовсе', () => {
     const { tree, declaration } = createWorkspace({
-      frame,
+      layout: LAYOUT,
       sources: SOURCES,
       existing: { [WORKFLOW]: 'name: написано руками\n' },
     });
@@ -68,7 +63,7 @@ describe('applyPlan', () => {
 
 describe('атомарность (§2 контракта)', () => {
   it('сбой в середине применения не оставляет полуобновлённого дерева', () => {
-    const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
+    const { tree, declaration } = createWorkspace({ layout: LAYOUT, sources: SOURCES });
     const plan = computePlan({ tree, declaration });
     const before = snapshotTree(tree);
 
@@ -84,7 +79,7 @@ describe('атомарность (§2 контракта)', () => {
 
   it('откат возвращает прежнее содержимое, а не удаляет файл', () => {
     const { tree, declaration } = createWorkspace({
-      frame,
+      layout: LAYOUT,
       sources: SOURCES,
       existing: { [WORKFLOW]: 'name: написано руками\n' },
     });
@@ -100,21 +95,14 @@ describe('атомарность (§2 контракта)', () => {
   });
 
   it('сбой на снятии сироты откатывает уже применённые шаги', () => {
-    const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration }),
-    );
+    const { tree, declaration } = createWorkspace({ layout: LAYOUT, sources: SOURCES });
+    applyPlan(tree, computePlan({ tree, declaration }));
 
-    const manifest = JSON.parse(tree.read('package.json', 'utf-8') as string);
-    manifest.omnifield.frame = [{ src: 'ci/build.yml', dest: WORKFLOW }];
-    tree.write('package.json', `${JSON.stringify(manifest, null, 2)}\n`);
     tree.write(WORKFLOW, 'name: правка\n');
 
-    const declarationAfter = {
-      ...declaration,
-      frame: manifest.omnifield.frame,
-    };
+    const declarationAfter = redeclare(declaration, [
+      { src: 'ci/build.yml', dest: WORKFLOW },
+    ]);
     const plan = computePlan({
       tree,
       declaration: declarationAfter,

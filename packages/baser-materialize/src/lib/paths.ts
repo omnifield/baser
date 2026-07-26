@@ -8,22 +8,46 @@
 
 import { DeclarationError } from './errors.js';
 
+/** Разбор пути: либо каноничная форма, либо названная причина отказа. */
+export type RepoPath =
+  | { readonly ok: true; readonly path: string }
+  | { readonly ok: false; readonly problem: RepoPathProblem };
+
+export type RepoPathProblem =
+  /** Пустая строка или один мусор из разделителей. */
+  | 'empty'
+  /** Абсолютный путь — выход из дерева потребителя. */
+  | 'absolute'
+  /** Сегмент `..` — выход за корень. */
+  | 'escapes-root';
+
 /**
  * Приводит путь к каноничной форме репо-относительного пути (`a/b/c`).
  *
- * @param value путь из декларации
- * @param field адрес поля для сообщения об ошибке (напр. `omnifield.frame[0].dest`)
+ * Проверка живёт В ДВИЖКЕ, хотя форму подаёт дверь, и это не дубль её
+ * валидации: движок пишет в дерево сам, поэтому границу дерева обязан держать
+ * сам. Инвариант, который держит только соседняя зона, — не инвариант.
+ *
+ * Нормализация (`./a.yml` → `a.yml`) тут же по той же причине: движок сверяет
+ * объявленный `dest` с путями из скана владения, а скан отдаёт каноничные
+ * пути. Разъехавшись в написании, артефакт стал бы сиротой сразу после
+ * создания — и следующий прогон снёс бы собственный свежий файл.
  */
-export function normalizeRepoPath(value: string, field: string): string {
+export function toRepoPath(value: string): RepoPath {
+  // Значение приходит из JSON через дверь, поэтому строкой оно быть НЕ обязано:
+  // не-строка — такой же непригодный путь, как пустая строка, и отвечать на неё
+  // надо отказом по записи, а не падением на `.trim()`.
+  if (typeof value !== 'string') {
+    return { ok: false, problem: 'empty' };
+  }
+
   const raw = value.trim().replace(/\\/g, '/');
 
   if (raw === '') {
-    throw new DeclarationError(`${field}: путь пуст`);
+    return { ok: false, problem: 'empty' };
   }
   if (raw.startsWith('/') || /^[a-zA-Z]:\//.test(raw)) {
-    throw new DeclarationError(
-      `${field}: ожидается путь относительно корня репозитория, получен абсолютный "${value}"`,
-    );
+    return { ok: false, problem: 'absolute' };
   }
 
   const segments: string[] = [];
@@ -32,20 +56,37 @@ export function normalizeRepoPath(value: string, field: string): string {
       continue;
     }
     if (segment === '..') {
-      throw new DeclarationError(
-        `${field}: путь "${value}" выходит за корень репозитория (сегмент "..")`,
-      );
+      return { ok: false, problem: 'escapes-root' };
     }
     segments.push(segment);
   }
 
-  if (segments.length === 0) {
+  return segments.length === 0
+    ? { ok: false, problem: 'empty' }
+    : { ok: true, path: segments.join('/') };
+}
+
+/** Человекочитаемая причина отказа по пути. */
+export const REPO_PATH_PROBLEM: Record<RepoPathProblem, string> = {
+  empty: 'путь пуст',
+  absolute:
+    'ожидается путь относительно корня репозитория, получен абсолютный',
+  'escapes-root': 'путь выходит за корень репозитория (сегмент "..")',
+};
+
+/**
+ * То же, но броском — для путей, которые подаёт САМ вызывающий код
+ * (`PlanOptions.confirm`), а не декларация: кривой путь там означает ошибку
+ * вызова, и отвечать на неё планом не за что.
+ */
+export function normalizeRepoPath(value: string, field: string): string {
+  const result = toRepoPath(value);
+  if (!result.ok) {
     throw new DeclarationError(
-      `${field}: путь "${value}" не указывает на файл`,
+      `${field}: ${REPO_PATH_PROBLEM[result.problem]} ("${value}")`,
     );
   }
-
-  return segments.join('/');
+  return result.path;
 }
 
 /**

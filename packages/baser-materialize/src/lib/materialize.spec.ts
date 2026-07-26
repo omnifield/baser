@@ -4,12 +4,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { FrameEntry } from './declaration.js';
+import type { LayoutEntry } from './declaration.js';
 import { computePlan, describePlan } from './plan.js';
 import { applyPlan } from './apply.js';
 import { createWorkspace } from './workspace.fixture.js';
 
-const frame: readonly FrameEntry[] = [
+const LAYOUT: readonly LayoutEntry[] = [
   { src: 'ci/build.yml', dest: '.github/workflows/build.yml' },
   { src: 'ts/tsconfig.json', dest: 'tsconfig.json' },
   { src: 'repo/gitignore', dest: '.gitignore' },
@@ -26,13 +26,13 @@ const SOURCES = {
 
 describe('материализация из декларации', () => {
   it('раскладывает объявленные артефакты (снапшоты выходных файлов)', () => {
-    const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
+    const { tree, declaration } = createWorkspace({ layout: LAYOUT, sources: SOURCES });
 
     const plan = computePlan({ tree, declaration });
     applyPlan(tree, plan);
 
     expect(describePlan(plan)).toMatchSnapshot('план');
-    for (const entry of frame) {
+    for (const entry of LAYOUT) {
       expect(tree.read(entry.dest, 'utf-8')).toMatchSnapshot(entry.dest);
     }
   });
@@ -41,25 +41,25 @@ describe('материализация из декларации', () => {
     // Пользовательских артефактов у движка больше нет: объявил — значит наш,
     // значит перегенерируется целиком (`kb:BASER2-2`). Файл без маркера был бы
     // артефактом, владение которым движок доказать не может.
-    const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
+    const { tree, declaration } = createWorkspace({ layout: LAYOUT, sources: SOURCES });
     applyPlan(tree, computePlan({ tree, declaration }));
 
-    for (const entry of frame) {
+    for (const entry of LAYOUT) {
       expect(tree.read(entry.dest, 'utf-8')).toContain('baser-materialize');
     }
   });
 
   it('повторный прогон ничего не делает и ничего не портит', () => {
-    const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
+    const { tree, declaration } = createWorkspace({ layout: LAYOUT, sources: SOURCES });
     applyPlan(tree, computePlan({ tree, declaration }));
-    const materialized = frame.map((entry) => tree.read(entry.dest, 'utf-8'));
+    const materialized = LAYOUT.map((entry) => tree.read(entry.dest, 'utf-8'));
 
     const second = computePlan({ tree, declaration });
     applyPlan(tree, second);
 
     expect(second.status).toBe('converged');
     expect(second.steps).toEqual([]);
-    expect(frame.map((entry) => tree.read(entry.dest, 'utf-8'))).toEqual(
+    expect(LAYOUT.map((entry) => tree.read(entry.dest, 'utf-8'))).toEqual(
       materialized,
     );
   });
@@ -67,7 +67,7 @@ describe('материализация из декларации', () => {
   it('сходимость не глушит названные состояния (извещения остаются)', () => {
     // Сошлись — но раннер сузил охват скана. Состояние обязано быть НАЗВАНО,
     // а не растворяться в «плане нет шагов».
-    const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
+    const { tree, declaration } = createWorkspace({ layout: LAYOUT, sources: SOURCES });
     applyPlan(tree, computePlan({ tree, declaration }));
 
     const second = computePlan({

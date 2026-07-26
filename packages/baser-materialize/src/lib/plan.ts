@@ -21,7 +21,7 @@
  *   §1 идемпотентность — сошедшийся артефакт НЕ порождает шага, поэтому второй
  *      прогон даёт план без шагов (операционное определение сходимости из IaC);
  *   §3 отсутствие сирот — артефакт с нашим маркером, потерявший запись в
- *      `frame`, попадает в план на снятие;
+ *      `layout`, попадает в план на снятие;
  *   §4 отказ вместо тихой перезаписи — конфликт владения попадает в
  *      `conflicts`, а не в `steps`, и делает план неприменимым;
  *   §5 показать расхождение — каждый шаг несёт `previous`, чтобы раннер мог
@@ -29,9 +29,10 @@
  */
 
 import type { Tree } from '@nx/devkit';
-import type { Declaration, FrameEntry } from './declaration.js';
+import type { Declaration, LayoutEntry } from './declaration.js';
 import type { CanonSource } from './source.js';
 import { createTreeSource } from './source.js';
+import { DeclarationError } from './errors.js';
 import type { OwnershipRecord, ScanOptions } from './ownership.js';
 import {
   DEFAULT_SCAN_IGNORE,
@@ -41,7 +42,14 @@ import {
 } from './ownership.js';
 import type { TraceRecorder, TraceSpan } from './trace.js';
 import { createTrace } from './trace.js';
-import { byBytes, joinRepoPath, normalizeRepoPath } from './paths.js';
+import {
+  byBytes,
+  joinRepoPath,
+  normalizeRepoPath,
+  REPO_PATH_PROBLEM,
+  toRepoPath,
+} from './paths.js';
+import type { RepoPathProblem } from './paths.js';
 import { OUTPUT_SCHEMA_VERSION } from './schema.js';
 
 export type PlanStepKind = 'create' | 'update' | 'delete';
@@ -58,7 +66,7 @@ export type PlanReason =
    * не тот `src`, что объявлен сейчас, — претензия приводится к декларации.
    */
   | 'reclaimed'
-  /** Артефакт потерял объявление в `frame`. */
+  /** Артефакт потерял объявление в `layout`. */
   | 'orphan';
 
 /** Один шаг плана. `content === null` только у снятия артефакта. */
@@ -74,7 +82,7 @@ export interface PlanStep {
 }
 
 export type ConflictKind =
-  /** Две записи `frame` претендуют на один `dest`. */
+  /** Две записи `layout` претендуют на один `dest`. */
   | 'duplicate-dest'
   /** `dest` существует и не помечен как материализованный движком. */
   | 'foreign-dest'
@@ -90,6 +98,11 @@ export type ConflictKind =
   | 'unmarkable-dest'
   /** Источник `src` не найден под `contentRoot`. */
   | 'missing-source'
+  /**
+   * Путь записи раскладки непригоден: пуст, абсолютен или выходит за корень
+   * дерева. Границу дерева движок держит сам — он тот, кто пишет.
+   */
+  | 'invalid-path'
   /**
    * Обработка ЭТОЙ записи сорвалась исключением (битый порт источника, сбойное
    * дерево). Отказ привязан к своему `dest`: сбой на одной записи не имеет
@@ -114,7 +127,7 @@ export interface ConflictDetail {
    * показавшая одно имя, и вызов, требующий другого, — расхождение, которое
    * всплывёт у потребителя.
    */
-  readonly resolution?: 'confirm' | 'drop-frame-entry';
+  readonly resolution?: 'confirm' | 'drop-layout-entry';
   /** `unreachable-dest`: путь, который занят файлом и перекрывает `dest`. */
   readonly blockedBy?: string;
   /** `unreachable-dest`: чем именно занят перекрывающий путь. */
@@ -125,6 +138,12 @@ export interface ConflictDetail {
   readonly unmarkable?: 'no-format-for-class' | 'content-shape';
   /** `entry-failed`: сообщение исключения, сорвавшего обработку записи. */
   readonly failure?: string;
+  /** `invalid-path`: какое поле записи непригодно. */
+  readonly field?: 'src' | 'dest';
+  /** `invalid-path`: сам путь, как он пришёл. */
+  readonly path?: string;
+  /** `invalid-path`: чем именно путь непригоден. */
+  readonly pathProblem?: RepoPathProblem;
 }
 
 export interface PlanConflict {
@@ -232,12 +251,60 @@ export function isApplicable(plan: MaterializationPlan): boolean {
   return plan.status !== 'blocked';
 }
 
+/**
+ * Годен ли вход движку — и ТОЛЬКО это.
+ *
+ * Форму декларации разбирает дверь (валидаторы объявления, настроек, пресетов,
+ * столкновений — зона контрактов). Здесь проверяется не форма, а **пригодность
+ * входа для работы движка**: без раскладки и без корня содержимого он не может
+ * ни прочитать шаблон, ни защитить собственный источник.
+ *
+ * Отвечать на это планом не за что: план строится ПО декларации, а её нет.
+ * Поэтому исключение — но названное, а не `TypeError` из недр (`BASER2-16`, Д14:
+ * отказ обязан быть внятным, где бы он ни возник).
+ */
+function requireUsableDeclaration(declaration: Declaration): void {
+  const shape = (problem: string): never => {
+    throw new DeclarationError(
+      `движку подана структура не той формы: ${problem}. ` +
+        'Собрать вход из объявления обвеса и конфига потребителя — забота двери',
+    );
+  };
+
+  if (typeof declaration !== 'object' || declaration === null) {
+    shape('ожидался объект { source, layout }');
+  }
+  if (!Array.isArray(declaration.layout)) {
+    shape('layout — ожидался массив записей { src, dest }');
+  }
+  if (
+    typeof declaration.source !== 'object' ||
+    declaration.source === null ||
+    typeof declaration.source.contentRoot !== 'string'
+  ) {
+    shape('source.contentRoot — ожидалась строка с корнем содержимого');
+  }
+
+  // Вырожденный корень («.», «/», пустая строка) означает, что источником
+  // объявлено ВСЁ дерево. Тогда защита «движок не пишет в собственный источник»
+  // отваливается — `isInside` от такого корня ложна, — и прогон затирает
+  // шаблон, из которого сам же читает. Отказ вместо тихой порчи источника.
+  if (!toRepoPath(declaration.source.contentRoot).ok) {
+    throw new DeclarationError(
+      `корень содержимого "${declaration.source.contentRoot}" непригоден: ` +
+        'источником объявлено бы всё дерево, и движок писал бы поверх ' +
+        'собственных шаблонов. Нужен путь к каталогу шаблонов внутри пакета',
+    );
+  }
+}
+
 /** Вычисляет план материализации. Дерево при этом НЕ меняется. */
 export function computePlan(options: PlanOptions): MaterializationPlan {
   const { tree, declaration } = options;
+  requireUsableDeclaration(declaration);
   const trace = options.trace ?? createTrace();
   const source =
-    options.source ?? createTreeSource(tree, declaration.contentRoot);
+    options.source ?? createTreeSource(tree, declaration.source.contentRoot);
 
   const confirm = new Set(
     (options.confirm ?? []).map((dest, index) =>
@@ -249,11 +316,20 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
   const steps: PlanStep[] = [];
   const conflicts: PlanConflict[] = [];
   let notices: PlanNotice[] = [];
-  const claimed = new Map<string, FrameEntry>();
+  const claimed = new Map<string, LayoutEntry>();
   /** Каталог пути → `dest`, ради которого он обязан быть каталогом. */
   const claimedDirs = new Map<string, string>();
 
-  // Скан владения идёт ДО обхода `frame`: сироты нужны уже на проверке
+  // Объявленные цели — в каноничной форме и без непригодных: дальше по ним
+  // и сверяется скан, и считаются сироты, поэтому написание должно быть одно.
+  const declaredDests = new Set(
+    declaration.layout
+      .map((entry) => toRepoPath(entry?.dest as string))
+      .filter((path): path is { ok: true; path: string } => path.ok)
+      .map((path) => path.path),
+  );
+
+  // Скан владения идёт ДО обхода `layout`: сироты нужны уже на проверке
   // достижимости — путь, занятый файлом, который этот же план снимает, не
   // является препятствием.
   const scan = trace.span('plan.scan-ownership', () =>
@@ -261,15 +337,12 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
       ...options.scan,
       // Объявленные `dest` всегда в зоне видимости скана, каким бы ни был
       // список пропуска: собственный артефакт не имеет права стать невидимым.
-      declared: [
-        ...(options.scan?.declared ?? []),
-        ...declaration.frame.map((entry) => entry.dest),
-      ],
+      declared: [...(options.scan?.declared ?? []), ...declaredDests],
       // Источник шаблонов скан не просматривает: движок туда не пишет
       // (`dest-in-content-root`), значит и снимать оттуда не вправе.
       exclude: [
         ...(options.scan?.exclude ?? []),
-        declaration.contentRoot,
+        declaration.source.contentRoot,
       ],
     }),
   );
@@ -287,16 +360,25 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
     conflicts.push(entryFailed(failure.path, undefined, failure.cause));
   }
 
-  const declaredDests = new Set(declaration.frame.map((entry) => entry.dest));
   /** Наши артефакты, которые этот прогон снимает: они освобождают свой путь. */
   const removed = new Set(
     [...owned.keys()].filter((dest) => !declaredDests.has(dest)),
   );
 
   trace.span(
-    'plan.frame',
+    'plan.layout',
     () => {
-      for (const entry of declaration.frame) {
+      for (const declared of declaration.layout) {
+        // Пути приводятся к каноничной форме ЗДЕСЬ, а не там, где их читали:
+        // читать движку больше нечего, а сверять объявленный `dest` с путями
+        // из скана он обязан в одном написании — иначе свежесозданный артефакт
+        // окажется сиротой сам себе.
+        const entry = repoPathsOf(declared);
+        if (entry === null) {
+          conflicts.push(invalidPath(declared));
+          continue;
+        }
+
         const previousClaim = claimed.get(entry.dest);
         if (previousClaim !== undefined) {
           // Спорный артефакт не получает ни шага, ни извещения: у файла под
@@ -314,7 +396,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
             message:
               `конфликт владения: "${entry.dest}" объявлен дважды ` +
               `(src "${previousClaim.src}" и src "${entry.src}") — ` +
-              'у артефакта может быть только одна запись frame',
+              'у артефакта может быть только одна запись layout',
           });
           continue;
         }
@@ -327,7 +409,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
         try {
           const unreachable = reachabilityConflict(entry, {
             tree,
-            contentRoot: declaration.contentRoot,
+            contentRoot: declaration.source.contentRoot,
             claimed,
             claimedDirs,
             removed,
@@ -372,7 +454,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
         }
       }
     },
-    { entries: declaration.frame.length },
+    { entries: declaration.layout.length },
   );
 
   for (const dest of confirm) {
@@ -386,7 +468,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
       detail: { confirmation: declared ? 'not-required' : 'not-declared' },
       message: declared
         ? `подтверждение по "${dest}" не понадобилось: отказа по этому артефакту нет`
-        : `подтверждение по "${dest}" ни к чему не относится: такой записи нет в frame`,
+        : `подтверждение по "${dest}" ни к чему не относится: такой записи нет в layout`,
     });
   }
 
@@ -424,6 +506,46 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
     conflicts,
     notices,
     trace: trace.snapshot(),
+  };
+}
+
+/**
+ * Каноничная запись раскладки; `null` — путь непригоден.
+ *
+ * Возвращается новая запись, а не мутируется входная: структура приходит
+ * снаружи, и движок её не переписывает.
+ */
+function repoPathsOf(entry: LayoutEntry): LayoutEntry | null {
+  const src = toRepoPath(entry?.src as string);
+  const dest = toRepoPath(entry?.dest as string);
+  return src.ok && dest.ok ? { src: src.path, dest: dest.path } : null;
+}
+
+/**
+ * Отказ по записи, чей путь непригоден: пуст, абсолютен или выходит за корень.
+ *
+ * Границу дерева движок держит САМ, даже получая структуру от двери: он и есть
+ * тот, кто пишет. Отказ — план, а не исключение: одна кривая запись не имеет
+ * права уносить прогон, остальные планируются как обычно.
+ */
+function invalidPath(entry: LayoutEntry): PlanConflict {
+  const src = toRepoPath(entry?.src as string);
+  const dest = toRepoPath(entry?.dest as string);
+  const field = dest.ok ? 'src' : 'dest';
+  const problem = (dest.ok ? src : dest) as {
+    ok: false;
+    problem: RepoPathProblem;
+  };
+  const value = String(field === 'dest' ? entry?.dest : entry?.src);
+
+  return {
+    kind: 'invalid-path',
+    dest: String(entry?.dest),
+    src: String(entry?.src),
+    detail: { field, path: value, pathProblem: problem.problem },
+    message:
+      `запись раскладки непригодна: ${field} "${value}" — ` +
+      `${REPO_PATH_PROBLEM[problem.problem]}`,
   };
 }
 
@@ -501,7 +623,7 @@ function scanNarrowing(scan: ScanOptions | undefined): PlanNotice | null {
 interface ReachabilityContext {
   readonly tree: Tree;
   readonly contentRoot: string;
-  readonly claimed: ReadonlyMap<string, FrameEntry>;
+  readonly claimed: ReadonlyMap<string, LayoutEntry>;
   readonly claimedDirs: ReadonlyMap<string, string>;
   /** Наши артефакты, которые этот же план снимает. */
   readonly removed: ReadonlySet<string>;
@@ -529,7 +651,7 @@ interface ReachabilityContext {
  * по-прежнему объявленный), продолжает мешать законно.
  */
 function reachabilityConflict(
-  entry: FrameEntry,
+  entry: LayoutEntry,
   context: ReachabilityContext,
 ): PlanConflict | null {
   const { tree, contentRoot, claimed, claimedDirs, removed } = context;
@@ -607,13 +729,13 @@ const COLLISION_CAUSE: Record<
   'declared-dest' | 'existing-file' | 'existing-directory',
   string
 > = {
-  'declared-dest': 'путь занят файлом, объявленным другой записью frame',
+  'declared-dest': 'путь занят файлом, объявленным другой записью layout',
   'existing-file': 'путь занят файлом, который уже лежит в дереве',
   'existing-directory': 'путь занят каталогом, который уже лежит в дереве',
 };
 
 function unreachable(
-  entry: FrameEntry,
+  entry: LayoutEntry,
   blockedBy: string,
   collision: 'declared-dest' | 'existing-file' | 'existing-directory',
 ): PlanConflict {
@@ -654,7 +776,7 @@ interface EntryContext {
   readonly confirmed: boolean;
 }
 
-/** Исход одной записи `frame`: не более одного шага, отказа и извещения. */
+/** Исход одной записи `layout`: не более одного шага, отказа и извещения. */
 interface EntryOutcome {
   readonly step?: PlanStep;
   readonly conflict?: PlanConflict;
@@ -664,14 +786,14 @@ interface EntryOutcome {
 }
 
 /**
- * Целевое состояние одной записи `frame`.
+ * Целевое состояние одной записи `layout`.
  *
  * Здесь нет развилки по режиму и нет вопроса «каким должно быть содержимое»:
  * содержимое артефакта — это содержимое шаблона целиком (`kb:BASER2-2`).
  * Единственное, что движок решает, — можно ли трогать существующий файл и
  * требуется ли шаг.
  */
-function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
+function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
   const { tree, source, confirmed } = context;
 
   const sourceContent = source.read(entry.src);
@@ -721,7 +843,7 @@ function planEntry(entry: FrameEntry, context: EntryContext): EntryOutcome {
           message:
             `конфликт владения: "${entry.dest}" уже существует и не помечен как ` +
             'материализованный движком. Отказ вместо тихой перезаписи: подтверди ' +
-            'этот dest поимённо или сними запись из frame',
+            'этот dest поимённо или сними запись из layout',
         },
       };
     }
@@ -769,7 +891,7 @@ interface TransitionInput {
   readonly raw: string | null;
   readonly content: string;
   readonly record: OwnershipRecord | null;
-  readonly entry: FrameEntry;
+  readonly entry: LayoutEntry;
 }
 
 /**

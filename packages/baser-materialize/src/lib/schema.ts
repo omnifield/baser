@@ -17,7 +17,16 @@
  * извещения `product-owned` · `baseline-missing` и поля `mode` · `ownership`
  * шагов, конфликтов и извещений. Форма несовместима с 1 — потребитель,
  * ветвившийся по снятым кодам, обязан это увидеть, а не молча промахнуться.
+ *
+ * **3** — движок принимает готовый вход и говорит словарём контракта
+ * (`tasker:BASER2-23`). Несовместимо: `frame` → `layout` и `contentRoot` →
+ * `source.contentRoot` во входной структуре, снято чтение декларации
+ * (`readDeclaration` · `parseDeclaration` · `DECLARATION_BLOCK` ·
+ * `DEFAULT_DECLARATION_PATH`), `detail.resolution` переименован
+ * `drop-frame-entry` → `drop-layout-entry`, спан трейса `plan.frame` →
+ * `plan.layout`. Добавлен конфликт `invalid-path` — добавление кода само по
+ * себе версию не поднимает, но здесь она поднята за переименования.
  */
-export const OUTPUT_SCHEMA_VERSION = 2;
+export const OUTPUT_SCHEMA_VERSION = 3;
 
 export type OutputSchemaVersion = typeof OUTPUT_SCHEMA_VERSION;
