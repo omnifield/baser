@@ -2,15 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { FrameEntry } from './declaration.js';
 import { computePlan, describePlan, isApplicable } from './plan.js';
 import { applyPlan } from './apply.js';
-import type { CanonBaseline } from './source.js';
-import { createTreeSource } from './source.js';
 import { DEFAULT_SCAN_IGNORE, readOwnership } from './ownership.js';
-import {
-  ALL_DOUBLES,
-  CARELESS_DOUBLES,
-  productDouble,
-  refusingDouble,
-} from './strategies.fixture.js';
+import * as api from '../index.js';
 import {
   CONTENT_ROOT,
   createWorkspace,
@@ -19,25 +12,12 @@ import {
 
 const WORKFLOW = '.github/workflows/build.yml';
 
-const exactEntry: FrameEntry = {
-  src: 'ci/build.yml',
-  dest: WORKFLOW,
-  mode: 'exact',
-};
-const jsonEntry: FrameEntry = {
-  src: 'ts/tsconfig.json',
-  dest: 'tsconfig.json',
-  mode: 'exact',
-};
-const mergeEntry: FrameEntry = {
-  src: 'repo/gitignore',
-  dest: '.gitignore',
-  mode: 'merge',
-};
-const seedEntry: FrameEntry = {
+const exactEntry: FrameEntry = { src: 'ci/build.yml', dest: WORKFLOW };
+const jsonEntry: FrameEntry = { src: 'ts/tsconfig.json', dest: 'tsconfig.json' };
+const ignoreEntry: FrameEntry = { src: 'repo/gitignore', dest: '.gitignore' };
+const docEntry: FrameEntry = {
   src: 'docs/CONTRIBUTING.md',
   dest: 'CONTRIBUTING.md',
-  mode: 'seed',
 };
 
 const SOURCES = {
@@ -54,7 +34,7 @@ describe('computePlan — чего не хватает', () => {
       sources: SOURCES,
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.status).toBe('pending');
     expect(plan.steps).toHaveLength(1);
@@ -73,7 +53,7 @@ describe('computePlan — чего не хватает', () => {
       sources: SOURCES,
     });
 
-    computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    computePlan({ tree, declaration });
 
     expect(tree.exists(WORKFLOW)).toBe(false);
   });
@@ -84,9 +64,7 @@ describe('computePlan — чего не хватает', () => {
       sources: SOURCES,
     });
 
-    const text = describePlan(
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
+    const text = describePlan(computePlan({ tree, declaration }));
 
     expect(text).toContain('create');
     expect(text).toContain(WORKFLOW);
@@ -94,15 +72,12 @@ describe('computePlan — чего не хватает', () => {
 });
 
 describe('computePlan — что разошлось', () => {
-  it('правка в файле, которым владеет движок, даёт шаг обновления с прежним содержимым', () => {
+  it('правка в нашем артефакте даёт шаг обновления с прежним содержимым', () => {
     const { tree, declaration } = createWorkspace({
       frame: [exactEntry],
       sources: SOURCES,
     });
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
+    applyPlan(tree, computePlan({ tree, declaration }));
 
     const materialized = tree.read(WORKFLOW, 'utf-8') as string;
     tree.write(
@@ -110,25 +85,142 @@ describe('computePlan — что разошлось', () => {
       materialized.replace('jobs: {}', 'jobs: { local: {} }'),
     );
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.steps).toHaveLength(1);
     expect(plan.steps[0]).toMatchObject({ kind: 'update', reason: 'diverged' });
     expect(plan.steps[0].previous).toContain('local');
     expect(plan.steps[0].content).not.toContain('local');
   });
+
+  it('план НАЗЫВАЕТ потери: правка видна в previous до применения', () => {
+    // «Затирание само по себе не дефект. Дефектом было молчание» (`kb:BASER2-2`).
+    const { tree, declaration } = createWorkspace({
+      frame: [exactEntry],
+      sources: SOURCES,
+    });
+    applyPlan(tree, computePlan({ tree, declaration }));
+    tree.write(
+      WORKFLOW,
+      `${tree.read(WORKFLOW, 'utf-8') as string}# моя правка\n`,
+    );
+
+    const plan = computePlan({ tree, declaration });
+
+    expect(plan.steps[0].previous).toContain('# моя правка');
+    expect(plan.steps[0].content).not.toContain('# моя правка');
+  });
+});
+
+/**
+ * ГЛАВНЫЙ ИНВАРИАНТ ЗОНЫ ПОСЛЕ A1 (`tasker:BASER2-3`, `kb:BASER2-2`).
+ *
+ * Движок НИКОГДА не сводит исходную, пользовательскую и новую версию файла —
+ * ни в каком виде, ни под каким флагом. Результат материализации при любом
+ * входе равен шаблону целиком; ничего от прежнего содержимого артефакта в него
+ * не попадает.
+ */
+describe('сведения версий не происходит ни при каком входе', () => {
+  const template = 'node_modules\ndist\n';
+
+  /** Все входы, которые в модели B дали бы сведение версий. */
+  const inputs: ReadonlyArray<readonly [string, string]> = [
+    ['пользователь дописал строку', 'node_modules\ndist\ncoverage\n'],
+    ['пользователь удалил строку', 'node_modules\n'],
+    ['пользователь переписал файл целиком', 'совсем другое содержимое\n'],
+    ['пользователь оставил пустой файл', ''],
+    [
+      'файл помечен движком ДО выпила (маркер с mode/own/version)',
+      '# ~~ Generated by @omnifield/baser-materialize ~~ ручные правки не сохраняются — правь декларацию ~~ ' +
+        '{"src":"repo/gitignore","mode":"merge","own":"shared","version":"1.4.0"}\n' +
+        'node_modules\nмой вклад\n',
+    ],
+  ];
+
+  it.each(inputs)('%s → артефакт равен шаблону целиком', (_case, existing) => {
+    const { tree, declaration } = createWorkspace({
+      frame: [ignoreEntry],
+      sources: SOURCES,
+      existing: { '.gitignore': existing },
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      confirm: ['.gitignore'],
+    });
+    applyPlan(tree, plan);
+
+    const result = tree.read('.gitignore', 'utf-8') as string;
+    const format = api.markerFormatFor('.gitignore');
+    expect(format?.strip(result)).toBe(template);
+    // ни одной строки прежнего содержимого, которой нет в шаблоне
+    for (const line of existing.split('\n')) {
+      if (line !== '' && !template.includes(line) && !line.startsWith('# ~~')) {
+        expect(result).not.toContain(line);
+      }
+    }
+  });
+
+  it('повторный прогон поверх правки снова даёт шаблон, а не накопление', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [ignoreEntry],
+      sources: SOURCES,
+    });
+    applyPlan(tree, computePlan({ tree, declaration }));
+
+    for (const patch of ['coverage\n', 'tmp\n', 'моё\n']) {
+      tree.write(
+        '.gitignore',
+        `${tree.read('.gitignore', 'utf-8') as string}${patch}`,
+      );
+      applyPlan(tree, computePlan({ tree, declaration }));
+      expect(
+        api.markerFormatFor('.gitignore')?.strip(
+          tree.read('.gitignore', 'utf-8') as string,
+        ),
+      ).toBe(template);
+    }
+  });
+
+  it('сводить нечем: у движка нет ни режимов, ни порта базы, ни класса владения', () => {
+    // Инвариант держится ОТСУТСТВИЕМ механизма, а не поведением по умолчанию:
+    // пока в публичной поверхности есть шов режимов или порт базы, «сведения не
+    // происходит» — это договорённость, а не свойство движка.
+    for (const removed of [
+      'MATERIALIZE_MODES',
+      'isMaterializeMode',
+      'EMPTY_BASELINE',
+      'createStrategyRegistry',
+      'toStrategyRegistry',
+      'StrategyRegistryError',
+    ]) {
+      expect(Object.keys(api)).not.toContain(removed);
+    }
+  });
+
+  it('декларация не принимает mode ни в одном виде', () => {
+    for (const mode of ['exact', 'merge', 'seed', 'что угодно']) {
+      expect(() =>
+        api.parseDeclaration(
+          { contentRoot: 'content', frame: [{ src: 'a.yml', dest: 'b.yml', mode }] },
+          'package.json',
+        ),
+      ).toThrow(api.DeclarationError);
+    }
+  });
 });
 
 describe('идемпотентность (§1 контракта)', () => {
   it('прогон на выходе предыдущего прогона даёт ПУСТОЙ план', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [exactEntry, jsonEntry, mergeEntry, seedEntry],
+      frame: [exactEntry, jsonEntry, ignoreEntry, docEntry],
       sources: SOURCES,
     });
 
-    const first = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const first = computePlan({ tree, declaration });
     applyPlan(tree, first);
-    const second = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const second = computePlan({ tree, declaration });
 
     expect(first.status).toBe('pending');
     expect(second.status).toBe('converged');
@@ -138,22 +230,14 @@ describe('идемпотентность (§1 контракта)', () => {
 
   it('третий прогон тоже пуст — сходимость устойчива', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [exactEntry, jsonEntry, mergeEntry, seedEntry],
+      frame: [exactEntry, jsonEntry, ignoreEntry, docEntry],
       sources: SOURCES,
     });
 
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
+    applyPlan(tree, computePlan({ tree, declaration }));
+    applyPlan(tree, computePlan({ tree, declaration }));
 
-    expect(
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }).status,
-    ).toBe('converged');
+    expect(computePlan({ tree, declaration }).status).toBe('converged');
   });
 });
 
@@ -163,17 +247,10 @@ describe('сироты (§3 контракта)', () => {
       frame: [exactEntry],
       sources: SOURCES,
     });
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
+    applyPlan(tree, computePlan({ tree, declaration }));
     expect(tree.exists(WORKFLOW)).toBe(true);
 
-    const plan = computePlan({
-      tree,
-      declaration: redeclare(tree, []),
-      strategies: ALL_DOUBLES,
-    });
+    const plan = computePlan({ tree, declaration: redeclare(tree, []) });
 
     expect(plan.steps).toHaveLength(1);
     expect(plan.steps[0]).toMatchObject({
@@ -186,50 +263,39 @@ describe('сироты (§3 контракта)', () => {
     expect(tree.exists(WORKFLOW)).toBe(false);
   });
 
-  it('у файла совместного владения снимается только претензия, содержимое остаётся продукту', () => {
+  it('осиротевший артефакт снимается целиком — развилки по классу владения нет', () => {
+    // Раньше `shared`/`product` оставляли файл продукту. Пользовательских
+    // файлов у движка больше нет: то, что должно пережить снятие записи, —
+    // форкнутый источник, а форк живёт снаружи движка (`kb:BASER2-2`).
     const { tree, declaration } = createWorkspace({
-      frame: [mergeEntry],
+      frame: [ignoreEntry, docEntry],
       sources: SOURCES,
     });
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
+    applyPlan(tree, computePlan({ tree, declaration }));
 
-    const plan = computePlan({
-      tree,
-      declaration: redeclare(tree, []),
-      strategies: ALL_DOUBLES,
-    });
+    const plan = computePlan({ tree, declaration: redeclare(tree, []) });
 
-    expect(plan.steps[0]).toMatchObject({
-      kind: 'release',
-      dest: '.gitignore',
-    });
+    expect(plan.steps.map((step) => [step.kind, step.dest])).toEqual([
+      ['delete', '.gitignore'],
+      ['delete', 'CONTRIBUTING.md'],
+    ]);
 
     applyPlan(tree, plan);
-    expect(tree.exists('.gitignore')).toBe(true);
-    expect(tree.read('.gitignore', 'utf-8')).toBe('node_modules\ndist\n');
+    expect(tree.exists('.gitignore')).toBe(false);
+    expect(tree.exists('CONTRIBUTING.md')).toBe(false);
   });
 
-  it('файл, которым владеет продукт (seed), сиротой не считается и не удаляется', () => {
+  it('чужой файл сиротой не считается — он не наш', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [seedEntry],
+      frame: [],
       sources: SOURCES,
+      existing: { '.gitignore': 'написано человеком\n' },
     });
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
 
-    const plan = computePlan({
-      tree,
-      declaration: redeclare(tree, []),
-      strategies: ALL_DOUBLES,
-    });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.status).toBe('converged');
-    expect(tree.exists('CONTRIBUTING.md')).toBe(true);
+    expect(tree.read('.gitignore', 'utf-8')).toBe('написано человеком\n');
   });
 
   it('снятие сироты доводит дерево до пустого плана', () => {
@@ -237,20 +303,12 @@ describe('сироты (§3 контракта)', () => {
       frame: [exactEntry],
       sources: SOURCES,
     });
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
+    applyPlan(tree, computePlan({ tree, declaration }));
 
     const empty = redeclare(tree, []);
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration: empty, strategies: ALL_DOUBLES }),
-    );
+    applyPlan(tree, computePlan({ tree, declaration: empty }));
 
-    expect(
-      computePlan({ tree, declaration: empty, strategies: ALL_DOUBLES }).status,
-    ).toBe('converged');
+    expect(computePlan({ tree, declaration: empty }).status).toBe('converged');
   });
 });
 
@@ -262,13 +320,14 @@ describe('конфликт владения (§4 контракта)', () => {
       existing: { [WORKFLOW]: 'name: написано руками\n' },
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.steps).toEqual([]);
     expect(plan.status).toBe('blocked');
     expect(plan.conflicts[0]).toMatchObject({
       kind: 'foreign-dest',
       dest: WORKFLOW,
+      detail: { resolution: 'confirm' },
     });
     expect(plan.conflicts[0].message).toContain('конфликт владения');
     expect(tree.read(WORKFLOW, 'utf-8')).toBe('name: написано руками\n');
@@ -281,29 +340,48 @@ describe('конфликт владения (§4 контракта)', () => {
       existing: { [WORKFLOW]: 'name: написано руками\n' },
     });
 
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: ALL_DOUBLES,
-      confirm: [WORKFLOW],
-    });
+    const plan = computePlan({ tree, declaration, confirm: [WORKFLOW] });
 
     expect(plan.status).toBe('pending');
     expect(plan.steps[0]).toMatchObject({ kind: 'update', reason: 'adopted' });
   });
 
-  it('совместное владение принимает существующий файл продукта без отказа', () => {
+  it('согласие не масштабируется само: соседний отказ остаётся в силе', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [mergeEntry],
+      frame: [exactEntry, ignoreEntry],
       sources: SOURCES,
-      existing: { '.gitignore': 'coverage\n' },
+      existing: {
+        [WORKFLOW]: 'name: написано руками\n',
+        '.gitignore': 'моё\n',
+      },
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration, confirm: [WORKFLOW] });
 
-    expect(plan.status).toBe('pending');
-    expect(plan.steps[0]).toMatchObject({ kind: 'update', dest: '.gitignore' });
-    expect(plan.steps[0].content).toContain('coverage');
+    expect(plan.status).toBe('blocked');
+    expect(plan.conflicts.map((conflict) => conflict.dest)).toEqual([
+      '.gitignore',
+    ]);
+  });
+
+  it('подтверждение, которое не понадобилось, названо извещением', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [exactEntry],
+      sources: SOURCES,
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      confirm: [WORKFLOW, 'нет/такого.yml'],
+    });
+
+    expect(
+      plan.notices.map((notice) => [notice.dest, notice.detail.confirmation]),
+    ).toEqual([
+      [WORKFLOW, 'not-required'],
+      ['нет/такого.yml', 'not-declared'],
+    ]);
   });
 
   it('два объявления одного dest — отказ, а не «последний победил»', () => {
@@ -312,7 +390,7 @@ describe('конфликт владения (§4 контракта)', () => {
       sources: { ...SOURCES, 'ci/other.yml': 'name: other\n' },
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.conflicts.map((conflict) => conflict.kind)).toEqual([
       'duplicate-dest',
@@ -322,140 +400,47 @@ describe('конфликт владения (§4 контракта)', () => {
 
   it('класс файла без маркера не берётся во владение молча', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [{ src: 'LICENSE', dest: 'LICENSE', mode: 'exact' }],
+      frame: [{ src: 'LICENSE', dest: 'LICENSE' }],
       sources: { LICENSE: 'MIT\n' },
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.conflicts[0]).toMatchObject({
       kind: 'unmarkable-dest',
       dest: 'LICENSE',
+      detail: { unmarkable: 'no-format-for-class' },
     });
   });
-});
 
-describe('computePlan — отказы движка', () => {
-  it('режим без стратегии называет, кто его поставляет', () => {
+  it('JSON без объекта в корне — отказ по форме содержимого', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [exactEntry],
-      sources: SOURCES,
+      frame: [{ src: 'list.json', dest: 'list.json' }],
+      sources: { 'list.json': '[1,2]\n' },
     });
 
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: [productDouble],
-    });
+    const plan = computePlan({ tree, declaration });
 
-    expect(plan.conflicts[0]).toMatchObject({ kind: 'unknown-mode' });
-    expect(plan.conflicts[0].message).toContain('@omnifield/baser-modes');
+    expect(plan.conflicts[0]).toMatchObject({
+      kind: 'unmarkable-dest',
+      detail: { unmarkable: 'content-shape' },
+    });
   });
 
-  it('отсутствующий источник называет полный путь', () => {
+  it('отсутствующий шаблон называет полный путь', () => {
     const { tree, declaration } = createWorkspace({ frame: [exactEntry] });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.conflicts[0]).toMatchObject({ kind: 'missing-source' });
     expect(plan.conflicts[0].message).toContain(`${CONTENT_ROOT}/ci/build.yml`);
   });
-
-  it('отказ режима попадает в конфликты, а не в шаги', () => {
-    const { tree, declaration } = createWorkspace({
-      frame: [exactEntry],
-      sources: SOURCES,
-    });
-
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: [refusingDouble],
-    });
-
-    expect(plan.steps).toEqual([]);
-    expect(plan.conflicts[0]).toMatchObject({ kind: 'strategy' });
-  });
 });
 
 /**
- * Инвариант, который держит только стратегия, — не инвариант (`kb:BASER-5`,
- * «Что движок обязан защищать сам»). Стратегии приходят из зоны `baser-modes` и
- * пишутся разными сессиями, поэтому проверяем НЕБРЕЖНОЙ стратегией: она
- * злоупотребляет швом, а движок обязан устоять.
- */
-describe('движок защищает границы сам, а не добросовестностью режима', () => {
-  it('существующий файл класса product не порождает шага, что бы ни вернула стратегия', () => {
-    const { tree, declaration } = createWorkspace({
-      frame: [seedEntry],
-      sources: SOURCES,
-      existing: { 'CONTRIBUTING.md': '# правила продукта\n' },
-    });
-
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: CARELESS_DOUBLES,
-    });
-
-    expect(plan.steps).toEqual([]);
-    expect(plan.conflicts).toEqual([]);
-    expect(plan.status).toBe('converged');
-    expect(plan.notices[0]).toMatchObject({
-      kind: 'product-owned',
-      dest: 'CONTRIBUTING.md',
-      ownership: 'product',
-    });
-    expect(tree.read('CONTRIBUTING.md', 'utf-8')).toBe('# правила продукта\n');
-  });
-
-  it('небрежная стратегия не пробивает инвариант и через подтверждение', () => {
-    const { tree, declaration } = createWorkspace({
-      frame: [seedEntry],
-      sources: SOURCES,
-      existing: { 'CONTRIBUTING.md': '# правила продукта\n' },
-    });
-
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: CARELESS_DOUBLES,
-      confirm: ['CONTRIBUTING.md'],
-    });
-
-    expect(plan.steps).toEqual([]);
-    expect(tree.read('CONTRIBUTING.md', 'utf-8')).toBe('# правила продукта\n');
-  });
-
-  it('отсутствующий файл класса product материализуется однократно', () => {
-    const { tree, declaration } = createWorkspace({
-      frame: [seedEntry],
-      sources: SOURCES,
-    });
-
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: CARELESS_DOUBLES,
-    });
-    applyPlan(tree, plan);
-
-    expect(plan.steps[0]).toMatchObject({
-      kind: 'create',
-      dest: 'CONTRIBUTING.md',
-      reason: 'missing',
-      ownership: 'product',
-    });
-    expect(
-      computePlan({ tree, declaration, strategies: CARELESS_DOUBLES }).steps,
-    ).toEqual([]);
-  });
-});
-
-/**
- * «Нечего делать» и «сошлось» — разные состояния (`kb:BASER-5`). Гейт из зоны
- * `tasker:BASER-22` вяжет exit-код к сходимости, и зелёный гейт на нерешённом
- * конфликте владения опаснее отсутствующего.
+ * «Нечего делать» и «сошлось» — разные состояния. Гейт вяжет exit-код к
+ * сходимости, и зелёный гейт на нерешённом конфликте владения опаснее
+ * отсутствующего.
  */
 describe('сходимость отделена от пустоты', () => {
   it('план без шагов, но с конфликтом, сходимости НЕ означает', () => {
@@ -465,7 +450,7 @@ describe('сходимость отделена от пустоты', () => {
       existing: { [WORKFLOW]: 'name: написано руками\n' },
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.steps).toEqual([]);
     expect(plan.conflicts).toHaveLength(1);
@@ -480,7 +465,7 @@ describe('сходимость отделена от пустоты', () => {
       existing: { [WORKFLOW]: 'name: написано руками\n' },
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(Object.keys(plan)).not.toContain('empty');
     expect(Object.keys(plan)).not.toContain('applicable');
@@ -491,12 +476,9 @@ describe('сходимость отделена от пустоты', () => {
       frame: [exactEntry],
       sources: SOURCES,
     });
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
+    applyPlan(tree, computePlan({ tree, declaration }));
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.status).toBe('converged');
     expect(isApplicable(plan)).toBe(true);
@@ -504,186 +486,71 @@ describe('сходимость отделена от пустоты', () => {
 });
 
 /**
- * «Файл разошёлся с каноном» и «файл впервые взят под управление» — разные
- * события, и гейт обязан показывать их по-разному (`kb:BASER-5`).
+ * «Файл разошёлся с шаблоном» и «файл впервые взят под управление» — разные
+ * события, и гейт обязан показывать их по-разному.
  */
-describe('первичное взятие во владение — событие adopted', () => {
-  it('совместное владение берёт непомеченный файл с причиной adopted', () => {
-    const { tree, declaration } = createWorkspace({
-      frame: [mergeEntry],
-      sources: SOURCES,
-      existing: { '.gitignore': 'coverage\n' },
-    });
-
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
-
-    expect(plan.steps[0]).toMatchObject({
-      kind: 'update',
-      dest: '.gitignore',
-      reason: 'adopted',
-      ownership: 'shared',
-    });
-  });
-
-  it('расхождение уже помеченного файла остаётся diverged', () => {
-    const { tree, declaration } = createWorkspace({
-      frame: [mergeEntry],
-      sources: SOURCES,
-      existing: { '.gitignore': 'coverage\n' },
-    });
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
-    tree.write(
-      '.gitignore',
-      (tree.read('.gitignore', 'utf-8') as string).replace('dist', 'build'),
-    );
-
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
-
-    expect(plan.steps[0]).toMatchObject({ reason: 'diverged' });
-  });
-
-  it('единоличное владение берёт чужой файл только под подтверждением — тоже adopted', () => {
+describe('причина шага обязана быть правдой', () => {
+  it('чужой файл под подтверждением берётся с причиной adopted', () => {
     const { tree, declaration } = createWorkspace({
       frame: [exactEntry],
       sources: SOURCES,
       existing: { [WORKFLOW]: 'name: написано руками\n' },
     });
 
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: ALL_DOUBLES,
-      confirm: [WORKFLOW],
-    });
+    const plan = computePlan({ tree, declaration, confirm: [WORKFLOW] });
 
     expect(plan.steps[0]).toMatchObject({ reason: 'adopted' });
   });
-});
 
-/**
- * База 3-way не хранится копией: маркер несёт версию канона, а содержимое той
- * версии подаёт раннер через порт `CanonBaseline` (`kb:BASER-5`).
- */
-describe('база трёхстороннего мерджа', () => {
-  it('маркер несёт версию канона, из которой материализован артефакт', () => {
+  it('расхождение уже помеченного файла остаётся diverged', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [exactEntry],
+      frame: [ignoreEntry],
       sources: SOURCES,
     });
-
-    applyPlan(
-      tree,
-      computePlan({
-        tree,
-        declaration,
-        strategies: ALL_DOUBLES,
-        source: createTreeSource(tree, declaration.contentRoot, '1.4.0'),
-      }),
+    applyPlan(tree, computePlan({ tree, declaration }));
+    tree.write(
+      '.gitignore',
+      (tree.read('.gitignore', 'utf-8') as string).replace('dist', 'build'),
     );
 
-    expect(readOwnership(tree, WORKFLOW)).toEqual({
-      src: 'ci/build.yml',
-      mode: 'exact',
-      own: 'engine',
-      version: '1.4.0',
-    });
+    const plan = computePlan({ tree, declaration });
+
+    expect(plan.steps[0]).toMatchObject({ reason: 'diverged' });
   });
 
-  it('база запрашивается по версии из маркера, а не по «текущей»', () => {
+  it('смена объявленного src приводит служебную запись — причина reclaimed', () => {
+    // Запись обязана утверждать ровно то, что объявляет декларация СЕЙЧАС, —
+    // даже когда содержимое совпало и шага по телу не требуется.
     const { tree, declaration } = createWorkspace({
-      frame: [mergeEntry],
-      sources: SOURCES,
+      frame: [ignoreEntry],
+      sources: { ...SOURCES, 'repo/gitignore-2': SOURCES['repo/gitignore'] },
     });
-    applyPlan(
-      tree,
-      computePlan({
-        tree,
-        declaration,
-        strategies: ALL_DOUBLES,
-        source: createTreeSource(tree, declaration.contentRoot, '1.0.0'),
-      }),
-    );
-
-    const asked: Array<readonly [string, string]> = [];
-    const baseline: CanonBaseline = {
-      read: (src, version) => {
-        asked.push([src, version]);
-        return 'node_modules\n';
-      },
-    };
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: ALL_DOUBLES,
-      source: createTreeSource(tree, declaration.contentRoot, '2.0.0'),
-      baseline,
+    applyPlan(tree, computePlan({ tree, declaration }));
+    expect(readOwnership(tree, '.gitignore')).toEqual({
+      src: 'repo/gitignore',
     });
 
-    expect(asked).toEqual([['repo/gitignore', '1.0.0']]);
-    expect(plan.notices).toEqual([]);
-  });
+    const next = redeclare(tree, [
+      { src: 'repo/gitignore-2', dest: '.gitignore' },
+    ]);
+    const plan = computePlan({ tree, declaration: next });
 
-  it('отсутствие базы НАЗВАНО, а не выродилось в 2-way молча', () => {
-    const { tree, declaration } = createWorkspace({
-      frame: [mergeEntry],
-      sources: SOURCES,
-    });
-    const source = createTreeSource(tree, declaration.contentRoot, '1.0.0');
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES, source }),
-    );
-
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: ALL_DOUBLES,
-      source,
+    expect(plan.steps[0]).toMatchObject({
+      kind: 'update',
+      reason: 'reclaimed',
     });
 
-    expect(plan.status).toBe('converged');
-    expect(plan.notices[0]).toMatchObject({
-      kind: 'baseline-missing',
-      dest: '.gitignore',
-      detail: { version: '1.0.0', cause: 'unresolved' },
+    applyPlan(tree, plan);
+    expect(readOwnership(tree, '.gitignore')).toEqual({
+      src: 'repo/gitignore-2',
     });
-  });
-
-  it('артефакт без версии в маркере называет причину отдельно', () => {
-    const { tree, declaration } = createWorkspace({
-      frame: [mergeEntry],
-      sources: SOURCES,
-      existing: { '.gitignore': 'coverage\n' },
-    });
-
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
-
-    expect(plan.notices[0]).toMatchObject({
-      kind: 'baseline-missing',
-      detail: { version: null, cause: 'no-version' },
-    });
-  });
-
-  it('у отсутствующего артефакта третьей стороны нет — извещения не будет', () => {
-    const { tree, declaration } = createWorkspace({
-      frame: [mergeEntry],
-      sources: SOURCES,
-    });
-
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
-
-    expect(plan.steps[0]).toMatchObject({ kind: 'create' });
-    expect(plan.notices).toEqual([]);
+    expect(computePlan({ tree, declaration: next }).status).toBe('converged');
   });
 });
 
 /**
- * Приёмочный критерий контракта: любую операцию можно вызвать программно и
- * получить полный результат ДАННЫМИ, ни разу не разобрав текст
- * (`kb:BASER-5`, «Вывод машинночитаем в первую очередь»).
+ * Приёмочный критерий: любую операцию можно вызвать программно и получить
+ * полный результат ДАННЫМИ, ни разу не разобрав текст.
  */
 describe('вывод машинночитаем в первую очередь', () => {
   it('каждая причина отказа доступна кодом и данными, а не только текстом', () => {
@@ -691,18 +558,14 @@ describe('вывод машинночитаем в первую очередь',
       frame: [
         exactEntry,
         { ...exactEntry, src: 'ci/other.yml' },
-        { src: 'ci/missing.yml', dest: 'ci/missing.yml', mode: 'exact' },
-        { src: 'ci/build.yml', dest: 'LICENSE', mode: 'exact' },
-        { src: 'repo/gitignore', dest: '.gitignore', mode: 'merge' },
+        { src: 'ci/missing.yml', dest: 'ci/missing.yml' },
+        { src: 'ci/build.yml', dest: 'LICENSE' },
+        { src: 'ci/build.yml', dest: `${CONTENT_ROOT}/ci/build.yml` },
       ],
       sources: { ...SOURCES, 'ci/other.yml': 'name: other\n' },
     });
 
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: [ALL_DOUBLES[0]],
-    });
+    const plan = computePlan({ tree, declaration });
     const byKind = new Map(
       plan.conflicts.map((conflict) => [conflict.kind, conflict]),
     );
@@ -716,36 +579,18 @@ describe('вывод машинночитаем в первую очередь',
     expect(byKind.get('unmarkable-dest')?.detail).toEqual({
       unmarkable: 'no-format-for-class',
     });
-    expect(byKind.get('unknown-mode')?.detail).toEqual({
-      availableModes: ['exact'],
+    expect(byKind.get('dest-in-content-root')?.detail).toEqual({
+      contentRoot: CONTENT_ROOT,
     });
-  });
-
-  it('отказ режима несёт причину полем, а не только внутри сообщения', () => {
-    const { tree, declaration } = createWorkspace({
-      frame: [exactEntry],
-      sources: SOURCES,
-    });
-
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: [refusingDouble],
-    });
-
-    expect(plan.conflicts[0].detail).toEqual({
-      strategyReason: 'двойник отказывает намеренно',
-    });
-    expect(plan.conflicts[0].ownership).toBe('engine');
   });
 
   it('план и отчёт переживают сериализацию: решение принимается без парсинга текста', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [exactEntry, mergeEntry, seedEntry],
+      frame: [exactEntry, ignoreEntry, docEntry],
       sources: SOURCES,
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
     const report = applyPlan(tree, plan);
     const wire = JSON.parse(JSON.stringify({ plan, report }));
 
@@ -766,13 +611,22 @@ describe('вывод машинночитаем в первую очередь',
     expect(wire.report.trace[0].name).toBe('apply.steps');
   });
 
+  it('версия схемы вывода поднята: форма несовместима с прежней', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [exactEntry],
+      sources: SOURCES,
+    });
+
+    expect(computePlan({ tree, declaration }).schemaVersion).toBe(2);
+  });
+
   it('трейсы — именованные спаны с длительностью и атрибутами', () => {
     const { tree, declaration } = createWorkspace({
       frame: [exactEntry],
       sources: SOURCES,
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     for (const span of plan.trace) {
       expect(typeof span.name).toBe('string');
@@ -787,20 +641,19 @@ describe('вывод машинночитаем в первую очередь',
 /**
  * Атомарность движка кончается на виртуальном дереве: сброс на реальную ФС
  * делает раннер, и его сбой происходит уже ВНЕ журнала отката. Поэтому всё,
- * что упадёт при записи на диск, обязано быть поймано ПЛАНОМ (`kb:BASER-5`,
- * «Объявленное состояние обязано быть физически достижимым»).
+ * что упадёт при записи на диск, обязано быть поймано ПЛАНОМ.
  */
 describe('объявленное состояние обязано быть физически достижимым', () => {
   it('dest внутри пути другого dest — конфликт плана, а не сходимость', () => {
     const { tree, declaration } = createWorkspace({
       frame: [
-        { src: 'ci/build.yml', dest: 'cfg.yml', mode: 'exact' },
-        { src: 'ci/build.yml', dest: 'cfg.yml/inner.yml', mode: 'exact' },
+        { src: 'ci/build.yml', dest: 'cfg.yml' },
+        { src: 'ci/build.yml', dest: 'cfg.yml/inner.yml' },
       ],
       sources: SOURCES,
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.status).toBe('blocked');
     expect(plan.conflicts[0]).toMatchObject({
@@ -814,13 +667,13 @@ describe('объявленное состояние обязано быть фи
   it('порядок объявления не спасает: вложенный объявлен первым — отказ у внешнего', () => {
     const { tree, declaration } = createWorkspace({
       frame: [
-        { src: 'ci/build.yml', dest: 'cfg.yml/inner.yml', mode: 'exact' },
-        { src: 'ci/build.yml', dest: 'cfg.yml', mode: 'exact' },
+        { src: 'ci/build.yml', dest: 'cfg.yml/inner.yml' },
+        { src: 'ci/build.yml', dest: 'cfg.yml' },
       ],
       sources: SOURCES,
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.conflicts[0]).toMatchObject({
       kind: 'unreachable-dest',
@@ -829,16 +682,14 @@ describe('объявленное состояние обязано быть фи
     });
   });
 
-  it('родительский путь занят файлом в дереве — тоже конфликт плана', () => {
+  it('родительский путь занят ЧУЖИМ файлом в дереве — конфликт плана', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [
-        { src: 'ci/build.yml', dest: 'cfg.yml/inner.yml', mode: 'exact' },
-      ],
+      frame: [{ src: 'ci/build.yml', dest: 'cfg.yml/inner.yml' }],
       sources: SOURCES,
       existing: { 'cfg.yml': 'настройка: продукта\n' },
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.status).toBe('blocked');
     expect(plan.conflicts[0]).toMatchObject({
@@ -854,13 +705,13 @@ describe('объявленное состояние обязано быть фи
     // размечаемым, — значит проверка обязана стоять по существу.
     const { tree, declaration } = createWorkspace({
       frame: [
-        { src: 'ci/build.yml', dest: 'cfg', mode: 'exact' },
-        { src: 'ci/build.yml', dest: 'cfg/inner.yml', mode: 'exact' },
+        { src: 'ci/build.yml', dest: 'cfg' },
+        { src: 'ci/build.yml', dest: 'cfg/inner.yml' },
       ],
       sources: SOURCES,
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(
       plan.conflicts.find((conflict) => conflict.dest === 'cfg/inner.yml'),
@@ -870,17 +721,14 @@ describe('объявленное состояние обязано быть фи
     });
   });
 
-  it('dest, чей путь уже занят каталогом, — тот же класс недостижимости', () => {
-    // Контракт перечисляет обратный случай (каталог занят файлом); правило
-    // «объявленное обязано быть достижимо» покрывает и этот, а падение было бы
-    // опять при сбросе на диск — вне журнала отката.
+  it('dest, чей путь занят ЧУЖИМ каталогом, — тот же класс недостижимости', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [{ src: 'ci/build.yml', dest: 'cfg', mode: 'exact' }],
+      frame: [{ src: 'ci/build.yml', dest: 'cfg' }],
       sources: SOURCES,
       existing: { 'cfg/inner.yml': 'настройка: продукта\n' },
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.status).toBe('blocked');
     expect(plan.conflicts[0]).toMatchObject({
@@ -892,23 +740,259 @@ describe('объявленное состояние обязано быть фи
 
   it('dest внутри contentRoot отбивается по существу, а не как чужой файл', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [
-        {
-          src: 'ci/build.yml',
-          dest: `${CONTENT_ROOT}/ci/build.yml`,
-          mode: 'exact',
-        },
-      ],
+      frame: [{ src: 'ci/build.yml', dest: `${CONTENT_ROOT}/ci/build.yml` }],
       sources: SOURCES,
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.conflicts[0]).toMatchObject({
       kind: 'dest-in-content-root',
       detail: { contentRoot: CONTENT_ROOT },
     });
     expect(plan.steps).toEqual([]);
+  });
+});
+
+/**
+ * Д13 (`tasker:BASER2-16`). Асимметрия, найденная прогоном: ПИСАТЬ в собственный
+ * источник движок отказывается (`dest-in-content-root`), а УДАЛЯТЬ оттуда —
+ * штатным шагом, без конфликта, с `pending` в плане. В дефолтной раскладке было
+ * замаскировано пропуском `node_modules`.
+ */
+describe('скан владения не трогает источник шаблонов', () => {
+  it('помеченный файл внутри contentRoot сиротой не считается', () => {
+    const { tree, declaration } = createWorkspace({
+      contentRoot: 'content',
+      frame: [{ src: 'a.yml', dest: 'a.yml' }],
+      sources: { 'a.yml': 'name: a\n' },
+    });
+    applyPlan(tree, computePlan({ tree, declaration }));
+    // в корне содержимого лежит артефакт с нашим маркером: шаблон-пример,
+    // вложенный шаблон, копия артефакта — движку туда ходить нечем
+    tree.write('content/sample.yml', tree.read('a.yml', 'utf-8') as string);
+
+    const plan = computePlan({ tree, declaration });
+
+    expect(plan.steps).toEqual([]);
+    expect(plan.status).toBe('converged');
+    expect(tree.exists('content/sample.yml')).toBe(true);
+  });
+
+  it('источник не сканируется, даже когда раннер объявил его declared', () => {
+    const { tree, declaration } = createWorkspace({
+      contentRoot: 'content',
+      frame: [{ src: 'a.yml', dest: 'a.yml' }],
+      sources: { 'a.yml': 'name: a\n' },
+    });
+    applyPlan(tree, computePlan({ tree, declaration }));
+    tree.write('content/sample.yml', tree.read('a.yml', 'utf-8') as string);
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      scan: { declared: ['content/sample.yml'] },
+    });
+
+    expect(plan.steps).toEqual([]);
+  });
+
+  it('за пределами contentRoot сирота по-прежнему снимается', () => {
+    // Проверка, что послабление узкое: оно про источник, а не про скан вообще.
+    const { tree, declaration } = createWorkspace({
+      contentRoot: 'content',
+      frame: [{ src: 'a.yml', dest: 'a.yml' }],
+      sources: { 'a.yml': 'name: a\n' },
+    });
+    applyPlan(tree, computePlan({ tree, declaration }));
+    tree.write('elsewhere/sample.yml', tree.read('a.yml', 'utf-8') as string);
+
+    const plan = computePlan({ tree, declaration });
+
+    expect(plan.steps.map((step) => [step.kind, step.dest])).toEqual([
+      ['delete', 'elsewhere/sample.yml'],
+    ]);
+  });
+});
+
+/**
+ * Д14 (`tasker:BASER2-16`), новая форма. Старая причина ушла вместе со
+ * стратегией, но требование переживает выпил: **сбой на одной записи или одном
+ * источнике не имеет права уносить план целиком.** Отказ обязан быть привязан к
+ * конкретному `dest`, а не улетать `TypeError`'ом из недр движка — с многими
+ * источниками (A5) битый шаблон одного провайдера не должен гасить
+ * материализацию всех остальных.
+ */
+describe('сбой на одной записи не уносит план целиком', () => {
+  const brokenSource = (broken: string, tree: import('@nx/devkit').Tree) => ({
+    read: (src: string) => {
+      if (src === broken) {
+        throw new TypeError(`шаблон ${src} битый`);
+      }
+      return tree.read(`${CONTENT_ROOT}/${src}`, 'utf-8');
+    },
+    describe: (src: string) => `${CONTENT_ROOT}/${src}`,
+  });
+
+  it('сбой источника становится отказом по своему dest, а не броском наружу', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [exactEntry, ignoreEntry],
+      sources: SOURCES,
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      source: brokenSource('ci/build.yml', tree),
+    });
+
+    expect(plan.status).toBe('blocked');
+    expect(plan.conflicts).toHaveLength(1);
+    expect(plan.conflicts[0]).toMatchObject({
+      kind: 'entry-failed',
+      dest: WORKFLOW,
+      src: 'ci/build.yml',
+    });
+    expect(plan.conflicts[0].detail.failure).toContain('шаблон ci/build.yml битый');
+  });
+
+  it('соседние записи планируются как обычно — падение одной их не гасит', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [exactEntry, ignoreEntry, jsonEntry],
+      sources: SOURCES,
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      source: brokenSource('ci/build.yml', tree),
+    });
+
+    expect(plan.steps.map((step) => step.dest)).toEqual([
+      '.gitignore',
+      'tsconfig.json',
+    ]);
+  });
+
+  it('сбой дерева на артефакте тоже привязан к dest', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [exactEntry, ignoreEntry],
+      sources: SOURCES,
+      existing: { [WORKFLOW]: 'чужой\n' },
+    });
+    const broken = new Proxy(tree, {
+      get(target, property, receiver) {
+        if (property === 'read') {
+          return (path: string, encoding?: string): unknown => {
+            if (path === WORKFLOW) {
+              throw new TypeError('дерево не отдаёт артефакт');
+            }
+            return (target.read as (p: string, e?: string) => unknown)(
+              path,
+              encoding,
+            );
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const plan = computePlan({ tree: broken, declaration });
+
+    expect(plan.conflicts.map((conflict) => [conflict.kind, conflict.dest])).toEqual(
+      [['entry-failed', WORKFLOW]],
+    );
+    expect(plan.steps.map((step) => step.dest)).toEqual(['.gitignore']);
+  });
+
+  it('план с отказом по сбою неприменим целиком', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [exactEntry, ignoreEntry],
+      sources: SOURCES,
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      source: brokenSource('ci/build.yml', tree),
+    });
+
+    expect(isApplicable(plan)).toBe(false);
+    expect(tree.exists('.gitignore')).toBe(false);
+  });
+});
+
+/**
+ * Нит (`tasker:BASER2-16`). Схема вывода — контракт с пультом, и порядок в нём
+ * не имеет права плавать между окружениями по ICU и локали процесса.
+ * `localeCompare` даёт разный порядок при разной локали; сравнение байтовое —
+ * одинаковый везде.
+ */
+describe('порядок машинного вывода детерминирован', () => {
+  const named = ['B.yml', 'a.yml', '_x.yml', 'A.yml', 'Z.yml'];
+
+  it('шаги упорядочены байтово, а не локале-зависимо', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: named.map((dest, index) => ({ src: `s${index}.yml`, dest })),
+      sources: Object.fromEntries(
+        named.map((_dest, index) => [`s${index}.yml`, `v: ${index}\n`]),
+      ),
+    });
+
+    const plan = computePlan({ tree, declaration });
+
+    expect(plan.steps.map((step) => step.dest)).toEqual(
+      [...named].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+    );
+  });
+
+  it('конфликты и извещения упорядочены тем же сравнением', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: named.map((dest, index) => ({ src: `s${index}.yml`, dest })),
+      sources: Object.fromEntries(
+        named.map((_dest, index) => [`s${index}.yml`, `v: ${index}\n`]),
+      ),
+      existing: Object.fromEntries(named.map((dest) => [dest, 'чужой\n'])),
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      confirm: named.map((dest) => `нет-${dest}`),
+    });
+    const byBytes = (values: readonly string[]) =>
+      [...values].sort((left, right) =>
+        left < right ? -1 : left > right ? 1 : 0,
+      );
+
+    expect(plan.conflicts.map((conflict) => conflict.dest)).toEqual(
+      byBytes(named),
+    );
+    expect(plan.notices.map((notice) => notice.dest)).toEqual(
+      byBytes(named.map((dest) => `нет-${dest}`)),
+    );
+  });
+
+  it('порядок не зависит от локали процесса', () => {
+    // Тот же вход, разное сравнение: локале-зависимая сортировка ставит
+    // `_x.yml` и `a.yml` иначе, чем байтовая, — план обязан давать вторую.
+    const locale = [...named].sort((left, right) => left.localeCompare(right));
+    const bytes = [...named].sort((left, right) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    );
+    expect(locale).not.toEqual(bytes);
+
+    const { tree, declaration } = createWorkspace({
+      frame: named.map((dest, index) => ({ src: `s${index}.yml`, dest })),
+      sources: Object.fromEntries(
+        named.map((_dest, index) => [`s${index}.yml`, `v: ${index}\n`]),
+      ),
+    });
+
+    expect(computePlan({ tree, declaration }).steps.map((s) => s.dest)).not.toEqual(
+      locale,
+    );
   });
 });
 
@@ -922,7 +1006,6 @@ describe('охват скана', () => {
     const plan = computePlan({
       tree,
       declaration,
-      strategies: ALL_DOUBLES,
       scan: { roots: ['.github'], ignore: [...DEFAULT_SCAN_IGNORE, 'vendor'] },
     });
 
@@ -939,7 +1022,7 @@ describe('охват скана', () => {
       sources: SOURCES,
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.notices).toEqual([]);
   });
@@ -952,14 +1035,16 @@ describe('трейсы', () => {
       sources: SOURCES,
     });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.trace.map((span) => span.name)).toEqual([
-      'plan.frame',
       'plan.scan-ownership',
       'plan.owned',
+      'plan.frame',
       'plan.orphans',
     ]);
-    expect(plan.trace[0].detail).toEqual({ entries: 1 });
+    expect(
+      plan.trace.find((span) => span.name === 'plan.frame')?.detail,
+    ).toEqual({ entries: 1 });
   });
 });

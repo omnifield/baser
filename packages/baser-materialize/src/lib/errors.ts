@@ -16,6 +16,3 @@ export class BaserMaterializeError extends Error {
 
 /** Декларация продукта не читается или не соответствует форме контракта. */
 export class DeclarationError extends BaserMaterializeError {}
-
-/** Реестр стратегий собран некорректно (дубль режима, пустой реестр и т.п.). */
-export class StrategyRegistryError extends BaserMaterializeError {}

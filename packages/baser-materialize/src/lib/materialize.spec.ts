@@ -7,14 +7,13 @@ import { describe, expect, it } from 'vitest';
 import type { FrameEntry } from './declaration.js';
 import { computePlan, describePlan } from './plan.js';
 import { applyPlan } from './apply.js';
-import { ALL_DOUBLES } from './strategies.fixture.js';
 import { createWorkspace } from './workspace.fixture.js';
 
 const frame: readonly FrameEntry[] = [
-  { src: 'ci/build.yml', dest: '.github/workflows/build.yml', mode: 'exact' },
-  { src: 'ts/tsconfig.json', dest: 'tsconfig.json', mode: 'exact' },
-  { src: 'repo/gitignore', dest: '.gitignore', mode: 'merge' },
-  { src: 'docs/CONTRIBUTING.md', dest: 'CONTRIBUTING.md', mode: 'seed' },
+  { src: 'ci/build.yml', dest: '.github/workflows/build.yml' },
+  { src: 'ts/tsconfig.json', dest: 'tsconfig.json' },
+  { src: 'repo/gitignore', dest: '.gitignore' },
+  { src: 'docs/CONTRIBUTING.md', dest: 'CONTRIBUTING.md' },
 ];
 
 const SOURCES = {
@@ -29,7 +28,7 @@ describe('материализация из декларации', () => {
   it('раскладывает объявленные артефакты (снапшоты выходных файлов)', () => {
     const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
     applyPlan(tree, plan);
 
     expect(describePlan(plan)).toMatchSnapshot('план');
@@ -38,27 +37,24 @@ describe('материализация из декларации', () => {
     }
   });
 
-  it('файл, которым владеет продукт, маркера владения не несёт', () => {
+  it('каждый объявленный артефакт несёт маркер материализации', () => {
+    // Пользовательских артефактов у движка больше нет: объявил — значит наш,
+    // значит перегенерируется целиком (`kb:BASER2-2`). Файл без маркера был бы
+    // артефактом, владение которым движок доказать не может.
     const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
+    applyPlan(tree, computePlan({ tree, declaration }));
 
-    expect(tree.read('CONTRIBUTING.md', 'utf-8')).toBe(
-      SOURCES['docs/CONTRIBUTING.md'],
-    );
+    for (const entry of frame) {
+      expect(tree.read(entry.dest, 'utf-8')).toContain('baser-materialize');
+    }
   });
 
   it('повторный прогон ничего не делает и ничего не портит', () => {
     const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
+    applyPlan(tree, computePlan({ tree, declaration }));
     const materialized = frame.map((entry) => tree.read(entry.dest, 'utf-8'));
 
-    const second = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const second = computePlan({ tree, declaration });
     applyPlan(tree, second);
 
     expect(second.status).toBe('converged');
@@ -69,22 +65,22 @@ describe('материализация из декларации', () => {
   });
 
   it('сходимость не глушит названные состояния (извещения остаются)', () => {
-    // Сошлись — но продукт владеет своим seed-файлом, а базы мерджа нет.
-    // Оба состояния обязаны быть НАЗВАНЫ, а не растворяться в «плане нет шагов».
+    // Сошлись — но раннер сузил охват скана. Состояние обязано быть НАЗВАНО,
+    // а не растворяться в «плане нет шагов».
     const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
+    applyPlan(tree, computePlan({ tree, declaration }));
 
-    const second = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const second = computePlan({
+      tree,
+      declaration,
+      scan: { ignore: ['node_modules', 'vendor'] },
+    });
 
     expect(second.status).toBe('converged');
-    expect(second.notices.map((notice) => [notice.kind, notice.dest])).toEqual([
-      ['baseline-missing', '.gitignore'],
-      ['product-owned', 'CONTRIBUTING.md'],
+    expect(second.notices.map((notice) => notice.kind)).toEqual([
+      'scan-scope-narrowed',
     ]);
     expect(describePlan(second)).toContain('план пуст');
-    expect(describePlan(second)).toContain('baseline-missing');
+    expect(describePlan(second)).toContain('scan-scope-narrowed');
   });
 });

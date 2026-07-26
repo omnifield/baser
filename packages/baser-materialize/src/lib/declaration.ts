@@ -1,15 +1,18 @@
 /**
  * Декларация продукта — вход движка.
  *
- * Форма зафиксирована контрактом `kb:BASER-5`: блок `omnifield` с полями
- * `kind` · `target` · `stack` · `contentRoot` · `frame[{src,dest,mode}]`.
- * Общего `mechanism` у декларации НЕТ — механизм несёт каждая запись отдельно
- * (`kb:ADR-22`: механизм выбирается по классу файла).
+ * Форма: блок `omnifield` с полями `kind` · `target` · `stack` ·
+ * `contentRoot` · `frame[{src,dest}]` (`kb:BASER2-2`).
+ *
+ * РЕЖИМОВ МАТЕРИАЛИЗАЦИИ В ДЕКЛАРАЦИИ НЕТ. Единственное поведение движка —
+ * перегенерация артефакта целиком из шаблона (модель A по `kb:BASER2-1`):
+ * `merge` отменён вместе с трёхсторонним мерджем, `seed` перестал быть
+ * режимом — файл, рождающийся сразу пользовательским, выражается ФОРКОМ
+ * ИСТОЧНИКА, а не пометкой на записи `frame`.
  *
  * Источник декларации — `package.json` опубликованного пакета-потребителя.
  * Вендор-ветка (`plugin.json`) сознательно НЕ поддерживается: это обходной путь
- * потребителя, а не форма канона (`kb:BASER-3` «второй вход от пилота»,
- * `kb:BASER-4` «обходные пути не канонизируются»).
+ * потребителя, а не форма канона (`kb:BASER-4` «обходные пути не канонизируются»).
  */
 
 import type { Tree } from '@nx/devkit';
@@ -22,19 +25,12 @@ export const DECLARATION_BLOCK = 'omnifield';
 /** Файл, из которого декларация читается по умолчанию. */
 export const DEFAULT_DECLARATION_PATH = 'package.json';
 
-/** Режимы владения из контракта. Порядок — как в `kb:BASER-5`. */
-export const MATERIALIZE_MODES = ['exact', 'merge', 'seed'] as const;
-
-export type MaterializeMode = (typeof MATERIALIZE_MODES)[number];
-
-/** Единица материализации: один файл `dest`, один механизм `mode`. */
+/** Единица материализации: один артефакт `dest` из одного шаблона `src`. */
 export interface FrameEntry {
   /** Путь внутри `contentRoot` источника. */
   readonly src: string;
   /** Путь артефакта в репозитории потребителя — он же единица владения. */
   readonly dest: string;
-  /** Механизм материализации этой записи. */
-  readonly mode: MaterializeMode;
 }
 
 export interface Declaration {
@@ -143,7 +139,7 @@ function parseFrameEntry(
 ): FrameEntry {
   if (!isPlainObject(entry)) {
     throw new DeclarationError(
-      `${at(`frame[${index}]`)} — ожидался объект {src,dest,mode}`,
+      `${at(`frame[${index}]`)} — ожидался объект {src,dest}`,
     );
   }
 
@@ -159,24 +155,23 @@ function parseFrameEntry(
       `${at(`frame[${index}].dest`)} — ожидалась строка`,
     );
   }
-  if (!isMaterializeMode(mode)) {
+  // Снятое поле отвергается ВСЛУХ, а не игнорируется: декларация с `mode`
+  // объявляет поведение, которого у движка больше нет, и молчаливый разбор
+  // оставил бы потребителя в уверенности, что его `merge`/`seed` соблюдается
+  // (`kb:BASER2-2`: «затирание не дефект — дефектом было молчание»).
+  if (mode !== undefined) {
     throw new DeclarationError(
-      `${at(`frame[${index}].mode`)} — ожидался один из ${MATERIALIZE_MODES.join(' | ')}, получено ${JSON.stringify(mode)}`,
+      `${at(`frame[${index}].mode`)} — режимов материализации больше нет ` +
+        `(получено ${JSON.stringify(mode)}): движок перегенерирует артефакт целиком ` +
+        'из шаблона. "merge" отменён вместе со сведением версий, "seed" выражается ' +
+        'форком источника, а не режимом записи — убери поле',
     );
   }
 
   return {
     src: normalizeRepoPath(src, at(`frame[${index}].src`)),
     dest: normalizeRepoPath(dest, at(`frame[${index}].dest`)),
-    mode,
   };
-}
-
-export function isMaterializeMode(value: unknown): value is MaterializeMode {
-  return (
-    typeof value === 'string' &&
-    (MATERIALIZE_MODES as readonly string[]).includes(value)
-  );
 }
 
 function optionalString(

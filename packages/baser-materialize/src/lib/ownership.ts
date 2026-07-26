@@ -1,8 +1,11 @@
 /**
  * Модель владения.
  *
- * Единица владения — файл `dest` (`kb:BASER-5`; осознанное упрощение против
- * пофайлового `managedFields` в Kubernetes SSA).
+ * Владелец у объявленного артефакта ровно один — движок: **файл наш и
+ * перегенерируется целиком из шаблона** (`kb:BASER2-2`, модель A). Классов
+ * владения (`engine`/`shared`/`product`) больше нет: они обслуживали режимы и
+ * сведение версий, а владение продукта выражается ФОРКОМ ИСТОЧНИКА — снаружи
+ * движка и не пофайлово.
  *
  * Принадлежность НЕ хранится реестром: реестр рассинхронизируется сам и назван
  * анти-паттерном (`kb:BASER-3`). Она ВЫВОДИТСЯ ИЗ СОДЕРЖИМОГО — по маркеру,
@@ -10,39 +13,23 @@
  * выводятся сироты: файл с нашим маркером, которого больше нет в декларации,
  * потерял объявление.
  *
+ * БАЗЫ ДЛЯ СВЕДЕНИЯ ВЕРСИЙ ЗДЕСЬ НЕТ. Версия канона хранилась в маркере ради
+ * восстановления базы трёхстороннего мерджа; мерджа нет — хранить нечего.
+ * Маркер утверждает ровно одно: «этот артефакт материализован движком из такого
+ * `src`».
+ *
  * Гача из канона: сама магическая строка не должна лежать в исходниках целиком,
  * иначе исходник опознается как «свой» и будет снят как сирота. Поэтому магия
  * собирается на рантайме.
  */
 
 import type { Tree } from '@nx/devkit';
-import type { MaterializeMode } from './declaration.js';
-import { isMaterializeMode } from './declaration.js';
 import { joinRepoPath } from './paths.js';
-
-/**
- * Класс владения `dest`. Объявляется стратегией режима, а не выводится
- * движком: движок лишь ЗАЩИЩАЕТ инвариант, кто бы ни был владельцем.
- */
-export type OwnershipClass = 'engine' | 'shared' | 'product';
 
 /** Запись о владении, вычитанная из артефакта. */
 export interface OwnershipRecord {
   /** Запись `frame.src`, из которой артефакт материализован. */
   readonly src: string;
-  readonly mode: MaterializeMode;
-  readonly own: OwnershipClass;
-  /**
-   * ВЕРСИЯ КАНОНА, из которой артефакт материализован (`kb:BASER-5`, «база
-   * трёхстороннего мерджа»). Это единственное состояние, которое движок хранит,
-   * и хранит он его В САМОМ АРТЕФАКТЕ: отдельный файл состояния был бы тем
-   * хранимым реестром, который канон называет анти-паттерном.
-   *
-   * По ней раннер восстанавливает базу мерджа через порт `CanonBaseline`
-   * (`source.ts`). `undefined` — версия неизвестна: источник её не назвал либо
-   * артефакт помечен движком более старой версии.
-   */
-  readonly version?: string;
 }
 
 /** Идентификатор движка в маркере. Собирается, а не пишется литералом. */
@@ -56,12 +43,7 @@ export const JSON_MARKER_KEY = '//';
 
 /** Текст маркера: магия + человекочитаемая подсказка + машинная полезная нагрузка. */
 export function markerText(record: OwnershipRecord): string {
-  const payload = JSON.stringify({
-    src: record.src,
-    mode: record.mode,
-    own: record.own,
-    ...(record.version === undefined ? {} : { version: record.version }),
-  });
+  const payload = JSON.stringify({ src: record.src });
   return `${MARKER_MAGIC} ${MARKER_HINT} ~~ ${payload}`;
 }
 
@@ -89,27 +71,16 @@ export function parseMarkerText(line: string): OwnershipRecord | null {
     return null;
   }
 
-  const { src, mode, own, version } = payload as Record<string, unknown>;
-  if (
-    typeof src !== 'string' ||
-    !isMaterializeMode(mode) ||
-    !isOwnershipClass(own)
-  ) {
+  const { src } = payload as Record<string, unknown>;
+  if (typeof src !== 'string') {
     return null;
   }
 
-  // Версия — необязательная часть нагрузки: маркер без неё остаётся валидным
-  // (артефакт материализован источником, который версию не назвал).
-  return {
-    src,
-    mode,
-    own,
-    ...(typeof version === 'string' ? { version } : {}),
-  };
-}
-
-function isOwnershipClass(value: unknown): value is OwnershipClass {
-  return value === 'engine' || value === 'shared' || value === 'product';
+  // Поля снятой модели (`mode`, `own`, `version`) в нагрузке ИГНОРИРУЮТСЯ, а не
+  // отвергают маркер: артефакт, помеченный движком до выпила, обязан остаться
+  // опознаваемым — иначе он превратился бы в вечную сироту у всех потребителей,
+  // а его претензия — в невидимую.
+  return { src };
 }
 
 /**
@@ -335,6 +306,33 @@ export interface ScanOptions {
    * артефактов.
    */
   readonly declared?: readonly string[];
+  /**
+   * ПОДДЕРЕВЬЯ, КУДА СКАН НЕ ЗАХОДИТ ВООБЩЕ, — сильнее `declared` и `ignore`.
+   *
+   * Сюда движок подаёт `contentRoot`: писать в собственный источник он
+   * отказывается (`dest-in-content-root`), значит и удалять оттуда не имеет
+   * права. Иначе получалась асимметрия — вход в источник закрыт, а вынос из
+   * него идёт штатным шагом снятия сироты, без конфликта и с `pending` в плане.
+   */
+  readonly exclude?: readonly string[];
+}
+
+/** Файл, который скан не смог прочитать: дерево бросило на нём исключение. */
+export interface ScanFailure {
+  readonly path: string;
+  readonly cause: unknown;
+}
+
+/** Результат скана: что нашли и что не смогли прочитать. */
+export interface ScanResult {
+  readonly owned: Map<string, OwnershipRecord>;
+  /**
+   * Сбои по отдельным файлам. Они НЕ проглатываются и НЕ роняют скан: движок
+   * не падает молча и не теряет остальное дерево из-за одного файла — решение,
+   * что с ними делать, принимает вызывающая сторона (план превращает их в
+   * адресный отказ).
+   */
+  readonly failures: readonly ScanFailure[];
 }
 
 /**
@@ -347,25 +345,41 @@ export interface ScanOptions {
 export function scanOwnership(
   tree: Tree,
   options: ScanOptions = {},
-): Map<string, OwnershipRecord> {
+): ScanResult {
   const ignore = new Set(options.ignore ?? DEFAULT_SCAN_IGNORE);
   const declared = declaredDirectories(options.declared ?? []);
+  const excluded = (options.exclude ?? [])
+    .map((path) => path.replace(/\/+$/, ''))
+    .filter((path) => path !== '');
   const owned = new Map<string, OwnershipRecord>();
+  const failures: ScanFailure[] = [];
   const queue: string[] = [...(options.roots ?? [''])];
 
   while (queue.length > 0) {
     const dir = queue.pop() as string;
     for (const child of tree.children(dir)) {
       const path = joinRepoPath(dir, child);
+      // Исключённое поддерево не просматривается ни при каких обстоятельствах:
+      // движок туда не пишет, значит и снимать оттуда не вправе.
+      if (excluded.some((root) => path === root || path.startsWith(`${root}/`))) {
+        continue;
+      }
       // Пропуск действует только там, где движок ничего не объявлял: над
       // собственными артефактами слепых зон у скана нет.
       if (ignore.has(child) && !declared.has(path)) {
         continue;
       }
       if (tree.isFile(path)) {
-        const record = readOwnership(tree, path);
-        if (record !== null) {
-          owned.set(path, record);
+        // Сбой на ОДНОМ файле не имеет права уносить скан: остальное дерево
+        // из-за него не перестаёт существовать, а сам сбой отдаётся наружу —
+        // молча проглотить его нельзя, иначе артефакт станет невидимым.
+        try {
+          const record = readOwnership(tree, path);
+          if (record !== null) {
+            owned.set(path, record);
+          }
+        } catch (cause) {
+          failures.push({ path, cause });
         }
       } else {
         queue.push(path);
@@ -373,7 +387,7 @@ export function scanOwnership(
     }
   }
 
-  return owned;
+  return { owned, failures };
 }
 
 /**

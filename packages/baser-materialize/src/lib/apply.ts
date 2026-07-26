@@ -80,12 +80,13 @@ export function applyPlan(
 
   const journal: JournalEntry[] = [];
   let current: PlanStep | null = null;
+  const ordered = inApplyOrder(plan.steps);
 
   try {
     trace.span(
       'apply.steps',
       () => {
-        for (const step of plan.steps) {
+        for (const step of ordered) {
           current = step;
           journal.push({
             dest: step.dest,
@@ -107,20 +108,39 @@ export function applyPlan(
         }
         current = null;
       },
-      { steps: plan.steps.length },
+      { steps: ordered.length },
     );
   } catch (cause) {
     trace.span('apply.rollback', () => rollback(tree, journal), {
       entries: journal.length,
     });
-    throw new MaterializationApplyError(current ?? plan.steps[0], { cause });
+    throw new MaterializationApplyError(current ?? ordered[0], { cause });
   }
 
   return {
     schemaVersion: OUTPUT_SCHEMA_VERSION,
-    applied: plan.steps,
+    applied: ordered,
     trace: trace.snapshot(),
   };
+}
+
+/**
+ * Порядок применения: СНАЧАЛА СНЯТИЯ, потом записи.
+ *
+ * Порядок в самом плане — байтовый по `dest`, потому что это контракт вывода с
+ * пультом, а не программа действий. Но на дереве порядок значим: артефакт,
+ * переобъявленный из файла в каталог (`cfg.yml` → `cfg.yml/inner.yml`),
+ * освобождает путь именно шагом снятия — выполнив запись первой, движок
+ * упёрся бы в занятый путь и уронил бы применение там, где план сходится.
+ *
+ * Внутри каждой группы порядок плана сохраняется: детерминизм вывода
+ * детерминизмом же и применяется.
+ */
+function inApplyOrder(steps: readonly PlanStep[]): readonly PlanStep[] {
+  return [
+    ...steps.filter((step) => step.kind === 'delete'),
+    ...steps.filter((step) => step.kind !== 'delete'),
+  ];
 }
 
 function rollback(tree: Tree, journal: readonly JournalEntry[]): void {
