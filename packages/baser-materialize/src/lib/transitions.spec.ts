@@ -386,6 +386,94 @@ describe('переход: декларация добавляет dest внут�
   });
 });
 
+/**
+ * Д11 (`tasker:BASER2-16`). План СОДЕРЖАЛ снятие мешающего файла и одновременно
+ * объявлял состояние недостижимым: применение отклонялось целиком, дерево не
+ * менялось, следующий прогон давал то же самое. Дедлок на штатной миграции,
+ * снимаемый только руками по файловой системе.
+ *
+ * Правило узкое: препятствие снимает ТОЛЬКО шаг удаления в этом же плане.
+ * Файл, который остаётся лежать законно, продолжает мешать законно.
+ */
+describe('переход: артефакт переобъявлен из файла в каталог', () => {
+  it('снятие мешающего артефакта и создание нового идут одним планом', () => {
+    const { tree } = materialized();
+
+    const plan = computePlan({
+      tree,
+      declaration: redeclare(tree, [
+        { src: 'other.yml', dest: `${CFG}/inner.yml` },
+      ]),
+    });
+
+    expect(plan.status).toBe('pending');
+    expect(plan.conflicts).toEqual([]);
+    expect(plan.steps.map((step) => [step.kind, step.dest])).toEqual([
+      ['delete', CFG],
+      ['create', `${CFG}/inner.yml`],
+    ]);
+  });
+
+  it('после применения дерево сходится, а не встаёт в дедлок', () => {
+    const { tree } = materialized();
+    const next = redeclare(tree, [
+      { src: 'other.yml', dest: `${CFG}/inner.yml` },
+    ]);
+
+    applyPlan(tree, computePlan({ tree, declaration: next }));
+
+    expect(tree.isFile(`${CFG}/inner.yml`)).toBe(true);
+    expect(computePlan({ tree, declaration: next }).status).toBe('converged');
+  });
+
+  it('обратный переход каталог → файл того же класса', () => {
+    const { tree } = materialized({ src: 'cfg.yml', dest: `${CFG}/inner.yml` });
+
+    const next = redeclare(tree, [{ src: 'other.yml', dest: CFG }]);
+    const plan = computePlan({ tree, declaration: next });
+    applyPlan(tree, plan);
+
+    expect(plan.status).toBe('pending');
+    expect(tree.isFile(CFG)).toBe(true);
+    expect(computePlan({ tree, declaration: next }).status).toBe('converged');
+  });
+
+  it('ЧУЖОЙ файл на пути продолжает мешать: послабление только для своего шага удаления', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [{ src: 'cfg.yml', dest: `${CFG}/inner.yml` }],
+      sources: SOURCES,
+      existing: { [CFG]: 'настройка: продукта\n' },
+    });
+
+    const plan = computePlan({ tree, declaration });
+
+    expect(plan.status).toBe('blocked');
+    expect(plan.conflicts[0]).toMatchObject({
+      kind: 'unreachable-dest',
+      detail: { blockedBy: CFG, collision: 'existing-file' },
+    });
+    expect(tree.read(CFG, 'utf-8')).toBe('настройка: продукта\n');
+  });
+
+  it('наш артефакт, ОСТАВШИЙСЯ объявленным, мешает так же законно', () => {
+    const { tree } = materialized();
+
+    const plan = computePlan({
+      tree,
+      declaration: redeclare(tree, [
+        entry,
+        { src: 'other.yml', dest: `${CFG}/inner.yml` },
+      ]),
+    });
+
+    expect(plan.status).toBe('blocked');
+    expect(plan.conflicts[0]).toMatchObject({
+      kind: 'unreachable-dest',
+      detail: { blockedBy: CFG, collision: 'declared-dest' },
+    });
+  });
+});
+
 describe('переход: прогон повторён', () => {
   it('план без шагов — идемпотентность', () => {
     const { tree, declaration } = materialized();

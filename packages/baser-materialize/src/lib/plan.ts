@@ -41,7 +41,7 @@ import {
 } from './ownership.js';
 import type { TraceRecorder, TraceSpan } from './trace.js';
 import { createTrace } from './trace.js';
-import { normalizeRepoPath } from './paths.js';
+import { byBytes, joinRepoPath, normalizeRepoPath } from './paths.js';
 import { OUTPUT_SCHEMA_VERSION } from './schema.js';
 
 export type PlanStepKind = 'create' | 'update' | 'delete';
@@ -89,7 +89,13 @@ export type ConflictKind =
   /** Класс файла не может нести маркер владения — доказать владение нечем. */
   | 'unmarkable-dest'
   /** Источник `src` не найден под `contentRoot`. */
-  | 'missing-source';
+  | 'missing-source'
+  /**
+   * Обработка ЭТОЙ записи сорвалась исключением (битый порт источника, сбойное
+   * дерево). Отказ привязан к своему `dest`: сбой на одной записи не имеет
+   * права уносить план целиком.
+   */
+  | 'entry-failed';
 
 /**
  * Машинные подробности причины отказа.
@@ -117,6 +123,8 @@ export interface ConflictDetail {
   readonly contentRoot?: string;
   /** `unmarkable-dest`: почему маркер невозможен. */
   readonly unmarkable?: 'no-format-for-class' | 'content-shape';
+  /** `entry-failed`: сообщение исключения, сорвавшего обработку записи. */
+  readonly failure?: string;
 }
 
 export interface PlanConflict {
@@ -248,7 +256,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
   // Скан владения идёт ДО обхода `frame`: сироты нужны уже на проверке
   // достижимости — путь, занятый файлом, который этот же план снимает, не
   // является препятствием.
-  const owned = trace.span('plan.scan-ownership', () =>
+  const scan = trace.span('plan.scan-ownership', () =>
     scanOwnership(tree, {
       ...options.scan,
       // Объявленные `dest` всегда в зоне видимости скана, каким бы ни был
@@ -257,9 +265,27 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
         ...(options.scan?.declared ?? []),
         ...declaration.frame.map((entry) => entry.dest),
       ],
+      // Источник шаблонов скан не просматривает: движок туда не пишет
+      // (`dest-in-content-root`), значит и снимать оттуда не вправе.
+      exclude: [
+        ...(options.scan?.exclude ?? []),
+        declaration.contentRoot,
+      ],
     }),
   );
-  trace.event('plan.owned', { files: owned.size });
+  const owned = scan.owned;
+  trace.event('plan.owned', {
+    files: owned.size,
+    ...(scan.failures.length > 0 ? { failed: scan.failures.length } : {}),
+  });
+
+  // Файл, который скан не смог прочитать, — не «его нет»: движок не знает,
+  // наш он или нет, и обязан сказать это адресно, а не пропустить молча.
+  const failedDests = new Set<string>();
+  for (const failure of scan.failures) {
+    failedDests.add(failure.path);
+    conflicts.push(entryFailed(failure.path, undefined, failure.cause));
+  }
 
   const declaredDests = new Set(declaration.frame.map((entry) => entry.dest));
   /** Наши артефакты, которые этот прогон снимает: они освобождают свой путь. */
@@ -292,41 +318,57 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
           });
           continue;
         }
-        const unreachable = reachabilityConflict(entry, {
-          tree,
-          contentRoot: declaration.contentRoot,
-          claimed,
-          claimedDirs,
-        });
-        if (unreachable !== null) {
-          conflicts.push(unreachable);
-          continue;
-        }
-
-        claimed.set(entry.dest, entry);
-        for (const dir of ancestorsOf(entry.dest)) {
-          if (!claimedDirs.has(dir)) {
-            claimedDirs.set(dir, entry.dest);
+        // Сбой на ОДНОЙ записи не имеет права уносить план целиком: порт
+        // источника и дерево приходят снаружи движка и могут бросить что
+        // угодно. Отказ привязывается к своему `dest` — соседние записи
+        // планируются как обычно (с несколькими источниками это уже не
+        // удобство, а требование: битый шаблон одного поставщика не должен
+        // гасить материализацию всех остальных).
+        try {
+          const unreachable = reachabilityConflict(entry, {
+            tree,
+            contentRoot: declaration.contentRoot,
+            claimed,
+            claimedDirs,
+            removed,
+          });
+          if (unreachable !== null) {
+            conflicts.push(unreachable);
+            continue;
           }
-        }
 
-        const outcome = planEntry(entry, {
-          tree,
-          source,
-          confirmed: confirm.has(entry.dest),
-        });
+          claimed.set(entry.dest, entry);
+          for (const dir of ancestorsOf(entry.dest)) {
+            if (!claimedDirs.has(dir)) {
+              claimedDirs.set(dir, entry.dest);
+            }
+          }
 
-        if (outcome.step !== undefined) {
-          steps.push(outcome.step);
-        }
-        if (outcome.conflict !== undefined) {
-          conflicts.push(outcome.conflict);
-        }
-        if (outcome.notice !== undefined) {
-          notices.push(outcome.notice);
-        }
-        if (outcome.confirmationUsed === true) {
-          consumed.add(entry.dest);
+          const outcome = planEntry(entry, {
+            tree,
+            source,
+            confirmed: confirm.has(entry.dest),
+          });
+
+          if (outcome.step !== undefined) {
+            steps.push(outcome.step);
+          }
+          if (outcome.conflict !== undefined) {
+            conflicts.push(outcome.conflict);
+          }
+          if (outcome.notice !== undefined) {
+            notices.push(outcome.notice);
+          }
+          if (outcome.confirmationUsed === true) {
+            consumed.add(entry.dest);
+          }
+        } catch (cause) {
+          // Тот же файл мог сорвать и скан — отказ по нему уже назван, второй
+          // раз называть его незачем: это один и тот же сбой одного артефакта.
+          if (!failedDests.has(entry.dest)) {
+            failedDests.add(entry.dest);
+            conflicts.push(entryFailed(entry.dest, entry.src, cause));
+          }
         }
       }
     },
@@ -358,18 +400,22 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
 
   trace.span('plan.orphans', () => {
     for (const dest of removed) {
-      const step = planOrphan(tree, dest);
-      if (step !== null) {
-        steps.push(step);
+      try {
+        const step = planOrphan(tree, dest);
+        if (step !== null) {
+          steps.push(step);
+        }
+      } catch (cause) {
+        conflicts.push(entryFailed(dest, owned.get(dest)?.src, cause));
       }
     }
   });
 
-  steps.sort((left, right) => left.dest.localeCompare(right.dest));
-  conflicts.sort((left, right) => left.dest.localeCompare(right.dest));
-  notices.sort((left, right) =>
-    (left.dest ?? '').localeCompare(right.dest ?? ''),
-  );
+  // Порядок вывода БАЙТОВЫЙ, а не локале-зависимый: схема вывода — контракт с
+  // пультом, и порядок в нём не имеет права плавать по ICU и локали процесса.
+  steps.sort((left, right) => byBytes(left.dest, right.dest));
+  conflicts.sort((left, right) => byBytes(left.dest, right.dest));
+  notices.sort((left, right) => byBytes(left.dest ?? '', right.dest ?? ''));
 
   return {
     schemaVersion: OUTPUT_SCHEMA_VERSION,
@@ -378,6 +424,31 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
     conflicts,
     notices,
     trace: trace.snapshot(),
+  };
+}
+
+/**
+ * Отказ по записи, обработка которой сорвалась исключением.
+ *
+ * Сбой НЕ проглатывается и НЕ превращается в шаг: он попадает в конфликты, то
+ * есть план становится неприменимым целиком. Право уносить прогон
+ * `TypeError`'ом из недр движка при этом снимается — потребитель получает
+ * машинный код и адрес, а не стек.
+ */
+function entryFailed(
+  dest: string,
+  src: string | undefined,
+  cause: unknown,
+): PlanConflict {
+  const failure = cause instanceof Error ? cause.message : String(cause);
+  return {
+    kind: 'entry-failed',
+    dest,
+    ...(src === undefined ? {} : { src }),
+    detail: { failure },
+    message:
+      `обработка "${dest}" сорвалась: ${failure} — отказ привязан к этой записи, ` +
+      'остальные спланированы как обычно; план целиком неприменим',
   };
 }
 
@@ -432,6 +503,8 @@ interface ReachabilityContext {
   readonly contentRoot: string;
   readonly claimed: ReadonlyMap<string, FrameEntry>;
   readonly claimedDirs: ReadonlyMap<string, string>;
+  /** Наши артефакты, которые этот же план снимает. */
+  readonly removed: ReadonlySet<string>;
 }
 
 /**
@@ -442,12 +515,24 @@ interface ReachabilityContext {
  * упадёт при записи на диск, обязано быть поймано планом. Дерево Nx терпит файл
  * и каталог с одним путём одновременно — файловая система не терпит, и эталон
  * реальности здесь она, а не дерево.
+ *
+ * ПРЕПЯТСТВИЕ СНИМАЕТ ТОЛЬКО СОБСТВЕННЫЙ ШАГ УДАЛЕНИЯ. Путь, занятый нашим же
+ * артефактом, который этот план снимает как сироту, перекрывать `dest` не
+ * может: иначе штатная миграция «файл стал каталогом» блокирует сама себя —
+ * план СОДЕРЖИТ снятие мешающего файла и одновременно объявляет состояние
+ * недостижимым, применение отклоняется целиком, дерево не меняется, следующий
+ * прогон даёт то же самое. Дедлок, снимаемый только руками по ФС.
+ *
+ * Правило намеренно узкое. Движок НЕ моделирует гипотетическое дерево «после
+ * применения» — он смотрит ровно на один факт: есть ли в этом плане шаг
+ * удаления этого пути. Файл, который остаётся лежать законно (чужой или
+ * по-прежнему объявленный), продолжает мешать законно.
  */
 function reachabilityConflict(
   entry: FrameEntry,
   context: ReachabilityContext,
 ): PlanConflict | null {
-  const { tree, contentRoot, claimed, claimedDirs } = context;
+  const { tree, contentRoot, claimed, claimedDirs, removed } = context;
 
   if (isInside(entry.dest, contentRoot)) {
     return {
@@ -465,7 +550,11 @@ function reachabilityConflict(
     if (claimed.has(ancestor)) {
       return unreachable(entry, ancestor, 'declared-dest');
     }
-    if (tree.exists(ancestor) && tree.isFile(ancestor)) {
+    if (
+      tree.exists(ancestor) &&
+      tree.isFile(ancestor) &&
+      !removed.has(ancestor)
+    ) {
       return unreachable(entry, ancestor, 'existing-file');
     }
   }
@@ -477,12 +566,41 @@ function reachabilityConflict(
 
   // Симметричный случай: сам `dest` уже занят КАТАЛОГОМ. Контракт его отдельно
   // не перечисляет, но правило то же — файл на месте каталога не создать, и
-  // упадёт это опять при сбросе на диск, вне журнала отката.
-  if (tree.exists(entry.dest) && !tree.isFile(entry.dest)) {
+  // упадёт это опять при сбросе на диск, вне журнала отката. Каталог, ВСЁ
+  // содержимое которого снимается этим же планом, препятствием не является: от
+  // него не остаётся ничего, что мешало бы.
+  if (
+    tree.exists(entry.dest) &&
+    !tree.isFile(entry.dest) &&
+    !isEmptiedBy(tree, entry.dest, removed)
+  ) {
     return unreachable(entry, entry.dest, 'existing-directory');
   }
 
   return null;
+}
+
+/** Останется ли от каталога хоть что-то после снятия наших сирот. */
+function isEmptiedBy(
+  tree: Tree,
+  directory: string,
+  removed: ReadonlySet<string>,
+): boolean {
+  const queue = [directory];
+  while (queue.length > 0) {
+    const dir = queue.pop() as string;
+    for (const child of tree.children(dir)) {
+      const path = joinRepoPath(dir, child);
+      if (tree.isFile(path)) {
+        if (!removed.has(path)) {
+          return false;
+        }
+      } else {
+        queue.push(path);
+      }
+    }
+  }
+  return true;
 }
 
 const COLLISION_CAUSE: Record<

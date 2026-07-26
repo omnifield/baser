@@ -39,7 +39,9 @@ export {
 export type {
   MarkerFormat,
   OwnershipRecord,
+  ScanFailure,
   ScanOptions,
+  ScanResult,
 } from './lib/ownership.js';
 
 export { createTreeSource } from './lib/source.js';

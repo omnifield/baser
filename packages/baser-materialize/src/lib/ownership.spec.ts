@@ -86,7 +86,7 @@ describe('маркер владения', () => {
     );
 
     expect(readOwnership(tree, 'docs/marker.md')).toBeNull();
-    expect(scanOwnership(tree).size).toBe(0);
+    expect(scanOwnership(tree).owned.size).toBe(0);
   });
 
   it('чужой файл не опознаётся как наш', () => {
@@ -110,9 +110,10 @@ describe('scanOwnership', () => {
     );
     tree.write('docs/manual.md', '# написано человеком\n');
 
-    const owned = scanOwnership(tree);
+    const { owned, failures } = scanOwnership(tree);
 
     expect([...owned.keys()]).toEqual(['.github/workflows/build.yml']);
     expect(owned.get('.github/workflows/build.yml')).toEqual(record);
+    expect(failures).toEqual([]);
   });
 });

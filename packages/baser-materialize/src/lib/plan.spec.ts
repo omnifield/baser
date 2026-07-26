@@ -754,6 +754,248 @@ describe('объявленное состояние обязано быть фи
   });
 });
 
+/**
+ * Д13 (`tasker:BASER2-16`). Асимметрия, найденная прогоном: ПИСАТЬ в собственный
+ * источник движок отказывается (`dest-in-content-root`), а УДАЛЯТЬ оттуда —
+ * штатным шагом, без конфликта, с `pending` в плане. В дефолтной раскладке было
+ * замаскировано пропуском `node_modules`.
+ */
+describe('скан владения не трогает источник шаблонов', () => {
+  it('помеченный файл внутри contentRoot сиротой не считается', () => {
+    const { tree, declaration } = createWorkspace({
+      contentRoot: 'content',
+      frame: [{ src: 'a.yml', dest: 'a.yml' }],
+      sources: { 'a.yml': 'name: a\n' },
+    });
+    applyPlan(tree, computePlan({ tree, declaration }));
+    // в корне содержимого лежит артефакт с нашим маркером: шаблон-пример,
+    // вложенный шаблон, копия артефакта — движку туда ходить нечем
+    tree.write('content/sample.yml', tree.read('a.yml', 'utf-8') as string);
+
+    const plan = computePlan({ tree, declaration });
+
+    expect(plan.steps).toEqual([]);
+    expect(plan.status).toBe('converged');
+    expect(tree.exists('content/sample.yml')).toBe(true);
+  });
+
+  it('источник не сканируется, даже когда раннер объявил его declared', () => {
+    const { tree, declaration } = createWorkspace({
+      contentRoot: 'content',
+      frame: [{ src: 'a.yml', dest: 'a.yml' }],
+      sources: { 'a.yml': 'name: a\n' },
+    });
+    applyPlan(tree, computePlan({ tree, declaration }));
+    tree.write('content/sample.yml', tree.read('a.yml', 'utf-8') as string);
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      scan: { declared: ['content/sample.yml'] },
+    });
+
+    expect(plan.steps).toEqual([]);
+  });
+
+  it('за пределами contentRoot сирота по-прежнему снимается', () => {
+    // Проверка, что послабление узкое: оно про источник, а не про скан вообще.
+    const { tree, declaration } = createWorkspace({
+      contentRoot: 'content',
+      frame: [{ src: 'a.yml', dest: 'a.yml' }],
+      sources: { 'a.yml': 'name: a\n' },
+    });
+    applyPlan(tree, computePlan({ tree, declaration }));
+    tree.write('elsewhere/sample.yml', tree.read('a.yml', 'utf-8') as string);
+
+    const plan = computePlan({ tree, declaration });
+
+    expect(plan.steps.map((step) => [step.kind, step.dest])).toEqual([
+      ['delete', 'elsewhere/sample.yml'],
+    ]);
+  });
+});
+
+/**
+ * Д14 (`tasker:BASER2-16`), новая форма. Старая причина ушла вместе со
+ * стратегией, но требование переживает выпил: **сбой на одной записи или одном
+ * источнике не имеет права уносить план целиком.** Отказ обязан быть привязан к
+ * конкретному `dest`, а не улетать `TypeError`'ом из недр движка — с многими
+ * источниками (A5) битый шаблон одного провайдера не должен гасить
+ * материализацию всех остальных.
+ */
+describe('сбой на одной записи не уносит план целиком', () => {
+  const brokenSource = (broken: string, tree: import('@nx/devkit').Tree) => ({
+    read: (src: string) => {
+      if (src === broken) {
+        throw new TypeError(`шаблон ${src} битый`);
+      }
+      return tree.read(`${CONTENT_ROOT}/${src}`, 'utf-8');
+    },
+    describe: (src: string) => `${CONTENT_ROOT}/${src}`,
+  });
+
+  it('сбой источника становится отказом по своему dest, а не броском наружу', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [exactEntry, ignoreEntry],
+      sources: SOURCES,
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      source: brokenSource('ci/build.yml', tree),
+    });
+
+    expect(plan.status).toBe('blocked');
+    expect(plan.conflicts).toHaveLength(1);
+    expect(plan.conflicts[0]).toMatchObject({
+      kind: 'entry-failed',
+      dest: WORKFLOW,
+      src: 'ci/build.yml',
+    });
+    expect(plan.conflicts[0].detail.failure).toContain('шаблон ci/build.yml битый');
+  });
+
+  it('соседние записи планируются как обычно — падение одной их не гасит', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [exactEntry, ignoreEntry, jsonEntry],
+      sources: SOURCES,
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      source: brokenSource('ci/build.yml', tree),
+    });
+
+    expect(plan.steps.map((step) => step.dest)).toEqual([
+      '.gitignore',
+      'tsconfig.json',
+    ]);
+  });
+
+  it('сбой дерева на артефакте тоже привязан к dest', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [exactEntry, ignoreEntry],
+      sources: SOURCES,
+      existing: { [WORKFLOW]: 'чужой\n' },
+    });
+    const broken = new Proxy(tree, {
+      get(target, property, receiver) {
+        if (property === 'read') {
+          return (path: string, encoding?: string): unknown => {
+            if (path === WORKFLOW) {
+              throw new TypeError('дерево не отдаёт артефакт');
+            }
+            return (target.read as (p: string, e?: string) => unknown)(
+              path,
+              encoding,
+            );
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const plan = computePlan({ tree: broken, declaration });
+
+    expect(plan.conflicts.map((conflict) => [conflict.kind, conflict.dest])).toEqual(
+      [['entry-failed', WORKFLOW]],
+    );
+    expect(plan.steps.map((step) => step.dest)).toEqual(['.gitignore']);
+  });
+
+  it('план с отказом по сбою неприменим целиком', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [exactEntry, ignoreEntry],
+      sources: SOURCES,
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      source: brokenSource('ci/build.yml', tree),
+    });
+
+    expect(isApplicable(plan)).toBe(false);
+    expect(tree.exists('.gitignore')).toBe(false);
+  });
+});
+
+/**
+ * Нит (`tasker:BASER2-16`). Схема вывода — контракт с пультом, и порядок в нём
+ * не имеет права плавать между окружениями по ICU и локали процесса.
+ * `localeCompare` даёт разный порядок при разной локали; сравнение байтовое —
+ * одинаковый везде.
+ */
+describe('порядок машинного вывода детерминирован', () => {
+  const named = ['B.yml', 'a.yml', '_x.yml', 'A.yml', 'Z.yml'];
+
+  it('шаги упорядочены байтово, а не локале-зависимо', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: named.map((dest, index) => ({ src: `s${index}.yml`, dest })),
+      sources: Object.fromEntries(
+        named.map((_dest, index) => [`s${index}.yml`, `v: ${index}\n`]),
+      ),
+    });
+
+    const plan = computePlan({ tree, declaration });
+
+    expect(plan.steps.map((step) => step.dest)).toEqual(
+      [...named].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+    );
+  });
+
+  it('конфликты и извещения упорядочены тем же сравнением', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: named.map((dest, index) => ({ src: `s${index}.yml`, dest })),
+      sources: Object.fromEntries(
+        named.map((_dest, index) => [`s${index}.yml`, `v: ${index}\n`]),
+      ),
+      existing: Object.fromEntries(named.map((dest) => [dest, 'чужой\n'])),
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      confirm: named.map((dest) => `нет-${dest}`),
+    });
+    const byBytes = (values: readonly string[]) =>
+      [...values].sort((left, right) =>
+        left < right ? -1 : left > right ? 1 : 0,
+      );
+
+    expect(plan.conflicts.map((conflict) => conflict.dest)).toEqual(
+      byBytes(named),
+    );
+    expect(plan.notices.map((notice) => notice.dest)).toEqual(
+      byBytes(named.map((dest) => `нет-${dest}`)),
+    );
+  });
+
+  it('порядок не зависит от локали процесса', () => {
+    // Тот же вход, разное сравнение: локале-зависимая сортировка ставит
+    // `_x.yml` и `a.yml` иначе, чем байтовая, — план обязан давать вторую.
+    const locale = [...named].sort((left, right) => left.localeCompare(right));
+    const bytes = [...named].sort((left, right) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    );
+    expect(locale).not.toEqual(bytes);
+
+    const { tree, declaration } = createWorkspace({
+      frame: named.map((dest, index) => ({ src: `s${index}.yml`, dest })),
+      sources: Object.fromEntries(
+        named.map((_dest, index) => [`s${index}.yml`, `v: ${index}\n`]),
+      ),
+    });
+
+    expect(computePlan({ tree, declaration }).steps.map((s) => s.dest)).not.toEqual(
+      locale,
+    );
+  });
+});
+
 describe('охват скана', () => {
   it('сужение охвата раннером названо извещением уровня прогона', () => {
     const { tree, declaration } = createWorkspace({

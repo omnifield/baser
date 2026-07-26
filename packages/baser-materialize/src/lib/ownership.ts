@@ -306,6 +306,33 @@ export interface ScanOptions {
    * артефактов.
    */
   readonly declared?: readonly string[];
+  /**
+   * ПОДДЕРЕВЬЯ, КУДА СКАН НЕ ЗАХОДИТ ВООБЩЕ, — сильнее `declared` и `ignore`.
+   *
+   * Сюда движок подаёт `contentRoot`: писать в собственный источник он
+   * отказывается (`dest-in-content-root`), значит и удалять оттуда не имеет
+   * права. Иначе получалась асимметрия — вход в источник закрыт, а вынос из
+   * него идёт штатным шагом снятия сироты, без конфликта и с `pending` в плане.
+   */
+  readonly exclude?: readonly string[];
+}
+
+/** Файл, который скан не смог прочитать: дерево бросило на нём исключение. */
+export interface ScanFailure {
+  readonly path: string;
+  readonly cause: unknown;
+}
+
+/** Результат скана: что нашли и что не смогли прочитать. */
+export interface ScanResult {
+  readonly owned: Map<string, OwnershipRecord>;
+  /**
+   * Сбои по отдельным файлам. Они НЕ проглатываются и НЕ роняют скан: движок
+   * не падает молча и не теряет остальное дерево из-за одного файла — решение,
+   * что с ними делать, принимает вызывающая сторона (план превращает их в
+   * адресный отказ).
+   */
+  readonly failures: readonly ScanFailure[];
 }
 
 /**
@@ -318,25 +345,41 @@ export interface ScanOptions {
 export function scanOwnership(
   tree: Tree,
   options: ScanOptions = {},
-): Map<string, OwnershipRecord> {
+): ScanResult {
   const ignore = new Set(options.ignore ?? DEFAULT_SCAN_IGNORE);
   const declared = declaredDirectories(options.declared ?? []);
+  const excluded = (options.exclude ?? [])
+    .map((path) => path.replace(/\/+$/, ''))
+    .filter((path) => path !== '');
   const owned = new Map<string, OwnershipRecord>();
+  const failures: ScanFailure[] = [];
   const queue: string[] = [...(options.roots ?? [''])];
 
   while (queue.length > 0) {
     const dir = queue.pop() as string;
     for (const child of tree.children(dir)) {
       const path = joinRepoPath(dir, child);
+      // Исключённое поддерево не просматривается ни при каких обстоятельствах:
+      // движок туда не пишет, значит и снимать оттуда не вправе.
+      if (excluded.some((root) => path === root || path.startsWith(`${root}/`))) {
+        continue;
+      }
       // Пропуск действует только там, где движок ничего не объявлял: над
       // собственными артефактами слепых зон у скана нет.
       if (ignore.has(child) && !declared.has(path)) {
         continue;
       }
       if (tree.isFile(path)) {
-        const record = readOwnership(tree, path);
-        if (record !== null) {
-          owned.set(path, record);
+        // Сбой на ОДНОМ файле не имеет права уносить скан: остальное дерево
+        // из-за него не перестаёт существовать, а сам сбой отдаётся наружу —
+        // молча проглотить его нельзя, иначе артефакт станет невидимым.
+        try {
+          const record = readOwnership(tree, path);
+          if (record !== null) {
+            owned.set(path, record);
+          }
+        } catch (cause) {
+          failures.push({ path, cause });
         }
       } else {
         queue.push(path);
@@ -344,7 +387,7 @@ export function scanOwnership(
     }
   }
 
-  return owned;
+  return { owned, failures };
 }
 
 /**
