@@ -2,6 +2,8 @@
   "name": "@omnifield/baser-devbox",
   "version": "0.1.0",
   "baser": {
+    "formVersion": 1,
+
     "source": {
       "id": "omnifield/devbox",
       "title": "Девбокс: проект целиком в контейнере",
@@ -21,7 +23,7 @@
       },
       "runtimeVersion": {
         "title": "Версия Node в образе",
-        "description": "Дефолт — последняя стабильная на момент прогона. В артефакт попадает число, не latest.",
+        "description": "Пин, поставленный при выпуске обвеса. В артефакт попадает число, не latest.",
         "type": "string",
         "defaultFrom": "./defaults.mjs#latestStableNode"
       },
@@ -75,7 +77,10 @@
     },
 
     "layout": [
-      { "src": "devcontainer.json", "dest": ".devcontainer/devcontainer.json" },
+      {
+        "src": "devcontainer.json.ejs",
+        "dest": ".devcontainer/devcontainer.json"
+      },
       {
         "src": "devcontainer-lock.json",
         "dest": ".devcontainer/devcontainer-lock.json",
