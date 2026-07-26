@@ -19,11 +19,7 @@ describe('readDeclaration', () => {
         stack: 'node',
         contentRoot: 'content',
         frame: [
-          {
-            src: './ci/build.yml',
-            dest: '.github/workflows/build.yml',
-            mode: 'exact',
-          },
+          { src: './ci/build.yml', dest: '.github/workflows/build.yml' },
         ],
       },
     });
@@ -33,13 +29,7 @@ describe('readDeclaration', () => {
       target: 'repo',
       stack: 'node',
       contentRoot: 'content',
-      frame: [
-        {
-          src: 'ci/build.yml',
-          dest: '.github/workflows/build.yml',
-          mode: 'exact',
-        },
-      ],
+      frame: [{ src: 'ci/build.yml', dest: '.github/workflows/build.yml' }],
       extra: {},
     });
   });
@@ -61,15 +51,31 @@ describe('readDeclaration', () => {
 
   it('называет поле и файл в сообщении об ошибке', () => {
     const tree = treeWithManifest({
-      omnifield: {
-        contentRoot: 'content',
-        frame: [{ src: 'a', dest: 'b', mode: 'copy' }],
-      },
+      omnifield: { contentRoot: 'content', frame: [{ src: 'a', dest: 42 }] },
     });
 
     expect(() => readDeclaration(tree)).toThrow(
-      /package\.json: omnifield\.frame\[0\]\.mode — ожидался один из exact \| merge \| seed/,
+      /package\.json: omnifield\.frame\[0\]\.dest — ожидалась строка/,
     );
+  });
+
+  it('отвергает снятое поле mode вслух, а не игнорирует его', () => {
+    // Декларация с `mode` объявляет поведение, которого у движка нет:
+    // молчаливый разбор оставил бы потребителя в уверенности, что его
+    // merge/seed соблюдается (`kb:BASER2-2`, `tasker:BASER2-3`).
+    for (const mode of ['exact', 'merge', 'seed']) {
+      const tree = treeWithManifest({
+        omnifield: {
+          contentRoot: 'content',
+          frame: [{ src: 'a', dest: 'b', mode }],
+        },
+      });
+
+      expect(() => readDeclaration(tree)).toThrow(DeclarationError);
+      expect(() => readDeclaration(tree)).toThrow(
+        /frame\[0\]\.mode — режимов материализации больше нет/,
+      );
+    }
   });
 
   it('отклоняет выход за корень репозитория', () => {
@@ -77,7 +83,7 @@ describe('readDeclaration', () => {
       parseDeclaration(
         {
           contentRoot: 'content',
-          frame: [{ src: 'a', dest: '../../etc/passwd', mode: 'exact' }],
+          frame: [{ src: 'a', dest: '../../etc/passwd' }],
         },
         'package.json',
       ),

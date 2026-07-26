@@ -6,7 +6,6 @@ import {
   MaterializationConflictError,
   applyPlan,
 } from './apply.js';
-import { ALL_DOUBLES } from './strategies.fixture.js';
 import {
   createWorkspace,
   snapshotTree,
@@ -17,8 +16,8 @@ const WORKFLOW = '.github/workflows/build.yml';
 const RELEASE = '.github/workflows/release.yml';
 
 const frame: readonly FrameEntry[] = [
-  { src: 'ci/build.yml', dest: WORKFLOW, mode: 'exact' },
-  { src: 'ci/release.yml', dest: RELEASE, mode: 'exact' },
+  { src: 'ci/build.yml', dest: WORKFLOW },
+  { src: 'ci/release.yml', dest: RELEASE },
 ];
 
 const SOURCES = {
@@ -32,7 +31,7 @@ describe('applyPlan', () => {
 
     const report = applyPlan(
       tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
+      computePlan({ tree, declaration }),
     );
 
     expect(report.applied).toHaveLength(2);
@@ -45,7 +44,7 @@ describe('applyPlan', () => {
 
     const report = applyPlan(
       tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
+      computePlan({ tree, declaration }),
     );
 
     expect(report.trace.map((span) => span.name)).toEqual(['apply.steps']);
@@ -60,7 +59,7 @@ describe('applyPlan', () => {
     });
     const before = snapshotTree(tree);
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(() => applyPlan(tree, plan)).toThrow(MaterializationConflictError);
     expect(snapshotTree(tree)).toEqual(before);
@@ -70,7 +69,7 @@ describe('applyPlan', () => {
 describe('атомарность (§2 контракта)', () => {
   it('сбой в середине применения не оставляет полуобновлённого дерева', () => {
     const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
     const before = snapshotTree(tree);
 
     expect(plan.steps).toHaveLength(2);
@@ -89,12 +88,7 @@ describe('атомарность (§2 контракта)', () => {
       sources: SOURCES,
       existing: { [WORKFLOW]: 'name: написано руками\n' },
     });
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: ALL_DOUBLES,
-      confirm: [WORKFLOW],
-    });
+    const plan = computePlan({ tree, declaration, confirm: [WORKFLOW] });
     const before = snapshotTree(tree);
 
     expect(() => applyPlan(treeFailingOnWrite(tree, 2), plan)).toThrow(
@@ -109,13 +103,11 @@ describe('атомарность (§2 контракта)', () => {
     const { tree, declaration } = createWorkspace({ frame, sources: SOURCES });
     applyPlan(
       tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
+      computePlan({ tree, declaration }),
     );
 
     const manifest = JSON.parse(tree.read('package.json', 'utf-8') as string);
-    manifest.omnifield.frame = [
-      { src: 'ci/build.yml', dest: WORKFLOW, mode: 'exact' },
-    ];
+    manifest.omnifield.frame = [{ src: 'ci/build.yml', dest: WORKFLOW }];
     tree.write('package.json', `${JSON.stringify(manifest, null, 2)}\n`);
     tree.write(WORKFLOW, 'name: правка\n');
 
@@ -126,7 +118,6 @@ describe('атомарность (§2 контракта)', () => {
     const plan = computePlan({
       tree,
       declaration: declarationAfter,
-      strategies: ALL_DOUBLES,
       confirm: [WORKFLOW],
     });
     const before = snapshotTree(tree);

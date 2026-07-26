@@ -1,11 +1,14 @@
 /**
- * МАТРИЦА ПЕРЕХОДОВ — приёмка зоны по `kb:BASER-5`, раздел «Контракт
- * проверяется ПЕРЕХОДАМИ, а не устойчивыми состояниями».
+ * МАТРИЦА ПЕРЕХОДОВ — приёмка зоны.
  *
- * Оба дефекта второго ревью лежали не в том, что движок делает с файлом, а в
- * том, что происходит при СМЕНЕ объявления или версии: в устойчивом состоянии
- * всё сходилось с первого раза. Поэтому здесь проверяется каждый переход из
- * матрицы контракта — по одному describe на строку, — а не статические кейсы.
+ * Дефекты обоих ревью лежали не в том, что движок делает с файлом, а в том, что
+ * происходит при СМЕНЕ объявления: в устойчивом состоянии всё сходилось с
+ * первого раза. Поэтому здесь проверяется каждый переход матрицы — по одному
+ * describe на строку, — а не статические кейсы.
+ *
+ * Матрица v2 короче прежней ровно настолько, насколько её сократил выпил
+ * (`tasker:BASER2-3`): переходов между классами владения и версиями канона
+ * больше нет — нет ни классов, ни хранимой версии.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -16,9 +19,7 @@ import {
   MaterializationApplyError,
   MaterializationConflictError,
 } from './apply.js';
-import { createTreeSource } from './source.js';
 import { readOwnership } from './ownership.js';
-import { ALL_DOUBLES } from './strategies.fixture.js';
 import {
   createWorkspace,
   redeclare,
@@ -28,480 +29,196 @@ import {
 
 const CFG = 'cfg.yml';
 
-const asExact: FrameEntry = { src: 'cfg.yml', dest: CFG, mode: 'exact' };
-const asSeed: FrameEntry = { src: 'cfg.yml', dest: CFG, mode: 'seed' };
-const asMerge: FrameEntry = { src: 'cfg.yml', dest: CFG, mode: 'merge' };
+const entry: FrameEntry = { src: 'cfg.yml', dest: CFG };
+const fromOther: FrameEntry = { src: 'other.yml', dest: CFG };
 
 const SOURCES = {
-  'cfg.yml': 'setting: канон\n',
-  'other.yml': 'setting: канон\n',
+  'cfg.yml': 'setting: шаблон\n',
+  'other.yml': 'setting: шаблон\n',
 };
 
 /** Материализует один `frame` и возвращает рабочее дерево. */
-function materialized(entry: FrameEntry, version?: string) {
-  const fixture = createWorkspace({ frame: [entry], sources: SOURCES });
-  const { tree, declaration } = fixture;
+function materialized(frameEntry: FrameEntry = entry) {
+  const fixture = createWorkspace({ frame: [frameEntry], sources: SOURCES });
   applyPlan(
-    tree,
-    computePlan({
-      tree,
-      declaration,
-      strategies: ALL_DOUBLES,
-      source: createTreeSource(tree, declaration.contentRoot, version ?? null),
-    }),
+    fixture.tree,
+    computePlan({ tree: fixture.tree, declaration: fixture.declaration }),
   );
   return fixture;
 }
 
 describe('переход: запись появилась в frame', () => {
-  it('артефакт материализован и помечен объявленным классом владения', () => {
-    const { tree } = materialized(asExact);
+  it('артефакт материализован и помечен как наш', () => {
+    const { tree } = materialized();
 
-    expect(tree.read(CFG, 'utf-8')).toContain('setting: канон');
-    expect(readOwnership(tree, CFG)).toMatchObject({ own: 'engine' });
+    expect(tree.read(CFG, 'utf-8')).toContain('setting: шаблон');
+    expect(readOwnership(tree, CFG)).toEqual({ src: 'cfg.yml' });
   });
 });
 
 describe('переход: запись убрана из frame', () => {
-  it.each([
-    ['exact', asExact, 'delete', false],
-    ['merge', asMerge, 'release', true],
-  ] as const)(
-    'владение отпускается по классу (%s)',
-    (_mode, entry, kind, survives) => {
-      const { tree } = materialized(entry);
+  it('артефакт снимается — других исходов у выпиленной записи нет', () => {
+    const { tree } = materialized();
 
-      const plan = computePlan({
-        tree,
-        declaration: redeclare(tree, []),
-        strategies: ALL_DOUBLES,
-      });
-      applyPlan(tree, plan);
+    const plan = computePlan({ tree, declaration: redeclare(tree, []) });
+    applyPlan(tree, plan);
 
-      expect(plan.steps[0]).toMatchObject({ kind, reason: 'orphan' });
-      expect(tree.exists(CFG)).toBe(survives);
-    },
-  );
+    expect(plan.steps[0]).toMatchObject({ kind: 'delete', reason: 'orphan' });
+    expect(tree.exists(CFG)).toBe(false);
+  });
 
-  it('файл продукта не трогается: маркера нет — сироты нет', () => {
-    const { tree } = materialized(asSeed);
+  it('правка руками не спасает артефакт от снятия, но названа в previous', () => {
+    // Правка — флаг, а не переход владения (`kb:BASER2-2`): файл остаётся
+    // нашим, снятие записи его убирает, и план говорит это ДО применения.
+    const { tree } = materialized();
+    tree.write(CFG, `${tree.read(CFG, 'utf-8') as string}правка: моя\n`);
 
-    const plan = computePlan({
-      tree,
-      declaration: redeclare(tree, []),
-      strategies: ALL_DOUBLES,
-    });
+    const plan = computePlan({ tree, declaration: redeclare(tree, []) });
 
-    expect(plan.status).toBe('converged');
-    expect(tree.exists(CFG)).toBe(true);
+    expect(plan.steps[0]).toMatchObject({ kind: 'delete', reason: 'orphan' });
+    expect(plan.steps[0].previous).toContain('правка: моя');
+
+    applyPlan(tree, plan);
+    expect(tree.exists(CFG)).toBe(false);
   });
 });
 
-describe('переход: сменился объявленный класс владения', () => {
-  it('переход в product — это шаг release, а не молчание', () => {
-    const { tree } = materialized(asExact);
+describe('переход: сменился объявленный src', () => {
+  it('претензия приводится к декларации, даже когда тело совпало', () => {
+    const { tree } = materialized();
 
     const plan = computePlan({
       tree,
-      declaration: redeclare(tree, [asSeed]),
-      strategies: ALL_DOUBLES,
-    });
-
-    // Расхождение маркера с декларацией — НЕ сходимость.
-    expect(plan.status).toBe('pending');
-    expect(plan.steps[0]).toMatchObject({
-      kind: 'release',
-      dest: CFG,
-      reason: 'reclaimed',
-      ownership: 'product',
-    });
-    expect(plan.notices).toEqual([]);
-
-    applyPlan(tree, plan);
-    expect(readOwnership(tree, CFG)).toBeNull();
-    expect(tree.read(CFG, 'utf-8')).toBe('setting: канон\n');
-  });
-
-  it('после снятия претензии файл остаётся продукту, а движок молчит извещением', () => {
-    const { tree } = materialized(asExact);
-    const declaration = redeclare(tree, [asSeed]);
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
-
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
-
-    expect(plan.status).toBe('converged');
-    expect(plan.notices[0]).toMatchObject({ kind: 'product-owned', dest: CFG });
-  });
-
-  it('переход между классами движка приводит маркер к новому классу', () => {
-    const { tree } = materialized(asExact);
-
-    const plan = computePlan({
-      tree,
-      declaration: redeclare(tree, [asMerge]),
-      strategies: ALL_DOUBLES,
+      declaration: redeclare(tree, [fromOther]),
     });
     applyPlan(tree, plan);
 
-    // Тело не менялось — событие именно в смене объявленного владения.
-    expect(plan.steps[0]).toMatchObject({
-      kind: 'update',
-      reason: 'reclaimed',
-      ownership: 'shared',
-    });
-    expect(readOwnership(tree, CFG)).toMatchObject({
-      mode: 'merge',
-      own: 'shared',
-    });
+    expect(plan.steps[0]).toMatchObject({ kind: 'update', reason: 'reclaimed' });
+    expect(readOwnership(tree, CFG)).toEqual({ src: 'other.yml' });
   });
 
-  it('смена класса поверх расхождения тела остаётся reclaimed — причина не врёт', () => {
-    const { tree } = materialized(asExact);
+  it('смена src поверх расхождения тела остаётся reclaimed — причина не врёт', () => {
+    const { tree } = materialized();
     tree.write(CFG, `${tree.read(CFG, 'utf-8') as string}правка руками\n`);
 
     const plan = computePlan({
       tree,
-      declaration: redeclare(tree, [asMerge]),
-      strategies: ALL_DOUBLES,
+      declaration: redeclare(tree, [fromOther]),
     });
 
-    // Тело действительно разошлось, но причина шага — смена объявленного
-    // владения, а не дрейф: она первична.
-    expect(plan.steps[0]).toMatchObject({
-      kind: 'update',
-      reason: 'reclaimed',
-      ownership: 'shared',
-    });
+    expect(plan.steps[0]).toMatchObject({ kind: 'update', reason: 'reclaimed' });
     expect(plan.steps[0].previous).toContain('правка руками');
   });
-
-  it('смена src при том же dest тоже обновляет претензию', () => {
-    const { tree } = materialized(asExact);
-
-    const plan = computePlan({
-      tree,
-      declaration: redeclare(tree, [{ ...asExact, src: 'other.yml' }]),
-      strategies: ALL_DOUBLES,
-    });
-    applyPlan(tree, plan);
-
-    expect(plan.steps[0]).toMatchObject({ reason: 'reclaimed' });
-    expect(readOwnership(tree, CFG)).toMatchObject({ src: 'other.yml' });
-  });
 });
 
-/**
- * Подтверждения требует ЛЮБОЕ действие, отнимающее у продукта права или
- * содержимое, и никогда — действие, права возвращающее (`kb:BASER-5`, «Сужение
- * владения до единоличного требует явного подтверждения»). Гейт строгости стоит
- * на стороне потребителя, а не на стороне удобства фундамента.
- */
-describe('переход: сужение владения shared → engine', () => {
-  it('без подтверждения — конфликт, а не шаг: у продукта отнимают право на вклад', () => {
-    const { tree } = materialized(asMerge);
-
-    const plan = computePlan({
-      tree,
-      declaration: redeclare(tree, [asExact]),
-      strategies: ALL_DOUBLES,
-    });
-
-    expect(plan.status).toBe('blocked');
-    expect(plan.steps).toEqual([]);
-    expect(plan.conflicts[0]).toMatchObject({
-      kind: 'ownership-narrowing',
-      dest: CFG,
-      ownership: 'engine',
-      detail: {
-        resolution: 'confirm',
-        fromOwnership: 'shared',
-        toOwnership: 'engine',
-      },
-    });
-  });
-
-  it('под поимённым подтверждением — проходит и забирает владение', () => {
-    const { tree } = materialized(asMerge);
-
-    const plan = computePlan({
-      tree,
-      declaration: redeclare(tree, [asExact]),
-      strategies: ALL_DOUBLES,
-      confirm: [CFG],
-    });
-    applyPlan(tree, plan);
-
-    expect(plan.steps[0]).toMatchObject({
-      kind: 'update',
-      reason: 'reclaimed',
-      ownership: 'engine',
-    });
-    expect(readOwnership(tree, CFG)).toMatchObject({ own: 'engine' });
-  });
-
-  it('обратное направление подтверждения не требует — движок отдаёт права', () => {
-    const { tree } = materialized(asExact);
-
-    const widening = computePlan({
-      tree,
-      declaration: redeclare(tree, [asMerge]),
-      strategies: ALL_DOUBLES,
-    });
-    applyPlan(tree, widening);
-    const releasing = computePlan({
-      tree,
-      declaration: redeclare(tree, [asSeed]),
-      strategies: ALL_DOUBLES,
-    });
-
-    expect(widening.status).toBe('pending');
-    expect(widening.conflicts).toEqual([]);
-    expect(releasing.conflicts).toEqual([]);
-    expect(releasing.steps[0]).toMatchObject({ kind: 'release' });
-  });
-});
-
-/**
- * ЦЕПОЧКА из ревью №3: `merge` → вклад продукта → `exact`. Вклад продукта
- * законен — это и есть смысл `shared`, — поэтому отнять его молча нельзя.
- */
-describe('цепочка merge → вклад продукта → exact', () => {
-  it('без подтверждения вклад цел, план заблокирован; под подтверждением уходит осознанно', () => {
-    const { tree } = materialized(asMerge);
-    tree.write(CFG, `${tree.read(CFG, 'utf-8') as string}вклад продукта\n`);
-
-    const declaration = redeclare(tree, [asExact]);
-    const blocked = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
-
-    expect(blocked.status).toBe('blocked');
-    expect(() => applyPlan(tree, blocked)).toThrow(
-      MaterializationConflictError,
-    );
-    expect(tree.read(CFG, 'utf-8')).toContain('вклад продукта');
-
-    const forced = computePlan({
-      tree,
-      declaration,
-      strategies: ALL_DOUBLES,
-      confirm: [CFG],
-    });
-    applyPlan(tree, forced);
-
-    expect(tree.read(CFG, 'utf-8')).not.toContain('вклад продукта');
-    expect(
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }).status,
-    ).toBe('converged');
-  });
-});
-
-/**
- * ЦЕПОЧКА из ревью: `exact` → `seed` → правка продукта → снятие записи.
- * Файл продукта обязан пережить её целиком — именно здесь оставленный маркер
- * приводил к молчаливому удалению чужих правок.
- */
-describe('цепочка exact → seed → правка → снятие записи', () => {
-  it('файл продукта переживает всю цепочку вместе с правками', () => {
-    const { tree } = materialized(asExact);
-
-    const asProduct = redeclare(tree, [asSeed]);
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration: asProduct, strategies: ALL_DOUBLES }),
-    );
-
-    // Правим файл, НЕ трогая шапку: продукт не обязан замечать служебную
-    // строку. Именно так оставленный маркер и приводил к потере правок.
-    tree.write(
-      CFG,
-      `${tree.read(CFG, 'utf-8') as string}правка продукта: да\n`,
-    );
-
-    const dropped = computePlan({
-      tree,
-      declaration: redeclare(tree, []),
-      strategies: ALL_DOUBLES,
-    });
-    applyPlan(tree, dropped);
-
-    expect(dropped.status).toBe('converged');
-    expect(tree.exists(CFG)).toBe(true);
-    expect(tree.read(CFG, 'utf-8')).toContain('правка продукта: да');
-    expect(readOwnership(tree, CFG)).toBeNull();
-  });
-});
-
-describe('переход: сменилась версия канона', () => {
-  it('тело то же — шага нет: версия это провенанс, а не основание', () => {
-    const { tree, declaration } = materialized(asExact, '1.0.0');
-
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: ALL_DOUBLES,
-      source: createTreeSource(tree, declaration.contentRoot, '1.1.0'),
-    });
-
-    expect(plan.status).toBe('converged');
-    expect(plan.steps).toEqual([]);
-    expect(readOwnership(tree, CFG)).toMatchObject({ version: '1.0.0' });
-  });
-
-  it('тело другое — шаг с честной причиной, версия обновляется вместе с телом', () => {
-    const { tree, declaration } = materialized(asExact, '1.0.0');
+describe('переход: шаблон уехал вперёд', () => {
+  it('артефакт перегенерируется целиком с причиной diverged', () => {
+    const { tree, declaration } = materialized();
     tree.write(
       `${declaration.contentRoot}/cfg.yml`,
-      'setting: канон следующей версии\n',
+      'setting: шаблон следующей версии\n',
     );
 
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: ALL_DOUBLES,
-      source: createTreeSource(tree, declaration.contentRoot, '1.1.0'),
-    });
+    const plan = computePlan({ tree, declaration });
     applyPlan(tree, plan);
 
     expect(plan.steps[0]).toMatchObject({ kind: 'update', reason: 'diverged' });
-    expect(readOwnership(tree, CFG)).toMatchObject({ version: '1.1.0' });
+    expect(tree.read(CFG, 'utf-8')).toContain('следующей версии');
   });
 
-  it('бамп версии не поднимает шума у соседних артефактов', () => {
+  it('разошёлся один артефакт — в плане ровно он, а не всё дерево', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [asExact, { src: 'other.yml', dest: 'other.yml', mode: 'exact' }],
+      frame: [entry, { src: 'other.yml', dest: 'other.yml' }],
       sources: SOURCES,
     });
-    const at = (version: string) =>
-      createTreeSource(tree, declaration.contentRoot, version);
-    applyPlan(
-      tree,
-      computePlan({
-        tree,
-        declaration,
-        strategies: ALL_DOUBLES,
-        source: at('1.0.0'),
-      }),
-    );
+    applyPlan(tree, computePlan({ tree, declaration }));
     tree.write(`${declaration.contentRoot}/cfg.yml`, 'setting: новое\n');
 
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: ALL_DOUBLES,
-      source: at('2.0.0'),
-    });
+    const plan = computePlan({ tree, declaration });
 
-    // Разошёлся один артефакт — в плане ровно он, а не всё дерево.
     expect(plan.steps.map((step) => step.dest)).toEqual([CFG]);
   });
 });
 
-describe('переход: dest существует, маркера нет', () => {
-  it('engine — отказ, снимается только поимённым подтверждением', () => {
-    const { tree, declaration } = createWorkspace({
-      frame: [asExact],
-      sources: SOURCES,
-      existing: { [CFG]: 'setting: руками\n' },
-    });
+/**
+ * ЦЕНТРАЛЬНЫЙ ПЕРЕХОД v2: артефакт правили руками.
+ *
+ * Правка нашего файла НЕ делает файл пользовательским и НЕ сводится с шаблоном:
+ * следующий прогон перегенерирует артефакт целиком (`kb:BASER2-2`). Названо это
+ * должно быть заранее — план несёт прежнее содержимое в `previous`.
+ */
+describe('переход: артефакт правили руками', () => {
+  it.each([
+    ['дописал строку', 'setting: шаблон\nмоя строка\n'],
+    ['переписал целиком', 'совсем другое\n'],
+    ['стёр содержимое', ''],
+  ])('%s → правка не выживает, сходимость перегенерацией', (_case, edit) => {
+    const { tree, declaration } = materialized();
+    const format = tree.read(CFG, 'utf-8') as string;
+    tree.write(CFG, `${format.split('\n')[0]}\n${edit}`);
 
-    expect(
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }).status,
-    ).toBe('blocked');
-    expect(
-      computePlan({
-        tree,
-        declaration,
-        strategies: ALL_DOUBLES,
-        confirm: [CFG],
-      }).steps[0],
-    ).toMatchObject({ reason: 'adopted' });
+    const plan = computePlan({ tree, declaration });
+    applyPlan(tree, plan);
+
+    expect(plan.steps[0]).toMatchObject({ kind: 'update', reason: 'diverged' });
+    expect(tree.read(CFG, 'utf-8')).toBe(format);
+    expect(computePlan({ tree, declaration }).status).toBe('converged');
   });
 
-  it('shared — взятие во владение с причиной adopted', () => {
-    const { tree, declaration } = createWorkspace({
-      frame: [asMerge],
-      sources: SOURCES,
-      existing: { [CFG]: 'setting: руками\n' },
-    });
+  it('правка вместе со снятым маркером — файл чужой, отказ вместо перезаписи', () => {
+    // Снял маркер — движок больше не может ДОКАЗАТЬ владение и не трогает файл
+    // молча: это тот же отказ, что и на изначально чужом файле.
+    const { tree, declaration } = materialized();
+    tree.write(CFG, 'setting: теперь моё\n');
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
-    expect(plan.steps[0]).toMatchObject({ reason: 'adopted' });
-  });
-
-  it('product — файл не трогается вовсе', () => {
-    const { tree, declaration } = createWorkspace({
-      frame: [asSeed],
-      sources: SOURCES,
-      existing: { [CFG]: 'setting: руками\n' },
-    });
-
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
-
-    expect(plan.status).toBe('converged');
-    expect(tree.read(CFG, 'utf-8')).toBe('setting: руками\n');
+    expect(plan.status).toBe('blocked');
+    expect(plan.conflicts[0]).toMatchObject({ kind: 'foreign-dest' });
+    expect(tree.read(CFG, 'utf-8')).toBe('setting: теперь моё\n');
   });
 });
 
-describe('переход: артефакт правили руками', () => {
-  it('engine — правка не сохраняется, сходимость перегенерацией', () => {
-    const { tree, declaration } = materialized(asExact);
-    tree.write(CFG, `${tree.read(CFG, 'utf-8') as string}правка: да\n`);
+describe('переход: dest существует, маркера нет', () => {
+  it('отказ, снимается только поимённым подтверждением', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [entry],
+      sources: SOURCES,
+      existing: { [CFG]: 'setting: руками\n' },
+    });
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
-    applyPlan(tree, plan);
-
-    expect(plan.steps[0]).toMatchObject({ reason: 'diverged' });
-    expect(tree.read(CFG, 'utf-8')).not.toContain('правка: да');
+    expect(computePlan({ tree, declaration }).status).toBe('blocked');
+    expect(
+      computePlan({ tree, declaration, confirm: [CFG] }).steps[0],
+    ).toMatchObject({ reason: 'adopted' });
   });
 
-  it('shared — вклад продукта переживает сходимость', () => {
-    const { tree, declaration } = materialized(asMerge);
-    tree.write(CFG, `${tree.read(CFG, 'utf-8') as string}правка: да\n`);
+  it('подтверждённое усыновление перегенерирует файл, а не сводит его', () => {
+    const { tree, declaration } = createWorkspace({
+      frame: [entry],
+      sources: SOURCES,
+      existing: { [CFG]: 'setting: руками\nещё: моё\n' },
+    });
 
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
+    applyPlan(tree, computePlan({ tree, declaration, confirm: [CFG] }));
 
-    expect(tree.read(CFG, 'utf-8')).toContain('правка: да');
-    expect(tree.read(CFG, 'utf-8')).toContain('setting: канон');
-  });
-
-  it('product — правка не трогается', () => {
-    const { tree, declaration } = materialized(asSeed);
-    tree.write(CFG, 'setting: моё\n');
-
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
-
-    expect(plan.status).toBe('converged');
-    expect(tree.read(CFG, 'utf-8')).toBe('setting: моё\n');
+    expect(tree.read(CFG, 'utf-8')).not.toContain('ещё: моё');
+    expect(tree.read(CFG, 'utf-8')).toContain('setting: шаблон');
   });
 });
 
 /**
  * Оптимизация скана не имеет права создавать зону, где движок не видит
- * СОБСТВЕННЫХ артефактов (`kb:BASER-5`, «У скана нет слепых зон над
- * собственными артефактами»): иначе снятая запись оставляет вечную сироту,
- * а план при этом рапортует сходимость. Тихий сирота хуже громкого конфликта.
+ * СОБСТВЕННЫХ артефактов: иначе снятая запись оставляет вечную сироту, а план
+ * при этом рапортует сходимость. Тихий сирота хуже громкого конфликта.
  */
 describe('переход: артефакт объявлен в каталоге сборки', () => {
-  const inDist: FrameEntry = {
-    src: 'cfg.yml',
-    dest: 'dist/x.yml',
-    mode: 'exact',
-  };
+  const inDist: FrameEntry = { src: 'cfg.yml', dest: 'dist/x.yml' };
 
   it('сирота в каталоге сборки обнаружена, а не потеряна навсегда', () => {
     const { tree } = materialized(inDist);
 
-    const plan = computePlan({
-      tree,
-      declaration: redeclare(tree, []),
-      strategies: ALL_DOUBLES,
-    });
+    const plan = computePlan({ tree, declaration: redeclare(tree, []) });
     applyPlan(tree, plan);
 
     expect(plan.status).toBe('pending');
@@ -514,30 +231,18 @@ describe('переход: артефакт объявлен в каталоге 
   });
 
   it('объявленный каталог сканируется даже под явным пропуском', () => {
-    const kept: FrameEntry = {
-      src: 'cfg.yml',
-      dest: 'vendor/kept.yml',
-      mode: 'exact',
-    };
-    const dropped: FrameEntry = {
-      src: 'cfg.yml',
-      dest: 'vendor/dropped.yml',
-      mode: 'exact',
-    };
+    const kept: FrameEntry = { src: 'cfg.yml', dest: 'vendor/kept.yml' };
+    const dropped: FrameEntry = { src: 'cfg.yml', dest: 'vendor/dropped.yml' };
     const { tree, declaration } = createWorkspace({
       frame: [kept, dropped],
       sources: SOURCES,
     });
     const scan = { ignore: ['vendor'] };
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES, scan }),
-    );
+    applyPlan(tree, computePlan({ tree, declaration, scan }));
 
     const plan = computePlan({
       tree,
       declaration: redeclare(tree, [kept]),
-      strategies: ALL_DOUBLES,
       scan,
     });
 
@@ -550,57 +255,46 @@ describe('переход: артефакт объявлен в каталоге 
 });
 
 /**
- * Согласие не масштабируется само (`kb:BASER-5`, «Подтверждение адресно, а не
- * глобально»): подтверждение одного действия никогда не подтверждает соседнее,
- * даже однотипное. Зонд ревью: подтверждение ради `b.yml` не должно усыновлять
- * чужие `a.yml` и `c.yml`.
+ * Согласие не масштабируется само: подтверждение одного действия никогда не
+ * подтверждает соседнее, даже однотипное.
  */
 describe('переход: подтверждение дано ради одного артефакта', () => {
-  const tighten = () => {
-    const { tree, declaration } = createWorkspace({
-      frame: [{ src: 'cfg.yml', dest: 'b.yml', mode: 'merge' }],
+  const claimForeign = () => {
+    const fixture = createWorkspace({
+      frame: [
+        { src: 'cfg.yml', dest: 'a.yml' },
+        { src: 'cfg.yml', dest: 'b.yml' },
+        { src: 'cfg.yml', dest: 'c.yml' },
+      ],
       sources: SOURCES,
-      existing: { 'a.yml': 'моё: a\n', 'c.yml': 'моё: c\n' },
+      existing: {
+        'a.yml': 'моё: a\n',
+        'b.yml': 'моё: b\n',
+        'c.yml': 'моё: c\n',
+      },
     });
-    applyPlan(
-      tree,
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }),
-    );
-
-    return {
-      tree,
-      declaration: redeclare(tree, [
-        { src: 'cfg.yml', dest: 'a.yml', mode: 'exact' },
-        { src: 'cfg.yml', dest: 'b.yml', mode: 'exact' },
-        { src: 'cfg.yml', dest: 'c.yml', mode: 'exact' },
-      ]),
-    };
+    return fixture;
   };
 
   it('без подтверждения — три отказа, ни одного шага', () => {
-    const { tree, declaration } = tighten();
+    const { tree, declaration } = claimForeign();
 
-    const plan = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const plan = computePlan({ tree, declaration });
 
     expect(plan.status).toBe('blocked');
     expect(
       plan.conflicts.map((conflict) => [conflict.dest, conflict.kind]),
     ).toEqual([
       ['a.yml', 'foreign-dest'],
-      ['b.yml', 'ownership-narrowing'],
+      ['b.yml', 'foreign-dest'],
       ['c.yml', 'foreign-dest'],
     ]);
   });
 
   it('подтверждение по одному dest НЕ снимает отказ с соседних однотипных', () => {
-    const { tree, declaration } = tighten();
+    const { tree, declaration } = claimForeign();
 
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: ALL_DOUBLES,
-      confirm: ['b.yml'],
-    });
+    const plan = computePlan({ tree, declaration, confirm: ['b.yml'] });
 
     expect(plan.steps.map((step) => step.dest)).toEqual(['b.yml']);
     expect(plan.conflicts.map((conflict) => conflict.dest)).toEqual([
@@ -609,19 +303,18 @@ describe('переход: подтверждение дано ради одно�
     ]);
     expect(plan.status).toBe('blocked');
 
-    // План неприменим целиком — файлы продукта не трогаются даже за компанию.
+    // План неприменим целиком — соседние файлы не трогаются даже за компанию.
     expect(() => applyPlan(tree, plan)).toThrow(MaterializationConflictError);
     expect(tree.read('a.yml', 'utf-8')).toBe('моё: a\n');
     expect(tree.read('c.yml', 'utf-8')).toBe('моё: c\n');
   });
 
   it('перечислив все три, потребитель получает ровно то, на что согласился', () => {
-    const { tree, declaration } = tighten();
+    const { tree, declaration } = claimForeign();
 
     const plan = computePlan({
       tree,
       declaration,
-      strategies: ALL_DOUBLES,
       confirm: ['a.yml', 'b.yml', 'c.yml'],
     });
     applyPlan(tree, plan);
@@ -629,19 +322,18 @@ describe('переход: подтверждение дано ради одно�
     expect(plan.status).toBe('pending');
     expect(plan.steps.map((step) => [step.dest, step.reason])).toEqual([
       ['a.yml', 'adopted'],
-      ['b.yml', 'reclaimed'],
+      ['b.yml', 'adopted'],
       ['c.yml', 'adopted'],
     ]);
   });
 
   it('лишнее подтверждение названо извещением, а не проглочено', () => {
-    const { tree, declaration } = tighten();
+    const { tree, declaration } = claimForeign();
 
     const plan = computePlan({
       tree,
       declaration,
-      strategies: ALL_DOUBLES,
-      confirm: ['b.yml', 'zzz.yml'],
+      confirm: ['a.yml', 'b.yml', 'c.yml', 'zzz.yml'],
     });
 
     expect(plan.notices).toEqual([
@@ -654,14 +346,9 @@ describe('переход: подтверждение дано ради одно�
   });
 
   it('подтверждение там, где отказа нет, тоже названо', () => {
-    const { tree, declaration } = materialized(asExact);
+    const { tree, declaration } = materialized();
 
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: ALL_DOUBLES,
-      confirm: [CFG],
-    });
+    const plan = computePlan({ tree, declaration, confirm: [CFG] });
 
     expect(plan.status).toBe('converged');
     expect(plan.notices[0]).toMatchObject({
@@ -675,19 +362,18 @@ describe('переход: подтверждение дано ради одно�
 /**
  * Атомарность кончается на границе дерева: сброс на диск делает раннер, и его
  * сбой — уже вне журнала отката. Состояние, которого не бывает на реальной ФС,
- * обязано ловиться ПЛАНОМ (`kb:BASER-5`).
+ * обязано ловиться ПЛАНОМ.
  */
 describe('переход: декларация добавляет dest внутрь пути другого dest', () => {
   it('план блокируется, а не рапортует сходимость несуществующему состоянию', () => {
-    const { tree } = materialized(asExact);
+    const { tree } = materialized();
 
     const plan = computePlan({
       tree,
       declaration: redeclare(tree, [
-        asExact,
-        { src: 'cfg.yml', dest: `${CFG}/inner.yml`, mode: 'exact' },
+        entry,
+        { src: 'cfg.yml', dest: `${CFG}/inner.yml` },
       ]),
-      strategies: ALL_DOUBLES,
     });
 
     expect(plan.status).toBe('blocked');
@@ -702,38 +388,29 @@ describe('переход: декларация добавляет dest внут�
 
 describe('переход: прогон повторён', () => {
   it('план без шагов — идемпотентность', () => {
-    const { tree, declaration } = materialized(asExact, '1.0.0');
+    const { tree, declaration } = materialized();
 
-    const plan = computePlan({
-      tree,
-      declaration,
-      strategies: ALL_DOUBLES,
-      source: createTreeSource(tree, declaration.contentRoot, '1.0.0'),
-    });
-
-    expect(plan.status).toBe('converged');
+    expect(computePlan({ tree, declaration }).status).toBe('converged');
   });
 
   it('после сбоя дерево в исходном состоянии, а план тот же', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [asExact, { src: 'other.yml', dest: 'other.yml', mode: 'exact' }],
+      frame: [entry, { src: 'other.yml', dest: 'other.yml' }],
       sources: SOURCES,
     });
     const before = snapshotTree(tree);
 
-    const first = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const first = computePlan({ tree, declaration });
     expect(() => applyPlan(treeFailingOnWrite(tree, 2), first)).toThrow(
       MaterializationApplyError,
     );
 
-    const retry = computePlan({ tree, declaration, strategies: ALL_DOUBLES });
+    const retry = computePlan({ tree, declaration });
 
     expect(snapshotTree(tree)).toEqual(before);
     expect(retry.steps).toEqual(first.steps);
 
     applyPlan(tree, retry);
-    expect(
-      computePlan({ tree, declaration, strategies: ALL_DOUBLES }).status,
-    ).toBe('converged');
+    expect(computePlan({ tree, declaration }).status).toBe('converged');
   });
 });

@@ -11,7 +11,13 @@
  * Версия поднимается при НЕСОВМЕСТИМОМ изменении формы (удалено/переименовано
  * поле, изменился смысл кода); добавление нового кода или необязательного поля
  * версию не поднимает.
+ *
+ * **2** — снят трёхсторонний мердж (`tasker:BASER2-3`): из вывода ушли шаг
+ * `release`, конфликты `ownership-narrowing` · `unknown-mode` · `strategy`,
+ * извещения `product-owned` · `baseline-missing` и поля `mode` · `ownership`
+ * шагов, конфликтов и извещений. Форма несовместима с 1 — потребитель,
+ * ветвившийся по снятым кодам, обязан это увидеть, а не молча промахнуться.
  */
-export const OUTPUT_SCHEMA_VERSION = 1;
+export const OUTPUT_SCHEMA_VERSION = 2;
 
 export type OutputSchemaVersion = typeof OUTPUT_SCHEMA_VERSION;

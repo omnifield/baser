@@ -1,31 +1,27 @@
 /**
  * `@omnifield/baser-materialize` — ядро материализации baser.
  *
- * Реализует контракт `kb:BASER-5`: декларация → план → применение → владение.
- * Режимы (`exact` · `merge` · `seed`) реализует зона `@omnifield/baser-modes`
- * против интерфейса стратегии, опубликованного здесь (`./lib/strategy.js`).
+ * Декларация → план → применение → владение (`kb:BASER2-2`).
+ *
+ * Единственное поведение движка — **перегенерация артефакта целиком из
+ * шаблона** (модель A). Режимов материализации нет; сведения исходной,
+ * пользовательской и новой версии файла нет ни под каким флагом; владение
+ * продукта выражается форком источника — снаружи движка.
  */
 
 export {
   DECLARATION_BLOCK,
   DEFAULT_DECLARATION_PATH,
-  MATERIALIZE_MODES,
-  isMaterializeMode,
   parseDeclaration,
   readDeclaration,
 } from './lib/declaration.js';
 export type {
   Declaration,
   FrameEntry,
-  MaterializeMode,
   ReadDeclarationOptions,
 } from './lib/declaration.js';
 
-export {
-  BaserMaterializeError,
-  DeclarationError,
-  StrategyRegistryError,
-} from './lib/errors.js';
+export { BaserMaterializeError, DeclarationError } from './lib/errors.js';
 
 export { joinRepoPath, normalizeRepoPath } from './lib/paths.js';
 
@@ -42,21 +38,12 @@ export {
 } from './lib/ownership.js';
 export type {
   MarkerFormat,
-  OwnershipClass,
   OwnershipRecord,
   ScanOptions,
 } from './lib/ownership.js';
 
-export { EMPTY_BASELINE, createTreeSource } from './lib/source.js';
-export type { CanonBaseline, CanonSource } from './lib/source.js';
-
-export { createStrategyRegistry, toStrategyRegistry } from './lib/strategy.js';
-export type {
-  MaterializationStrategy,
-  StrategyDecision,
-  StrategyInput,
-  StrategyRegistry,
-} from './lib/strategy.js';
+export { createTreeSource } from './lib/source.js';
+export type { CanonSource } from './lib/source.js';
 
 export { computePlan, describePlan, isApplicable } from './lib/plan.js';
 export type {

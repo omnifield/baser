@@ -1,8 +1,11 @@
 /**
  * Модель владения.
  *
- * Единица владения — файл `dest` (`kb:BASER-5`; осознанное упрощение против
- * пофайлового `managedFields` в Kubernetes SSA).
+ * Владелец у объявленного артефакта ровно один — движок: **файл наш и
+ * перегенерируется целиком из шаблона** (`kb:BASER2-2`, модель A). Классов
+ * владения (`engine`/`shared`/`product`) больше нет: они обслуживали режимы и
+ * сведение версий, а владение продукта выражается ФОРКОМ ИСТОЧНИКА — снаружи
+ * движка и не пофайлово.
  *
  * Принадлежность НЕ хранится реестром: реестр рассинхронизируется сам и назван
  * анти-паттерном (`kb:BASER-3`). Она ВЫВОДИТСЯ ИЗ СОДЕРЖИМОГО — по маркеру,
@@ -10,39 +13,23 @@
  * выводятся сироты: файл с нашим маркером, которого больше нет в декларации,
  * потерял объявление.
  *
+ * БАЗЫ ДЛЯ СВЕДЕНИЯ ВЕРСИЙ ЗДЕСЬ НЕТ. Версия канона хранилась в маркере ради
+ * восстановления базы трёхстороннего мерджа; мерджа нет — хранить нечего.
+ * Маркер утверждает ровно одно: «этот артефакт материализован движком из такого
+ * `src`».
+ *
  * Гача из канона: сама магическая строка не должна лежать в исходниках целиком,
  * иначе исходник опознается как «свой» и будет снят как сирота. Поэтому магия
  * собирается на рантайме.
  */
 
 import type { Tree } from '@nx/devkit';
-import type { MaterializeMode } from './declaration.js';
-import { isMaterializeMode } from './declaration.js';
 import { joinRepoPath } from './paths.js';
-
-/**
- * Класс владения `dest`. Объявляется стратегией режима, а не выводится
- * движком: движок лишь ЗАЩИЩАЕТ инвариант, кто бы ни был владельцем.
- */
-export type OwnershipClass = 'engine' | 'shared' | 'product';
 
 /** Запись о владении, вычитанная из артефакта. */
 export interface OwnershipRecord {
   /** Запись `frame.src`, из которой артефакт материализован. */
   readonly src: string;
-  readonly mode: MaterializeMode;
-  readonly own: OwnershipClass;
-  /**
-   * ВЕРСИЯ КАНОНА, из которой артефакт материализован (`kb:BASER-5`, «база
-   * трёхстороннего мерджа»). Это единственное состояние, которое движок хранит,
-   * и хранит он его В САМОМ АРТЕФАКТЕ: отдельный файл состояния был бы тем
-   * хранимым реестром, который канон называет анти-паттерном.
-   *
-   * По ней раннер восстанавливает базу мерджа через порт `CanonBaseline`
-   * (`source.ts`). `undefined` — версия неизвестна: источник её не назвал либо
-   * артефакт помечен движком более старой версии.
-   */
-  readonly version?: string;
 }
 
 /** Идентификатор движка в маркере. Собирается, а не пишется литералом. */
@@ -56,12 +43,7 @@ export const JSON_MARKER_KEY = '//';
 
 /** Текст маркера: магия + человекочитаемая подсказка + машинная полезная нагрузка. */
 export function markerText(record: OwnershipRecord): string {
-  const payload = JSON.stringify({
-    src: record.src,
-    mode: record.mode,
-    own: record.own,
-    ...(record.version === undefined ? {} : { version: record.version }),
-  });
+  const payload = JSON.stringify({ src: record.src });
   return `${MARKER_MAGIC} ${MARKER_HINT} ~~ ${payload}`;
 }
 
@@ -89,27 +71,16 @@ export function parseMarkerText(line: string): OwnershipRecord | null {
     return null;
   }
 
-  const { src, mode, own, version } = payload as Record<string, unknown>;
-  if (
-    typeof src !== 'string' ||
-    !isMaterializeMode(mode) ||
-    !isOwnershipClass(own)
-  ) {
+  const { src } = payload as Record<string, unknown>;
+  if (typeof src !== 'string') {
     return null;
   }
 
-  // Версия — необязательная часть нагрузки: маркер без неё остаётся валидным
-  // (артефакт материализован источником, который версию не назвал).
-  return {
-    src,
-    mode,
-    own,
-    ...(typeof version === 'string' ? { version } : {}),
-  };
-}
-
-function isOwnershipClass(value: unknown): value is OwnershipClass {
-  return value === 'engine' || value === 'shared' || value === 'product';
+  // Поля снятой модели (`mode`, `own`, `version`) в нагрузке ИГНОРИРУЮТСЯ, а не
+  // отвергают маркер: артефакт, помеченный движком до выпила, обязан остаться
+  // опознаваемым — иначе он превратился бы в вечную сироту у всех потребителей,
+  // а его претензия — в невидимую.
+  return { src };
 }
 
 /**

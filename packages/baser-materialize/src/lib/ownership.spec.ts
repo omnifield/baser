@@ -9,11 +9,7 @@ import {
 } from './ownership.js';
 import type { OwnershipRecord } from './ownership.js';
 
-const record: OwnershipRecord = {
-  src: 'ci/build.yml',
-  mode: 'exact',
-  own: 'engine',
-};
+const record: OwnershipRecord = { src: 'ci/build.yml' };
 
 function format(dest: string) {
   const found = markerFormatFor(dest);
