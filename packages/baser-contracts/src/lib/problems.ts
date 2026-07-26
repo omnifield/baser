@@ -62,7 +62,15 @@ export type FormProblemCode =
   /** Два обвеса объявили одну и ту же идентичность. */
   | 'duplicate-source-id'
   /** Один и тот же пакет перечислен в конфиге дважды. */
-  | 'duplicate-consumer-entry';
+  | 'duplicate-consumer-entry'
+  /** Шаблон использует экранирующую форму вывода — кавычка станет `&#34;`. */
+  | 'template-html-escape'
+  /** Шаблон объявлен рендеримым, но ни одного тега подстановки в нём нет. */
+  | 'template-not-ejs'
+  /** Шаблон тянет содержимое мимо объявленной раскладки. */
+  | 'template-include'
+  /** Теги подстановки не сходятся — шаблон оборван. */
+  | 'template-unbalanced';
 
 export interface FormProblem {
   readonly code: FormProblemCode;

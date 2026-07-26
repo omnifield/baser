@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONSUMER_CONFIG_PATH, parseConsumerConfig } from './config.js';
 import { codesOf, consumerConfig } from './form.fixture.js';
+import { FORM_VERSION, MIN_FORM_VERSION } from './version.js';
 
 function refusals(patch: Record<string, unknown>) {
   const result = parseConsumerConfig(consumerConfig(patch));
@@ -41,6 +42,45 @@ describe('конфиг потребителя', () => {
         settings: {},
       });
     }
+  });
+
+  describe('версия формы', () => {
+    it('НЕОБЯЗАТЕЛЬНА: её отсутствие означает первую форму', () => {
+      // Конфиг пишет пользователь, и требовать от него поле, которого он не
+      // понимает, значило бы завести вопрос там, где вопросов не бывает.
+      const result = parseConsumerConfig(consumerConfig());
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.formVersion).toBe(MIN_FORM_VERSION);
+      }
+    });
+
+    it('принимает версию, которую проставила дверь', () => {
+      const result = parseConsumerConfig(
+        consumerConfig({ formVersion: FORM_VERSION }),
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.formVersion).toBe(FORM_VERSION);
+      }
+    });
+
+    it('отказывает конфигу из будущего, а не разбирает его наполовину', () => {
+      const problems = refusals({ formVersion: FORM_VERSION + 1 });
+      expect(codesOf(problems)).toEqual([
+        `form-version-unsupported @ ${CONSUMER_CONFIG_PATH}.formVersion`,
+      ]);
+      expect(problems[0].message).toContain('обнови baser');
+    });
+
+    it('не принимает версию строкой или дробью', () => {
+      expect(codesOf(refusals({ formVersion: '1' }))).toEqual([
+        `form-version-invalid @ ${CONSUMER_CONFIG_PATH}.formVersion`,
+      ]);
+      expect(codesOf(refusals({ formVersion: 0 }))).toEqual([
+        `form-version-invalid @ ${CONSUMER_CONFIG_PATH}.formVersion`,
+      ]);
+    });
   });
 
   it('перечень источников — список с первого дня, а не единственный корень', () => {

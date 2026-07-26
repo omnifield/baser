@@ -26,8 +26,11 @@ import {
   type SourceDeclaration,
 } from './declaration.js';
 import { declarationBlock } from './form.fixture.js';
+import { describeProblems } from './problems.js';
 import { checkSingleProvider } from './providers.js';
 import { resolveSettings, type ComputeDefault } from './settings.js';
+import { checkTemplate } from './template.js';
+import { FORM_VERSION } from './version.js';
 import type { SettingValue } from './values.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -110,7 +113,20 @@ function materialize(
       join(example, decl.source.contentRoot, entry.src),
       'utf-8',
     );
-    out[entry.dest] = entry.render ? render(template, values) : template;
+    if (!entry.render) {
+      // Не шаблон, а содержимое: кладётся байт в байт и языком формы не меряется.
+      out[entry.dest] = template;
+      continue;
+    }
+    // Дверь обязана спросить форму, на том ли языке написан шаблон, ДО рендера:
+    // чужой язык отрендерился бы сам в себя и лёг к потребителю молча.
+    const problems = checkTemplate(template, `${entry.src} → ${entry.dest}`);
+    if (problems.length) {
+      throw new Error(
+        `шаблон не на языке формы:\n${describeProblems(problems)}`,
+      );
+    }
+    out[entry.dest] = render(template, values);
   }
   return out;
 }
@@ -249,6 +265,46 @@ describe('проба отказов: каждый случай называет�
     if (broken.ok) return;
     expect(broken.problems[0].code).toBe('setting-no-default');
     expect(broken.problems[0].message).toContain('вопросов у двери не бывает');
+  });
+
+  it('ТОТ ЖЕ ОБВЕС, ШАБЛОН НА ЧУЖОМ ЯЗЫКЕ', () => {
+    // Берём живой шаблон девбокса и переписываем подстановки на Handlebars.
+    // EJS отрендерил бы такое сам в себя: артефакт лёг бы к потребителю с
+    // неподставленным "{{ name }}" и ничем бы себя не выдал.
+    const real = readFileSync(
+      join(example, 'template/devcontainer.json.ejs'),
+      'utf-8',
+    );
+    const foreign = real
+      .replace(/<%[^]*?%>/g, '')
+      .replace('"name": ""', '"name": "{{ name }}"');
+
+    const problems = checkTemplate(foreign, 'подделка → devcontainer.json');
+    expect(problems.map((problem) => problem.code)).toEqual([
+      'template-not-ejs',
+    ]);
+    expect(problems[0].message).toContain('EJS');
+  });
+
+  it('тот же обвес с экранирующей подстановкой', () => {
+    const real = readFileSync(
+      join(example, 'template/devcontainer.json.ejs'),
+      'utf-8',
+    );
+    const escaping = real.replace('<%- name %>', '<%= name %>');
+
+    const problems = checkTemplate(escaping, 'подделка → devcontainer.json');
+    expect(problems.map((problem) => problem.code)).toEqual([
+      'template-html-escape',
+    ]);
+  });
+
+  it('версию конфига проставила дверь, пользователь её не вводил', () => {
+    const parsed = parseConsumerConfig(config);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value.formVersion).toBe(FORM_VERSION);
+    }
   });
 });
 

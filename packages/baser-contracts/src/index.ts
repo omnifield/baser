@@ -62,6 +62,8 @@ export type {
   SettingResolver,
 } from './lib/settings.js';
 
+export { checkTemplate } from './lib/template.js';
+
 export { checkSingleProvider } from './lib/providers.js';
 export type {
   ArtifactOwner,

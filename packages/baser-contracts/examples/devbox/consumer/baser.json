@@ -1,4 +1,5 @@
 {
+  "formVersion": 1,
   "sources": [
     {
       "use": "@omnifield/baser-devbox",

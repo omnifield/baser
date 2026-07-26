@@ -17,6 +17,7 @@ import { byBytes } from './paths.js';
 import { ProblemLog, type FormResult } from './problems.js';
 import { describeValue, type SettingValue } from './values.js';
 import { isPlainObject } from './declaration.js';
+import { FORM_VERSION, MIN_FORM_VERSION } from './version.js';
 
 /** Где конфиг лежит по умолчанию. Читает его дверь, не движок. */
 export const CONSUMER_CONFIG_PATH = 'baser.json';
@@ -32,6 +33,21 @@ export interface ConsumerSourceEntry {
 
 export interface ConsumerConfig {
   /**
+   * Версия формы, по которой конфиг написан. НЕОБЯЗАТЕЛЬНА в файле: пишет её
+   * дверь при создании конфига, отсутствие означает первую форму.
+   *
+   * Конфиги пользователей — такой же прод, как выпущенные обвесы, и молчаливая
+   * поломка там будет нашей виной, а не чужой. Разница только в том, кто файл
+   * пишет, и она не отменяет поломку, а лишь меняет виноватого.
+   *
+   * Номер тот же, что у объявления обвеса (`FORM_VERSION`), потому что форма
+   * одна: конфиг и объявление склеиваются дверью в одну декларацию, и версионировать
+   * половинки по отдельности значило бы обещать совместимость, которой нет.
+   *
+   * Пользователь при этом не вводит ничего — вопросов у двери не бывает.
+   */
+  readonly formVersion: number;
+  /**
    * СПИСОК с первого дня, а не единственный корень: несколько поставщиков в
    * одном репозитории — норма по построению (`kb:BASER2-2` §2). Форма, которую
    * для этого пришлось бы «расширять», сломала бы обе соседние зоны.
@@ -39,7 +55,7 @@ export interface ConsumerConfig {
   readonly sources: readonly ConsumerSourceEntry[];
 }
 
-const CONFIG_FIELDS = new Set(['$schema', 'sources']);
+const CONFIG_FIELDS = new Set(['$schema', 'formVersion', 'sources']);
 const ENTRY_FIELDS = new Set(['use', 'presets', 'settings']);
 
 /** Разбирает уже прочитанный `baser.json` (значение, а не текст). */
@@ -63,6 +79,8 @@ export function parseConsumerConfig(
       );
     }
   }
+
+  const formVersion = parseFormVersion(log, value['formVersion'], at);
 
   const raw = value['sources'];
   if (raw === undefined) {
@@ -104,7 +122,39 @@ export function parseConsumerConfig(
     sources.push(entry);
   });
 
-  return log.result(() => ({ sources }));
+  return log.result(() => ({ formVersion, sources }));
+}
+
+/**
+ * Версия формы конфига — необязательная.
+ *
+ * Отсутствие означает ПЕРВУЮ форму, а не отказ: конфиг пишет пользователь, и
+ * требовать от него поле, которого он не понимает, значило бы завести вопрос там,
+ * где вопросов не бывает. Проставляет его дверь при создании файла — миграционный
+ * крючок появляется, а пользователь ничего не вводит.
+ */
+function parseFormVersion(log: ProblemLog, value: unknown, at: string): number {
+  const field = `${at}.formVersion`;
+
+  if (value === undefined) {
+    return MIN_FORM_VERSION;
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    log.add(
+      'form-version-invalid',
+      field,
+      `ожидалось целое число ≥ 1, получено ${describeValue(value)}`,
+    );
+    return MIN_FORM_VERSION;
+  }
+  if (value > FORM_VERSION) {
+    log.add(
+      'form-version-unsupported',
+      field,
+      `конфиг написан по форме ${value}, этот baser понимает по ${FORM_VERSION} — обнови baser`,
+    );
+  }
+  return value;
 }
 
 function parseEntry(
