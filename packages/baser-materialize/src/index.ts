@@ -7,23 +7,24 @@
  * шаблона** (модель A). Режимов материализации нет; сведения исходной,
  * пользовательской и новой версии файла нет ни под каким флагом; владение
  * продукта выражается форком источника — снаружи движка.
+ *
+ * **Вход подаётся готовой структурой.** Движок не читает ни манифестов, ни
+ * конфигов и не знает, из каких файлов их собрали: настоящая декларация
+ * размазана по объявлению обвеса и конфигу потребителя, и склеивает их дверь
+ * (`packages/baser-contracts/README.md`). Файловой системы движок не касается
+ * вовсе — он работает с виртуальным деревом Nx.
  */
 
-export {
-  DECLARATION_BLOCK,
-  DEFAULT_DECLARATION_PATH,
-  parseDeclaration,
-  readDeclaration,
-} from './lib/declaration.js';
 export type {
   Declaration,
-  FrameEntry,
-  ReadDeclarationOptions,
+  LayoutEntry,
+  MaterializationSource,
 } from './lib/declaration.js';
 
 export { BaserMaterializeError, DeclarationError } from './lib/errors.js';
 
-export { joinRepoPath, normalizeRepoPath } from './lib/paths.js';
+export { joinRepoPath, normalizeRepoPath, toRepoPath } from './lib/paths.js';
+export type { RepoPath, RepoPathProblem } from './lib/paths.js';
 
 export {
   DEFAULT_SCAN_IGNORE,

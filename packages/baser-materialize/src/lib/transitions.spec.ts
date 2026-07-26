@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { FrameEntry } from './declaration.js';
+import type { LayoutEntry } from './declaration.js';
 import { computePlan } from './plan.js';
 import {
   applyPlan,
@@ -29,17 +29,17 @@ import {
 
 const CFG = 'cfg.yml';
 
-const entry: FrameEntry = { src: 'cfg.yml', dest: CFG };
-const fromOther: FrameEntry = { src: 'other.yml', dest: CFG };
+const entry: LayoutEntry = { src: 'cfg.yml', dest: CFG };
+const fromOther: LayoutEntry = { src: 'other.yml', dest: CFG };
 
 const SOURCES = {
   'cfg.yml': 'setting: шаблон\n',
   'other.yml': 'setting: шаблон\n',
 };
 
-/** Материализует один `frame` и возвращает рабочее дерево. */
-function materialized(frameEntry: FrameEntry = entry) {
-  const fixture = createWorkspace({ frame: [frameEntry], sources: SOURCES });
+/** Материализует одну запись раскладки и возвращает рабочее дерево. */
+function materialized(only: LayoutEntry = entry) {
+  const fixture = createWorkspace({ layout: [only], sources: SOURCES });
   applyPlan(
     fixture.tree,
     computePlan({ tree: fixture.tree, declaration: fixture.declaration }),
@@ -58,9 +58,9 @@ describe('переход: запись появилась в frame', () => {
 
 describe('переход: запись убрана из frame', () => {
   it('артефакт снимается — других исходов у выпиленной записи нет', () => {
-    const { tree } = materialized();
+    const { tree, declaration } = materialized();
 
-    const plan = computePlan({ tree, declaration: redeclare(tree, []) });
+    const plan = computePlan({ tree, declaration: redeclare(declaration, []) });
     applyPlan(tree, plan);
 
     expect(plan.steps[0]).toMatchObject({ kind: 'delete', reason: 'orphan' });
@@ -70,10 +70,10 @@ describe('переход: запись убрана из frame', () => {
   it('правка руками не спасает артефакт от снятия, но названа в previous', () => {
     // Правка — флаг, а не переход владения (`kb:BASER2-2`): файл остаётся
     // нашим, снятие записи его убирает, и план говорит это ДО применения.
-    const { tree } = materialized();
+    const { tree, declaration } = materialized();
     tree.write(CFG, `${tree.read(CFG, 'utf-8') as string}правка: моя\n`);
 
-    const plan = computePlan({ tree, declaration: redeclare(tree, []) });
+    const plan = computePlan({ tree, declaration: redeclare(declaration, []) });
 
     expect(plan.steps[0]).toMatchObject({ kind: 'delete', reason: 'orphan' });
     expect(plan.steps[0].previous).toContain('правка: моя');
@@ -85,11 +85,11 @@ describe('переход: запись убрана из frame', () => {
 
 describe('переход: сменился объявленный src', () => {
   it('претензия приводится к декларации, даже когда тело совпало', () => {
-    const { tree } = materialized();
+    const { tree, declaration } = materialized();
 
     const plan = computePlan({
       tree,
-      declaration: redeclare(tree, [fromOther]),
+      declaration: redeclare(declaration, [fromOther]),
     });
     applyPlan(tree, plan);
 
@@ -98,12 +98,12 @@ describe('переход: сменился объявленный src', () => {
   });
 
   it('смена src поверх расхождения тела остаётся reclaimed — причина не врёт', () => {
-    const { tree } = materialized();
+    const { tree, declaration } = materialized();
     tree.write(CFG, `${tree.read(CFG, 'utf-8') as string}правка руками\n`);
 
     const plan = computePlan({
       tree,
-      declaration: redeclare(tree, [fromOther]),
+      declaration: redeclare(declaration, [fromOther]),
     });
 
     expect(plan.steps[0]).toMatchObject({ kind: 'update', reason: 'reclaimed' });
@@ -115,7 +115,7 @@ describe('переход: шаблон уехал вперёд', () => {
   it('артефакт перегенерируется целиком с причиной diverged', () => {
     const { tree, declaration } = materialized();
     tree.write(
-      `${declaration.contentRoot}/cfg.yml`,
+      `${declaration.source.contentRoot}/cfg.yml`,
       'setting: шаблон следующей версии\n',
     );
 
@@ -128,11 +128,11 @@ describe('переход: шаблон уехал вперёд', () => {
 
   it('разошёлся один артефакт — в плане ровно он, а не всё дерево', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [entry, { src: 'other.yml', dest: 'other.yml' }],
+      layout: [entry, { src: 'other.yml', dest: 'other.yml' }],
       sources: SOURCES,
     });
     applyPlan(tree, computePlan({ tree, declaration }));
-    tree.write(`${declaration.contentRoot}/cfg.yml`, 'setting: новое\n');
+    tree.write(`${declaration.source.contentRoot}/cfg.yml`, 'setting: новое\n');
 
     const plan = computePlan({ tree, declaration });
 
@@ -182,7 +182,7 @@ describe('переход: артефакт правили руками', () => {
 describe('переход: dest существует, маркера нет', () => {
   it('отказ, снимается только поимённым подтверждением', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [entry],
+      layout: [entry],
       sources: SOURCES,
       existing: { [CFG]: 'setting: руками\n' },
     });
@@ -195,7 +195,7 @@ describe('переход: dest существует, маркера нет', () 
 
   it('подтверждённое усыновление перегенерирует файл, а не сводит его', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [entry],
+      layout: [entry],
       sources: SOURCES,
       existing: { [CFG]: 'setting: руками\nещё: моё\n' },
     });
@@ -213,12 +213,12 @@ describe('переход: dest существует, маркера нет', () 
  * при этом рапортует сходимость. Тихий сирота хуже громкого конфликта.
  */
 describe('переход: артефакт объявлен в каталоге сборки', () => {
-  const inDist: FrameEntry = { src: 'cfg.yml', dest: 'dist/x.yml' };
+  const inDist: LayoutEntry = { src: 'cfg.yml', dest: 'dist/x.yml' };
 
   it('сирота в каталоге сборки обнаружена, а не потеряна навсегда', () => {
-    const { tree } = materialized(inDist);
+    const { tree, declaration } = materialized(inDist);
 
-    const plan = computePlan({ tree, declaration: redeclare(tree, []) });
+    const plan = computePlan({ tree, declaration: redeclare(declaration, []) });
     applyPlan(tree, plan);
 
     expect(plan.status).toBe('pending');
@@ -231,10 +231,10 @@ describe('переход: артефакт объявлен в каталоге 
   });
 
   it('объявленный каталог сканируется даже под явным пропуском', () => {
-    const kept: FrameEntry = { src: 'cfg.yml', dest: 'vendor/kept.yml' };
-    const dropped: FrameEntry = { src: 'cfg.yml', dest: 'vendor/dropped.yml' };
+    const kept: LayoutEntry = { src: 'cfg.yml', dest: 'vendor/kept.yml' };
+    const dropped: LayoutEntry = { src: 'cfg.yml', dest: 'vendor/dropped.yml' };
     const { tree, declaration } = createWorkspace({
-      frame: [kept, dropped],
+      layout: [kept, dropped],
       sources: SOURCES,
     });
     const scan = { ignore: ['vendor'] };
@@ -242,7 +242,7 @@ describe('переход: артефакт объявлен в каталоге 
 
     const plan = computePlan({
       tree,
-      declaration: redeclare(tree, [kept]),
+      declaration: redeclare(declaration, [kept]),
       scan,
     });
 
@@ -261,7 +261,7 @@ describe('переход: артефакт объявлен в каталоге 
 describe('переход: подтверждение дано ради одного артефакта', () => {
   const claimForeign = () => {
     const fixture = createWorkspace({
-      frame: [
+      layout: [
         { src: 'cfg.yml', dest: 'a.yml' },
         { src: 'cfg.yml', dest: 'b.yml' },
         { src: 'cfg.yml', dest: 'c.yml' },
@@ -366,11 +366,11 @@ describe('переход: подтверждение дано ради одно�
  */
 describe('переход: декларация добавляет dest внутрь пути другого dest', () => {
   it('план блокируется, а не рапортует сходимость несуществующему состоянию', () => {
-    const { tree } = materialized();
+    const { tree, declaration } = materialized();
 
     const plan = computePlan({
       tree,
-      declaration: redeclare(tree, [
+      declaration: redeclare(declaration, [
         entry,
         { src: 'cfg.yml', dest: `${CFG}/inner.yml` },
       ]),
@@ -397,11 +397,11 @@ describe('переход: декларация добавляет dest внут�
  */
 describe('переход: артефакт переобъявлен из файла в каталог', () => {
   it('снятие мешающего артефакта и создание нового идут одним планом', () => {
-    const { tree } = materialized();
+    const { tree, declaration } = materialized();
 
     const plan = computePlan({
       tree,
-      declaration: redeclare(tree, [
+      declaration: redeclare(declaration, [
         { src: 'other.yml', dest: `${CFG}/inner.yml` },
       ]),
     });
@@ -415,8 +415,8 @@ describe('переход: артефакт переобъявлен из фай�
   });
 
   it('после применения дерево сходится, а не встаёт в дедлок', () => {
-    const { tree } = materialized();
-    const next = redeclare(tree, [
+    const { tree, declaration } = materialized();
+    const next = redeclare(declaration, [
       { src: 'other.yml', dest: `${CFG}/inner.yml` },
     ]);
 
@@ -427,9 +427,9 @@ describe('переход: артефакт переобъявлен из фай�
   });
 
   it('обратный переход каталог → файл того же класса', () => {
-    const { tree } = materialized({ src: 'cfg.yml', dest: `${CFG}/inner.yml` });
+    const { tree, declaration } = materialized({ src: 'cfg.yml', dest: `${CFG}/inner.yml` });
 
-    const next = redeclare(tree, [{ src: 'other.yml', dest: CFG }]);
+    const next = redeclare(declaration, [{ src: 'other.yml', dest: CFG }]);
     const plan = computePlan({ tree, declaration: next });
     applyPlan(tree, plan);
 
@@ -440,7 +440,7 @@ describe('переход: артефакт переобъявлен из фай�
 
   it('ЧУЖОЙ файл на пути продолжает мешать: послабление только для своего шага удаления', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [{ src: 'cfg.yml', dest: `${CFG}/inner.yml` }],
+      layout: [{ src: 'cfg.yml', dest: `${CFG}/inner.yml` }],
       sources: SOURCES,
       existing: { [CFG]: 'настройка: продукта\n' },
     });
@@ -456,11 +456,11 @@ describe('переход: артефакт переобъявлен из фай�
   });
 
   it('наш артефакт, ОСТАВШИЙСЯ объявленным, мешает так же законно', () => {
-    const { tree } = materialized();
+    const { tree, declaration } = materialized();
 
     const plan = computePlan({
       tree,
-      declaration: redeclare(tree, [
+      declaration: redeclare(declaration, [
         entry,
         { src: 'other.yml', dest: `${CFG}/inner.yml` },
       ]),
@@ -483,7 +483,7 @@ describe('переход: прогон повторён', () => {
 
   it('после сбоя дерево в исходном состоянии, а план тот же', () => {
     const { tree, declaration } = createWorkspace({
-      frame: [entry, { src: 'other.yml', dest: 'other.yml' }],
+      layout: [entry, { src: 'other.yml', dest: 'other.yml' }],
       sources: SOURCES,
     });
     const before = snapshotTree(tree);
