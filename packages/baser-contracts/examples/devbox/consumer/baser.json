@@ -1,0 +1,8 @@
+{
+  "sources": [
+    {
+      "use": "@omnifield/baser-devbox",
+      "presets": ["omnifield"]
+    }
+  ]
+}

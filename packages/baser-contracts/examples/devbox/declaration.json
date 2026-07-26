@@ -1,0 +1,86 @@
+{
+  "name": "@omnifield/baser-devbox",
+  "version": "0.1.0",
+  "baser": {
+    "source": {
+      "id": "omnifield/devbox",
+      "title": "Девбокс: проект целиком в контейнере",
+      "contentRoot": "template"
+    },
+
+    "settings": {
+      "name": {
+        "title": "Имя девбокса",
+        "type": "string",
+        "defaultFrom": "./defaults.mjs#devboxName"
+      },
+      "image": {
+        "title": "Базовый образ",
+        "type": "string",
+        "default": "mcr.microsoft.com/devcontainers/typescript-node"
+      },
+      "runtimeVersion": {
+        "title": "Версия Node в образе",
+        "description": "Дефолт — последняя стабильная на момент прогона. В артефакт попадает число, не latest.",
+        "type": "string",
+        "defaultFrom": "./defaults.mjs#latestStableNode"
+      },
+      "installCommand": {
+        "title": "Команда установки зависимостей",
+        "type": "string",
+        "default": "pnpm install --frozen-lockfile"
+      },
+      "editorExtensions": {
+        "title": "Расширения редактора",
+        "type": "list",
+        "default": ["esbenp.prettier-vscode", "nrwl.angular-console"]
+      },
+      "network": {
+        "title": "Docker-сеть, в которую включить девбокс",
+        "type": "string",
+        "default": null
+      },
+      "networkAlias": {
+        "title": "Имя девбокса в этой сети",
+        "type": "string",
+        "defaultFrom": "./defaults.mjs#repoName"
+      },
+      "secretsVolume": {
+        "title": "Том с кредами (переживает пересоздание)",
+        "type": "string",
+        "default": null
+      },
+      "pnpmStoreVolume": {
+        "title": "Том под общий pnpm-store",
+        "type": "string",
+        "default": null
+      },
+      "installAssistant": {
+        "title": "Ставить ассистента внутрь контейнера",
+        "type": "boolean",
+        "default": false
+      }
+    },
+
+    "presets": {
+      "omnifield": {
+        "title": "Раскладка omnifield: общая сеть, общие тома, ассистент внутри",
+        "values": {
+          "network": "omnifield-gateway",
+          "secretsVolume": "omnifield-secrets",
+          "pnpmStoreVolume": "omnifield-pnpm-store",
+          "installAssistant": true
+        }
+      }
+    },
+
+    "layout": [
+      { "src": "devcontainer.json", "dest": ".devcontainer/devcontainer.json" },
+      {
+        "src": "devcontainer-lock.json",
+        "dest": ".devcontainer/devcontainer-lock.json",
+        "render": false
+      }
+    ]
+  }
+}
