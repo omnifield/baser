@@ -1,0 +1,352 @@
+import { describe, expect, it } from 'vitest';
+import {
+  DECLARATION_BLOCK,
+  parseSourceDeclaration,
+  readSourceDeclaration,
+} from './declaration.js';
+import { codesOf, declarationBlock } from './form.fixture.js';
+import { FORM_VERSION } from './version.js';
+
+/** Разбор, который обязан пройти, — чтобы отказы ниже читались как отличие. */
+function parse(patch: Record<string, unknown> = {}) {
+  return parseSourceDeclaration(declarationBlock(patch));
+}
+
+/** Отказы разбора; бросает, если объявление внезапно оказалось пригодным. */
+function refusals(patch: Record<string, unknown>) {
+  const result = parse(patch);
+  if (result.ok) {
+    throw new Error('ожидался отказ, объявление разобралось');
+  }
+  return result.problems;
+}
+
+describe('объявление обвеса', () => {
+  it('разбирает минимальное пригодное объявление', () => {
+    const result = parse();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.source.id).toBe('omnifield/devbox');
+    expect(result.value.formVersion).toBe(FORM_VERSION);
+    expect(result.value.layout).toHaveLength(1);
+    // Обвес без пресетов законен — не всякий инструмент имеет ходовые положения.
+    expect(result.value.presets).toEqual({});
+  });
+
+  it('достаёт блок из манифеста пакета и называет его отсутствие', () => {
+    const manifest = {
+      name: '@omnifield/baser-devbox',
+      baser: declarationBlock(),
+    };
+    expect(readSourceDeclaration(manifest).ok).toBe(true);
+
+    const bare = readSourceDeclaration(
+      { name: 'просто-пакет' },
+      'package.json',
+    );
+    expect(bare.ok).toBe(false);
+    if (bare.ok) return;
+    expect(codesOf(bare.problems)).toEqual([
+      `missing-field @ package.json.${DECLARATION_BLOCK}`,
+    ]);
+  });
+
+  it('собирает ВСЕ отказы сразу, а не первый', () => {
+    // Три опечатки это три опечатки: чинить их по одному прогону на штуку —
+    // ровно то, ради чего разбор копит отказы, а не бросает.
+    const problems = refusals({
+      source: { id: 'Omnifield/Devbox', title: '', contentRoot: '../наружу' },
+    });
+    expect(codesOf(problems)).toEqual([
+      'invalid-source-id @ baser.source.id',
+      'empty-string @ baser.source.title',
+      'invalid-path @ baser.source.contentRoot',
+    ]);
+  });
+
+  describe('версия формы', () => {
+    it('требует её назвать', () => {
+      const problems = refusals({ formVersion: undefined });
+      expect(codesOf(problems)).toEqual([
+        'form-version-missing @ baser.formVersion',
+      ]);
+    });
+
+    it('отказывает обвесу из будущего, а не разбирает его наполовину', () => {
+      const problems = refusals({ formVersion: FORM_VERSION + 1 });
+      expect(problems[0].code).toBe('form-version-unsupported');
+      expect(problems[0].message).toContain('обнови baser');
+    });
+
+    it('не принимает версию строкой или дробью', () => {
+      expect(codesOf(refusals({ formVersion: '1' }))).toEqual([
+        'form-version-invalid @ baser.formVersion',
+      ]);
+      expect(codesOf(refusals({ formVersion: 1.5 }))).toEqual([
+        'form-version-invalid @ baser.formVersion',
+      ]);
+    });
+  });
+
+  describe('идентичность', () => {
+    it('требует форму «поставщик/обвес» строчными', () => {
+      for (const id of [
+        'devbox',
+        'omnifield/',
+        '/devbox',
+        'Omnifield/devbox',
+      ]) {
+        expect(
+          codesOf(
+            refusals({
+              source: { ...(declarationBlock().source as object), id },
+            }),
+          ),
+        ).toContain('invalid-source-id @ baser.source.id');
+      }
+    });
+
+    it('объясняет, что это не имя пакета', () => {
+      const problems = refusals({
+        source: {
+          id: '@omnifield/baser-devbox',
+          title: 'Девбокс',
+          contentRoot: 'template',
+        },
+      });
+      expect(problems[0].message).toContain('пакет — доставка');
+    });
+  });
+
+  describe('настройки', () => {
+    it('отказывает настройке без дефолта — вопросов пользователю не бывает', () => {
+      const problems = refusals({
+        settings: { name: { title: 'Имя', type: 'string' } },
+      });
+      expect(codesOf(problems)).toEqual([
+        'setting-no-default @ baser.settings.name',
+      ]);
+      expect(problems[0].message).toContain('вопросов у двери не бывает');
+    });
+
+    it('отказывает настройке с двумя дефолтами сразу', () => {
+      const problems = refusals({
+        settings: {
+          name: {
+            title: 'Имя',
+            type: 'string',
+            default: 'a',
+            defaultFrom: './defaults.js#name',
+          },
+        },
+      });
+      expect(codesOf(problems)).toEqual([
+        'setting-two-defaults @ baser.settings.name',
+      ]);
+    });
+
+    it('сверяет дефолт с объявленным типом', () => {
+      expect(
+        codesOf(
+          refusals({
+            settings: { n: { title: 'N', type: 'number', default: 'два' } },
+          }),
+        ),
+      ).toEqual(['value-type-mismatch @ baser.settings.n.default']);
+    });
+
+    it('разрешает null только там, где «не задано» имеет смысл', () => {
+      expect(
+        parse({
+          settings: { s: { title: 'S', type: 'string', default: null } },
+        }).ok,
+      ).toBe(true);
+      expect(
+        parse({ settings: { l: { title: 'L', type: 'list', default: null } } })
+          .ok,
+      ).toBe(true);
+
+      // Выключенный флаг — это false, а не отсутствие флага.
+      const problems = refusals({
+        settings: { b: { title: 'B', type: 'boolean', default: null } },
+      });
+      expect(problems[0].message).toContain('только для string и list');
+    });
+
+    it('требует имя настройки для человека', () => {
+      // Пользователь имеет дело с настройкой, а не с разметкой файла: настройку
+      // без имени ему не показать.
+      expect(
+        codesOf(
+          refusals({ settings: { n: { type: 'string', default: 'a' } } }),
+        ),
+      ).toEqual(['missing-field @ baser.settings.n.title']);
+    });
+
+    it('разбирает ссылку на резолвер и отказывает кривой', () => {
+      const ok = parse({
+        settings: {
+          v: {
+            title: 'V',
+            type: 'string',
+            defaultFrom: './defaults.js#latestStableNode',
+          },
+        },
+      });
+      expect(ok.ok).toBe(true);
+      if (ok.ok) {
+        expect(ok.value.settings['v'].defaultFrom).toEqual({
+          module: 'defaults.js',
+          member: 'latestStableNode',
+        });
+      }
+
+      for (const ref of [
+        './defaults.js',
+        '#name',
+        './defaults.js#',
+        './a.js#не имя',
+      ]) {
+        expect(
+          codesOf(
+            refusals({
+              settings: { v: { title: 'V', type: 'string', defaultFrom: ref } },
+            }),
+          ),
+        ).toEqual(['invalid-resolver-ref @ baser.settings.v.defaultFrom']);
+      }
+    });
+
+    it('не выпускает резолвер за пределы пакета обвеса', () => {
+      const problems = refusals({
+        settings: {
+          v: {
+            title: 'V',
+            type: 'string',
+            defaultFrom: '../соседний/defaults.js#name',
+          },
+        },
+      });
+      expect(problems[0].message).toContain('в пакете обвеса');
+    });
+  });
+
+  describe('пресеты', () => {
+    it('разбирает пресет как набор значений объявленных настроек', () => {
+      const result = parse({
+        presets: {
+          omnifield: { title: 'omnifield', values: { name: 'baser-devbox' } },
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.presets['omnifield'].values).toEqual({
+          name: 'baser-devbox',
+        });
+      }
+    });
+
+    it('называет настройку, которой обвес не объявлял', () => {
+      const problems = refusals({
+        presets: {
+          omnifield: { title: 'omnifield', values: { сеть: 'gateway' } },
+        },
+      });
+      expect(codesOf(problems)).toEqual([
+        'unknown-setting @ baser.presets.omnifield.values.сеть',
+      ]);
+      expect(problems[0].message).toContain('никуда не поедет');
+    });
+
+    it('сверяет значение пресета с типом настройки', () => {
+      expect(
+        codesOf(
+          refusals({ presets: { p: { title: 'P', values: { name: 42 } } } }),
+        ),
+      ).toEqual(['value-type-mismatch @ baser.presets.p.values.name']);
+    });
+  });
+
+  describe('раскладка', () => {
+    it('приводит render к явному значению — умолчание живёт в одном месте', () => {
+      const result = parse({
+        layout: [
+          { src: 'a.json', dest: 'a.json' },
+          { src: 'b.bin', dest: 'b.bin', render: false },
+        ],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.layout.map((e) => e.render)).toEqual([true, false]);
+      }
+    });
+
+    it('нормализует путь, потому что dest — ключ владения', () => {
+      const result = parse({
+        layout: [{ src: './tpl/a.json', dest: './a.json' }],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.layout[0]).toMatchObject({
+          src: 'tpl/a.json',
+          dest: 'a.json',
+        });
+      }
+    });
+
+    it('ловит столкновение внутри одного обвеса и не разрешает его порядком', () => {
+      const problems = refusals({
+        layout: [
+          { src: 'base.json', dest: '.devcontainer/devcontainer.json' },
+          { src: 'omnifield.json', dest: './.devcontainer/devcontainer.json' },
+        ],
+      });
+      expect(codesOf(problems)).toEqual([
+        'duplicate-dest @ baser.layout[1].dest',
+      ]);
+      expect(problems[0].message).toContain(
+        'порядком записей это не разрешается',
+      );
+    });
+
+    it('отказывает обвесу, который ничего не кладёт', () => {
+      expect(codesOf(refusals({ layout: [] }))).toEqual([
+        'missing-field @ baser.layout',
+      ]);
+      expect(codesOf(refusals({ layout: undefined }))).toEqual([
+        'missing-field @ baser.layout',
+      ]);
+    });
+
+    it('не выпускает артефакт за пределы репозитория потребителя', () => {
+      // Это не дубль проверки движка: движок держит границу дерева потому, что
+      // пишет сам. Здесь — про пригодность самого объявления.
+      expect(
+        codesOf(refusals({ layout: [{ src: 'a', dest: '/etc/hosts' }] })),
+      ).toEqual(['invalid-path @ baser.layout[0].dest']);
+      expect(
+        codesOf(refusals({ layout: [{ src: 'a', dest: '../соседний/a' }] })),
+      ).toEqual(['invalid-path @ baser.layout[0].dest']);
+    });
+  });
+
+  describe('лишние поля', () => {
+    it('называет снятое поле, а не проглатывает его', () => {
+      // `mode` объявлял поведение, которого у движка больше нет; молчаливый
+      // разбор оставил бы обвес в уверенности, что его merge соблюдается.
+      const problems = refusals({
+        layout: [{ src: 'a.json', dest: 'a.json', mode: 'merge' }],
+      });
+      expect(codesOf(problems)).toEqual([
+        'unknown-field @ baser.layout[0].mode',
+      ]);
+    });
+
+    it('называет опечатку в имени поля блока', () => {
+      expect(codesOf(refusals({ layouts: [] }))).toEqual([
+        'unknown-field @ baser.layouts',
+      ]);
+    });
+  });
+});

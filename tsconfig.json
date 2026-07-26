@@ -8,6 +8,9 @@
     },
     {
       "path": "./packages/baser-materialize"
+    },
+    {
+      "path": "./packages/baser-contracts"
     }
   ]
 }
