@@ -31,7 +31,12 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { markerFormatFor } from '@omnifield/baser-materialize';
+import type { Tree } from '@nx/devkit';
+import {
+  MANIFEST_PATH,
+  readManifest,
+  type ManifestRecord,
+} from '@omnifield/baser-materialize';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -210,31 +215,17 @@ export function installDevbox(options: InstallOptions = {}): Consumer {
 }
 
 /**
- * Переобъявляет артефакт девбокса так, чтобы движок мог взять его во владение.
+ * УДАЛЕНО: `makeArtifactOwnable` и `withoutMarker`.
  *
- * ЭТО ОБХОД БЛОКЕРА, а не удобство фикстуры. Живой
- * `.devcontainer/devcontainer.json` — это JSONC: комментарии разрешены в нём
- * спецификацией Dev Containers, и обвес их несёт. Движок же для расширения
- * `.json` умеет ровно один способ доказать владение — ключ `"//"` в РАЗОБРАННОМ
- * JSON, — поэтому на файле с комментариями он отказывается брать артефакт во
- * владение (`unmarkable-dest`), и план блокируется целиком.
+ * Оба были обходом одного блокера — служебной записи ВНУТРИ артефакта. Первый
+ * подменял `dest` на `.jsonc`, чтобы движок вообще смог пометить живой
+ * devcontainer; второй снимал наклейку перед сверкой с эталоном.
  *
- * Блокер зафиксирован прогоном в `acceptance.spec.ts` и эскалирован в зону
- * движка. Здесь он обходится сменой `dest` на `.jsonc`, чтобы остальная дверь
- * проверялась настоящим прогоном, а не ждала чужой правки. Обход законный: это
- * штатный переход объявления обвеса, а не правка движка под тест.
+ * Запись уехала в `baser.lock.json` (`tasker:BASER2-4`), движок содержимого не
+ * трогает — и оба помощника стали не нужны: шаблон ложится прямо в
+ * `devcontainer.json`, а тело артефакта равно телу шаблона. Приёмка двери с
+ * этого места идёт по НАСТОЯЩЕЙ раскладке обвеса, без обходов.
  */
-export function makeArtifactOwnable(consumer: Consumer): string {
-  const dest = '.devcontainer/devcontainer.jsonc';
-  consumer.updateSource((block) => {
-    const layout = block['layout'] as { src: string; dest: string }[];
-    const entry = layout.find((item) => item.src.endsWith('.ejs'));
-    if (entry) {
-      entry.dest = dest;
-    }
-  });
-  return dest;
-}
 
 /** Живой `.devcontainer` этого репозитория — эталон приёмки. */
 export function liveArtifact(dest: string): string {
@@ -242,18 +233,33 @@ export function liveArtifact(dest: string): string {
 }
 
 /**
- * Тело артефакта без служебной записи владения.
+ * Служебная запись, лежащая на диске потребителя.
  *
- * Снимается ТЕМ ЖЕ механизмом, которым ставилась (`markerFormatFor(dest).strip`),
- * а не своим разбором: снятие маркера, написанное в тесте отдельно, разошлось бы
- * с движком при первой же правке формата — и сверка с эталоном начала бы врать.
+ * Владение читается ОТСЮДА, а не из содержимого артефакта: это и есть переезд
+ * `tasker:BASER2-4`. Разбирается тем же кодом, которым движок её пишет, — свой
+ * разбор в тесте разошёлся бы с формой при первой же правке.
  */
-export function withoutMarker(dest: string, content: string): string {
-  const format = markerFormatFor(dest);
-  if (format === null) {
-    throw new Error(`класс файла "${dest}" маркера не несёт`);
+export function manifestOf(consumer: Consumer): readonly ManifestRecord[] {
+  const raw = consumer.read(MANIFEST_PATH);
+  if (raw === null) {
+    return [];
   }
-  return format.strip(content);
+  return [...readManifest(treeOverDisk(consumer)).values()];
+}
+
+/**
+ * Дерево из одного файла — ровно то, что нужно `readManifest`.
+ *
+ * Движок читает манифест из `Tree`, а у теста на руках реальный диск. Полное
+ * дерево тут заводить не за чем: `readManifest` спрашивает существование и
+ * содержимое одного пути, и подменять его собственным разбором JSON значило бы
+ * держать вторую правду о форме записи.
+ */
+function treeOverDisk(consumer: Consumer): Tree {
+  return {
+    exists: (path: string) => consumer.exists(path),
+    read: (path: string) => consumer.read(path),
+  } as unknown as Tree;
 }
 
 let sequence = 0;

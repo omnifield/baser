@@ -19,7 +19,6 @@ import { join } from 'node:path';
 import { FORM_VERSION } from '@omnifield/baser-contracts';
 import {
   installDevbox,
-  makeArtifactOwnable,
   DEVBOX_PACKAGE,
   type Consumer,
   type InstallOptions,
@@ -81,7 +80,6 @@ describe('конфиг потребителя рождается один раз
     // Артефакты уже на месте, но конфиг снесли: движку делать нечего, а прогону
     // есть. Гейт, спросивший «сошлось?», не имеет права зазеленеть здесь.
     const box = install();
-    makeArtifactOwnable(box);
     await run({ command: 'apply', cwd: box.root });
     box.remove('baser.json');
 
@@ -101,7 +99,6 @@ describe('конфиг потребителя рождается один раз
 
   it('apply кладёт конфиг и САМ проставляет в него версию формы', async () => {
     const box = install();
-    makeArtifactOwnable(box);
     await run({ command: 'apply', cwd: box.root });
 
     const written = JSON.parse(box.read('baser.json') ?? '{}') as {
@@ -212,8 +209,11 @@ describe('отказ говорит чужим кодом, когда код е�
     const [problem] = result.problems;
     expect(problem.code).toBe('multiple-sources');
     // Причина, а не следствие: план строится по одной декларации, а сироты
-    // ищутся сканом всего дерева — второй прогон снял бы артефакты первого.
-    expect(problem.message).toContain('сироты ищутся сканом всего дерева');
+    // ищутся по всем записям манифеста — второй прогон снял бы артефакты
+    // первого как потерявшие объявление.
+    expect(problem.message).toContain(
+      'сироты ищутся по всем записям манифеста',
+    );
   });
 });
 
@@ -245,7 +245,6 @@ describe('шов contentRoot: источник вне дерева', () => {
 describe('трейсы: свои фазы, чужие отдельно', () => {
   it('дверь мерит СЕБЯ, а движок — себя; списки не смешаны', async () => {
     const box = install({ config: CONFIG });
-    makeArtifactOwnable(box);
 
     const result = await run({ command: 'apply', cwd: box.root });
     const door = result.trace.map((span) => span.name);
@@ -258,17 +257,17 @@ describe('трейсы: свои фазы, чужие отдельно', () => {
       'door.render',
       'door.flush',
     ]);
-    // Скан дерева — работа движка, и мерит её он. Свести списки означало бы,
-    // что медленный прогон не отличить: скан или чтение десятка шаблонов.
+    // Чтение служебной записи — работа движка, и мерит её он. Свести списки
+    // означало бы, что медленный прогон не отличить: разбор манифеста или
+    // чтение десятка шаблонов с диска.
     expect(result.plan?.trace.map((span) => span.name)).toContain(
-      'plan.scan-ownership',
+      'plan.manifest',
     );
     expect(door.some((name) => name.startsWith('plan.'))).toBe(false);
   });
 
   it('в текст трейсы не идут: телеметрия, а не печать в поток', async () => {
     const box = install({ config: CONFIG });
-    makeArtifactOwnable(box);
     const result = await run({ command: 'apply', cwd: box.root });
 
     expect(renderText(result)).not.toContain('door.render');
@@ -279,8 +278,10 @@ describe('коды возврата — производная от состоя
   it('конфликт владения даёт 1, отказ двери — 2, сделанное — 0', async () => {
     // Настоящий конфликт владения: на месте артефакта лежит чужой файл.
     const blocked = install({ config: CONFIG });
-    const dest = makeArtifactOwnable(blocked);
-    blocked.write(dest, '// чужой файл, движок его не клал\n{}\n');
+    blocked.write(
+      '.devcontainer/devcontainer.json',
+      '// чужой файл, движок его не клал\n{}\n',
+    );
     const outcome = await cli(['plan', '--cwd', blocked.root], process.cwd());
     expect(outcome.result?.plan?.conflicts[0].kind).toBe('foreign-dest');
     expect(outcome.exitCode).toBe(1);
