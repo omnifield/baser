@@ -105,27 +105,45 @@ export function packedFiles() {
   return out.sort();
 }
 
-/** Репозиторий потребителя с ПОСТАВЛЕННЫМ обвесом. */
+/**
+ * Репозиторий потребителя с ПОСТАВЛЕННЫМ обвесом.
+ *
+ * Три вещи задаются отдельно, потому что в жизни они расходятся, и ровно на их
+ * расхождении сидела `tasker:BASER2-32`:
+ *
+ * - `repoName` — имя КАТАЛОГА, то есть как человек назвал клон (или куда
+ *   смонтировал репозиторий в докере);
+ * - `manifest` — `package.json` потребителя (`null` — его нет вовсе: Go,
+ *   Python, что угодно);
+ * - `gitOrigin` — адрес `origin`, то есть идентичность самого репозитория
+ *   (`null` — репозиторий без remote или вовсе распакованный из архива).
+ */
 export function installConsumer(options = {}) {
   const box = mkdtempSync(join(tmpdir(), 'baser-devbox-'));
-  // Имя каталога значимо, а не косметика: из него резолверы обвеса считают имя
-  // девбокса и алиас в сети.
+  // Имя каталога значимо, а не косметика: до 0.3.0 из него резолверы обвеса
+  // считали имя девбокса и алиас в сети, сейчас оно запасной вариант.
   const root = join(box, options.repoName ?? 'baser');
   mkdirSync(root, { recursive: true });
 
-  writeFileSync(
-    join(root, 'package.json'),
-    `${JSON.stringify(
-      {
-        name: options.repoName ?? 'baser',
-        version: '0.0.0',
-        private: true,
-        devDependencies: { [DEVBOX_PACKAGE]: '0.1.0' },
-      },
-      null,
-      2,
-    )}\n`,
-  );
+  const manifest =
+    options.manifest === undefined
+      ? {
+          name: options.repoName ?? 'baser',
+          version: '0.0.0',
+          private: true,
+          devDependencies: { [DEVBOX_PACKAGE]: '0.1.0' },
+        }
+      : options.manifest;
+  if (manifest !== null) {
+    writeFileSync(
+      join(root, 'package.json'),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+    );
+  }
+
+  if (options.gitOrigin !== undefined && options.gitOrigin !== null) {
+    writeGit(root, options.gitOrigin, options.gitLayout ?? 'dir');
+  }
 
   const sourceRoot = join(root, 'node_modules', DEVBOX_PACKAGE);
   mkdirSync(dirname(sourceRoot), { recursive: true });
@@ -162,6 +180,33 @@ export function installConsumer(options = {}) {
   }
 
   return consumer;
+}
+
+/**
+ * Настоящая раскладка git, а не заглушка «файл с нужной строкой».
+ *
+ * `dir` — обычный клон: `.git` каталогом, настройки внутри. `file` — рабочее
+ * дерево (`git worktree`): `.git` ФАЙЛОМ с адресом служебного каталога, а
+ * настройки общие и лежат по `commondir`. Вторая раскладка существует не ради
+ * полноты: разработчик, у которого репозиторий разложен рабочими деревьями,
+ * получил бы имя каталога вместо имени репозитория — то есть ровно тот дефект,
+ * который чинится.
+ */
+export function writeGit(root, url, layout = 'dir') {
+  const config = `[core]\n\trepositoryformatversion = 0\n[remote "origin"]\n\turl = ${url}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "main"]\n\tremote = origin\n`;
+
+  if (layout === 'dir') {
+    mkdirSync(join(root, '.git'), { recursive: true });
+    writeFileSync(join(root, '.git', 'config'), config);
+    return;
+  }
+
+  const common = join(root, '..', '.bare');
+  const worktree = join(common, 'worktrees', 'wt');
+  mkdirSync(worktree, { recursive: true });
+  writeFileSync(join(common, 'config'), config);
+  writeFileSync(join(worktree, 'commondir'), '../..\n');
+  writeFileSync(join(root, '.git'), `gitdir: ${worktree}\n`);
 }
 
 /** Конфиг потребителя: обвес + перечисленные пресеты + заполненное. */

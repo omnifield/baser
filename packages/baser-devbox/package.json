@@ -1,6 +1,6 @@
 {
   "name": "@omnifield/baser-devbox",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Обвес девбокса: .devcontainer как шаблон с пресетом omnifield",
   "license": "MIT",
   "type": "module",
@@ -25,7 +25,7 @@
     "settings": {
       "name": {
         "title": "Имя девбокса",
-        "description": "Как контейнер подписан в списке. По умолчанию — из имени репозитория.",
+        "description": "Как контейнер подписан в списке. По умолчанию — <репозиторий>-devbox, где репозиторий берётся из origin в .git/config (одинаков у всех клонов), а если его нет — из имени каталога.",
         "type": "string",
         "defaultFrom": "./defaults.mjs#devboxName"
       },
@@ -75,6 +75,7 @@
       },
       "networkAlias": {
         "title": "Имя девбокса в этой сети",
+        "description": "Адрес, по которому девбокс зовут соседи, — обещание им, а не подпись для себя. По умолчанию имя репозитория из origin в .git/config: оно одинаково у всех клонов и не зависит от того, как названа папка.",
         "type": "string",
         "defaultFrom": "./defaults.mjs#repoName"
       },
