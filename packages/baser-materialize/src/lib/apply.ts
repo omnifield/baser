@@ -15,6 +15,7 @@ import type { Tree } from '@nx/devkit';
 import { BaserMaterializeError } from './errors.js';
 import type { MaterializationPlan, PlanConflict, PlanStep } from './plan.js';
 import { isApplicable } from './plan.js';
+import { serializeManifest } from './manifest.js';
 import type { TraceRecorder, TraceSpan } from './trace.js';
 import { createTrace } from './trace.js';
 import { OUTPUT_SCHEMA_VERSION } from './schema.js';
@@ -53,6 +54,8 @@ export interface ApplyReport {
   /** Версия схемы вывода — тот же контракт с панелью, что и у плана. */
   readonly schemaVersion: number;
   readonly applied: readonly PlanStep[];
+  /** Куда легла служебная запись этого прогона. */
+  readonly manifestPath: string;
   readonly trace: readonly TraceSpan[];
 }
 
@@ -97,6 +100,10 @@ export function applyPlan(
 
           if (step.kind === 'delete') {
             tree.delete(step.dest);
+          } else if (step.kind === 'record') {
+            // Содержимое артефакта шаг `record` не трогает вовсе: он про
+            // служебную запись. Файл остаётся байт в байт тем же.
+            continue;
           } else {
             if (step.content === null) {
               throw new BaserMaterializeError(
@@ -110,6 +117,22 @@ export function applyPlan(
       },
       { steps: ordered.length },
     );
+
+    // Служебная запись приводится ПОСЛЕДНЕЙ и одной записью целиком: манифест,
+    // обновлённый до артефактов, соврал бы про состояние, если бы применение
+    // сорвалось на середине. Он же участвует в журнале отката — иначе откат
+    // вернул бы файлы, но оставил запись о том, чего на диске нет.
+    if (ordered.length > 0) {
+      trace.span('apply.manifest', () => {
+        journal.push({
+          dest: plan.manifestPath,
+          previous: tree.exists(plan.manifestPath)
+            ? tree.read(plan.manifestPath, 'utf-8')
+            : null,
+        });
+        writeManifest(tree, plan);
+      });
+    }
   } catch (cause) {
     trace.span('apply.rollback', () => rollback(tree, journal), {
       entries: journal.length,
@@ -120,8 +143,29 @@ export function applyPlan(
   return {
     schemaVersion: OUTPUT_SCHEMA_VERSION,
     applied: ordered,
+    manifestPath: plan.manifestPath,
     trace: trace.snapshot(),
   };
+}
+
+/**
+ * Кладёт манифест — либо снимает его, если класть больше нечего.
+ *
+ * Пустой манифест не остаётся файлом: репозиторий, из которого убрали все
+ * обвесы, не должен носить служебный огрызок, объявляющий ноль артефактов.
+ */
+function writeManifest(tree: Tree, plan: MaterializationPlan): void {
+  if (plan.manifest.length === 0) {
+    if (tree.exists(plan.manifestPath)) {
+      tree.delete(plan.manifestPath);
+    }
+    return;
+  }
+
+  tree.write(
+    plan.manifestPath,
+    serializeManifest(new Map(plan.manifest.map((item) => [item.dest, item]))),
+  );
 }
 
 /**

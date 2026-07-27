@@ -4,8 +4,9 @@
  * иначе тест проверяет не тот сценарий).
  *
  * Декларация здесь СТРОИТСЯ, а не читается из дерева: движку её подаёт дверь
- * готовой структурой (`tasker:BASER2-23`). Манифеста в фикстуре нет намеренно —
- * тест, кладущий `package.json` ради движка, врал бы про то, что движку нужно.
+ * готовой структурой (`tasker:BASER2-23`). Манифеста фикстура сама не кладёт —
+ * его пишет движок; засеять его можно `manifest`, когда тесту нужен переход из
+ * УЖЕ материализованного состояния.
  *
  * Файл исключён из сборки пакета.
  */
@@ -13,6 +14,8 @@
 import type { Tree } from '@nx/devkit';
 import { createTreeWithEmptyWorkspace } from '@nx/devkit/testing';
 import type { Declaration, LayoutEntry } from './declaration.js';
+import type { ManifestRecord } from './manifest.js';
+import { MANIFEST_PATH, readManifest, serializeManifest } from './manifest.js';
 
 export interface WorkspaceFixtureOptions {
   readonly layout: readonly LayoutEntry[];
@@ -23,6 +26,8 @@ export interface WorkspaceFixtureOptions {
   readonly sources?: Readonly<Record<string, string>>;
   /** Файлы, уже лежащие в репозитории потребителя. */
   readonly existing?: Readonly<Record<string, string>>;
+  /** Служебная запись, уже лежащая в дереве (переход из материализованного). */
+  readonly manifest?: readonly ManifestRecord[];
 }
 
 export interface WorkspaceFixture {
@@ -44,6 +49,14 @@ export function createWorkspace(
   }
   for (const [path, content] of Object.entries(options.existing ?? {})) {
     tree.write(path, content);
+  }
+  if (options.manifest !== undefined) {
+    tree.write(
+      MANIFEST_PATH,
+      serializeManifest(
+        new Map(options.manifest.map((record) => [record.dest, record])),
+      ),
+    );
   }
 
   return {
@@ -89,6 +102,11 @@ export function treeFailingOnWrite(tree: Tree, failAtCall: number): Tree {
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
+}
+
+/** Разобранный манифест из дерева — то, что движок утверждает о владении. */
+export function manifestOf(tree: Tree): readonly ManifestRecord[] {
+  return [...readManifest(tree).values()];
 }
 
 /** Снимок всех файлов дерева вне служебных каталогов — для сверки «до/после». */

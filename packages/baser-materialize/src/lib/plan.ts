@@ -11,17 +11,21 @@
  * нельзя ни гейту, ни панели; `describePlan` — один из выходов, а не
  * единственный.
  *
- * ЧТО ДЕЛАЕТ ДВИЖОК С ОБЪЯВЛЕННЫМ АРТЕФАКТОМ — ровно одно: перегенерирует его
- * целиком из шаблона (`kb:BASER2-2`, модель A). Режимов нет, сведения исходной,
- * пользовательской и новой версии нет ни под каким флагом, класса владения на
- * записи нет. Правка нашего артефакта руками не делает его пользовательским —
- * владение переходит только форком источника, снаружи движка.
+ * ЧТО ДЕЛАЕТ ДВИЖОК С ОБЪЯВЛЕННЫМ АРТЕФАКТОМ — ровно одно: кладёт содержимое,
+ * которое ему дали, целиком и как есть (`kb:BASER2-2`, модель A). Режимов нет,
+ * сведения версий нет ни под каким флагом, СОДЕРЖИМОЕ ДВИЖОК НЕ ТРОГАЕТ —
+ * поэтому `render: false` ложится байт в байт, а класс файла перестал быть
+ * условием владения.
  *
- * Инварианты, за которые отвечает именно эта фаза:
- *   §1 идемпотентность — сошедшийся артефакт НЕ порождает шага, поэтому второй
- *      прогон даёт план без шагов (операционное определение сходимости из IaC);
- *   §3 отсутствие сирот — артефакт с нашим маркером, потерявший запись в
- *      `layout`, попадает в план на снятие;
+ * ВЛАДЕНИЕ ВЫВОДИТСЯ ИЗ МАНИФЕСТА СБОКУ (`manifest.ts`), а не из наклейки
+ * внутри файла. Отсюда инварианты этой фазы:
+ *   §1 идемпотентность — сошедшийся артефакт НЕ порождает шага;
+ *   §2 запись обязана утверждать объявленное СЕЙЧАС — расхождение записи с
+ *      декларацией даёт шаг приведения, даже когда содержимое совпало
+ *      (`tasker:BASER2-16`, Д10: это ровно то место, где прошлая модель врала);
+ *   §3 отсутствие сирот — запись, потерявшая объявление, попадает в план на
+ *      снятие; ищутся сироты ПО ЗАПИСЯМ, а не сканом дерева, поэтому слепых зон
+ *      у поиска нет по построению;
  *   §4 отказ вместо тихой перезаписи — конфликт владения попадает в
  *      `conflicts`, а не в `steps`, и делает план неприменимым;
  *   §5 показать расхождение — каждый шаг несёт `previous`, чтобы раннер мог
@@ -32,19 +36,13 @@ import type { Tree } from '@nx/devkit';
 import type { Declaration, LayoutEntry } from './declaration.js';
 import type { CanonSource } from './source.js';
 import { createTreeSource } from './source.js';
-import { DeclarationError } from './errors.js';
-import type { OwnershipRecord, ScanOptions } from './ownership.js';
-import {
-  DEFAULT_SCAN_IGNORE,
-  UnmarkableContentError,
-  markerFormatFor,
-  scanOwnership,
-} from './ownership.js';
+import { DeclarationError, SourceOutsideTreeError } from './errors.js';
+import type { Manifest, ManifestRecord } from './manifest.js';
+import { MANIFEST_PATH, hashContent, readManifest } from './manifest.js';
 import type { TraceRecorder, TraceSpan } from './trace.js';
 import { createTrace } from './trace.js';
 import {
   byBytes,
-  joinRepoPath,
   normalizeRepoPath,
   REPO_PATH_PROBLEM,
   toRepoPath,
@@ -52,39 +50,56 @@ import {
 import type { RepoPathProblem } from './paths.js';
 import { OUTPUT_SCHEMA_VERSION } from './schema.js';
 
-export type PlanStepKind = 'create' | 'update' | 'delete';
+export type PlanStepKind =
+  | 'create'
+  | 'update'
+  | 'delete'
+  /**
+   * Привести СЛУЖЕБНУЮ ЗАПИСЬ, не трогая содержимое артефакта.
+   *
+   * Содержимое уже целевое, а запись утверждает не то, что объявлено сейчас, —
+   * и это обязано быть шагом, а не тихой правкой на применении: план, молчащий
+   * про работу, которую он всё равно сделает, рапортует сходимость там, где её
+   * нет (`tasker:BASER2-16`, Д10).
+   */
+  | 'record';
 
 export type PlanReason =
   /** Объявленного артефакта нет — материализуем впервые. */
   | 'missing'
-  /** Тело артефакта под нашим маркером разошлось с шаблоном. */
+  /** Содержимое разошлось с тем, что даёт источник сейчас. */
   | 'diverged'
-  /** Существовавший непомеченный файл впервые берётся во владение. */
+  /** Существовавший артефакт без записи впервые берётся во владение. */
   | 'adopted'
   /**
-   * Служебная запись артефакта разошлась с декларацией: маркер утверждает
-   * не тот `src`, что объявлен сейчас, — претензия приводится к декларации.
+   * Запись не утверждает объявленное сейчас: другой `src`, другой обвес, другой
+   * хеш положенного, либо записи нет вовсе.
    */
   | 'reclaimed'
-  /** Артефакт потерял объявление в `layout`. */
+  /** Запись потеряла объявление в `layout`. */
   | 'orphan';
 
-/** Один шаг плана. `content === null` только у снятия артефакта. */
+/** Один шаг плана. */
 export interface PlanStep {
   readonly kind: PlanStepKind;
   readonly dest: string;
   readonly reason: PlanReason;
   readonly src?: string;
-  /** Целевое содержимое (с маркером владения), `null` для `delete`. */
+  /**
+   * Целевое содержимое артефакта: `null` у `delete` (снимаем) и у `record`
+   * (содержимое не трогаем вовсе).
+   */
   readonly content: string | null;
   /** Текущее содержимое до применения — материал для показа расхождения. */
   readonly previous: string | null;
+  /** Запись, которая окажется в манифесте после шага; `null` у `delete`. */
+  readonly record: ManifestRecord | null;
 }
 
 export type ConflictKind =
   /** Две записи `layout` претендуют на один `dest`. */
   | 'duplicate-dest'
-  /** `dest` существует и не помечен как материализованный движком. */
+  /** `dest` существует, а записи о нём нет — артефакт не наш. */
   | 'foreign-dest'
   /**
    * Объявленное состояние физически недостижимо: сегмент пути `dest` занят
@@ -94,9 +109,12 @@ export type ConflictKind =
   | 'unreachable-dest'
   /** `dest` лежит внутри `contentRoot` — движок писал бы в собственный источник. */
   | 'dest-in-content-root'
-  /** Класс файла не может нести маркер владения — доказать владение нечем. */
-  | 'unmarkable-dest'
-  /** Источник `src` не найден под `contentRoot`. */
+  /**
+   * `dest` — это сам манифест: движок писал бы поверх собственной служебной
+   * записи, и прогон не сошёлся бы никогда.
+   */
+  | 'dest-is-manifest'
+  /** Источник `src` не найден. */
   | 'missing-source'
   /**
    * Путь записи раскладки непригоден: пуст, абсолютен или выходит за корень
@@ -134,8 +152,8 @@ export interface ConflictDetail {
   readonly collision?: 'declared-dest' | 'existing-file' | 'existing-directory';
   /** `dest-in-content-root`: корень содержимого источника из декларации. */
   readonly contentRoot?: string;
-  /** `unmarkable-dest`: почему маркер невозможен. */
-  readonly unmarkable?: 'no-format-for-class' | 'content-shape';
+  /** `dest-is-manifest`: где лежит служебная запись. */
+  readonly manifestPath?: string;
   /** `entry-failed`: сообщение исключения, сорвавшего обработку записи. */
   readonly failure?: string;
   /** `invalid-path`: какое поле записи непригодно. */
@@ -162,13 +180,7 @@ export type PlanNoticeKind =
    * (или он вовсе не объявлен). Названо, чтобы «подтвердил, а ничего не
    * изменилось» не выглядело как молчание движка.
    */
-  | 'confirmation-unused'
-  /**
-   * Раннер сузил охват скана, поэтому движок не отвечает за полноту снятия
-   * сирот. Извещение уровня ПРОГОНА (без `dest`): потребитель обязан отличать
-   * «сирот нет» от «сирот не искали во всём дереве».
-   */
-  | 'scan-scope-narrowed';
+  'confirmation-unused';
 
 /**
  * Извещение: состояние, которое обязано быть НАЗВАНО, но не является ни шагом,
@@ -176,7 +188,7 @@ export type PlanNoticeKind =
  */
 export interface PlanNotice {
   readonly kind: PlanNoticeKind;
-  /** Артефакт, которого касается извещение; нет — извещение уровня прогона. */
+  /** Артефакт, которого касается извещение. */
   readonly dest?: string;
   readonly src?: string;
   readonly detail: NoticeDetail;
@@ -186,10 +198,6 @@ export interface PlanNotice {
 export interface NoticeDetail {
   /** `confirmation-unused`: почему подтверждение не пригодилось. */
   readonly confirmation?: 'not-required' | 'not-declared';
-  /** `scan-scope-narrowed`: каталоги, с которых раннер начал скан. */
-  readonly roots?: readonly string[];
-  /** `scan-scope-narrowed`: пропуски сверх умолчания движка. */
-  readonly ignored?: readonly string[];
 }
 
 /**
@@ -198,9 +206,7 @@ export interface NoticeDetail {
  * Признак сходимости ОТДЕЛЁН от признака пустоты намеренно: план без шагов, но
  * с конфликтами, сходимости НЕ означает. Гейт, построенный на «в плане нет
  * шагов», отрапортовал бы «в каноне» при нерешённом конфликте владения — гейт,
- * зеленеющий на конфликте, опаснее отсутствующего. Поэтому честный ответ нельзя
- * получить случайно: спросить можно только состояние целиком, отдельного «плана
- * нет шагов» в схеме нет.
+ * зеленеющий на конфликте, опаснее отсутствующего.
  */
 export type PlanStatus =
   /** Нечего делать и нечего решать: дерево сошлось с декларацией. */
@@ -219,6 +225,10 @@ export interface MaterializationPlan {
   readonly conflicts: readonly PlanConflict[];
   /** Названные состояния, не требующие ни шага, ни отказа. */
   readonly notices: readonly PlanNotice[];
+  /** Куда движок положит служебную запись. */
+  readonly manifestPath: string;
+  /** Манифест, каким он станет после применения плана. */
+  readonly manifest: readonly ManifestRecord[];
   readonly trace: readonly TraceSpan[];
 }
 
@@ -231,18 +241,14 @@ export interface PlanOptions {
    * ПЕРЕЧЕНЬ `dest`, для которых перезапись чужого файла подтверждена
    * (семантика `--force-conflicts` из Kubernetes SSA, но адресная).
    *
-   * Подтверждение — согласие на КОНКРЕТНОЕ действие, а не режим прогона. Булев
-   * флаг превращал бы санкционированный escape hatch в оружие по площадям:
-   * подтвердив одну перезапись, потребитель молча усыновлял и переписывал все
-   * прочие чужие файлы декларации. **Согласие не масштабируется само** —
-   * артефакт вне перечня остаётся под отказом.
-   *
-   * Что подтверждать — план называет сам: конфликты с `detail.resolution`
-   * несут `dest`, по которым подаётся этот список. Формы «подтвердить всё» нет
-   * намеренно; перечислить всё — осознанное действие раннера.
+   * Подтверждение — согласие на КОНКРЕТНОЕ действие, а не режим прогона.
+   * **Согласие не масштабируется само** — артефакт вне перечня остаётся под
+   * отказом. Что подтверждать, план называет сам: конфликты с
+   * `detail.resolution`.
    */
   readonly confirm?: readonly string[];
-  readonly scan?: ScanOptions;
+  /** Где лежит манифест; по умолчанию `baser.lock.json` в корне дерева. */
+  readonly manifestPath?: string;
   readonly trace?: TraceRecorder;
 }
 
@@ -255,13 +261,8 @@ export function isApplicable(plan: MaterializationPlan): boolean {
  * Годен ли вход движку — и ТОЛЬКО это.
  *
  * Форму декларации разбирает дверь (валидаторы объявления, настроек, пресетов,
- * столкновений — зона контрактов). Здесь проверяется не форма, а **пригодность
- * входа для работы движка**: без раскладки и без корня содержимого он не может
- * ни прочитать шаблон, ни защитить собственный источник.
- *
- * Отвечать на это планом не за что: план строится ПО декларации, а её нет.
- * Поэтому исключение — но названное, а не `TypeError` из недр (`BASER2-16`, Д14:
- * отказ обязан быть внятным, где бы он ни возник).
+ * столкновений — зона контрактов). Здесь проверяется не форма, а пригодность
+ * входа для работы движка.
  */
 function requireUsableDeclaration(declaration: Declaration): void {
   const shape = (problem: string): never => {
@@ -277,21 +278,36 @@ function requireUsableDeclaration(declaration: Declaration): void {
   if (!Array.isArray(declaration.layout)) {
     shape('layout — ожидался массив записей { src, dest }');
   }
-  if (
-    typeof declaration.source !== 'object' ||
-    declaration.source === null ||
-    typeof declaration.source.contentRoot !== 'string'
-  ) {
-    shape('source.contentRoot — ожидалась строка с корнем содержимого');
+  if (typeof declaration.source !== 'object' || declaration.source === null) {
+    shape('source — ожидался объект { id, contentRoot }');
+  }
+
+  const { contentRoot } = declaration.source;
+
+  // Источника в этом дереве нет — форма честная, и движок называет её сам, а не
+  // вырождается в защиту, которой не за что зацепиться (`tasker:BASER2-24`).
+  if (contentRoot === null) {
+    throw new SourceOutsideTreeError(
+      `источник обвеса "${declaration.source.id}" лежит вне дерева потребителя: ` +
+        'репо-относительного пути к его шаблонам не существует, поэтому движок ' +
+        'не может проверить, что не пишет в собственный источник. Поставь обвес ' +
+        'в этот репозиторий',
+    );
+  }
+  if (typeof contentRoot !== 'string') {
+    shape(
+      'source.contentRoot — ожидалась строка с корнем содержимого либо null, ' +
+        'если источника в этом дереве нет',
+    );
   }
 
   // Вырожденный корень («.», «/», пустая строка) означает, что источником
   // объявлено ВСЁ дерево. Тогда защита «движок не пишет в собственный источник»
   // отваливается — `isInside` от такого корня ложна, — и прогон затирает
   // шаблон, из которого сам же читает. Отказ вместо тихой порчи источника.
-  if (!toRepoPath(declaration.source.contentRoot).ok) {
+  if (!toRepoPath(contentRoot).ok) {
     throw new DeclarationError(
-      `корень содержимого "${declaration.source.contentRoot}" непригоден: ` +
+      `корень содержимого "${contentRoot}" непригоден: ` +
         'источником объявлено бы всё дерево, и движок писал бы поверх ' +
         'собственных шаблонов. Нужен путь к каталогу шаблонов внутри пакета',
     );
@@ -302,9 +318,11 @@ function requireUsableDeclaration(declaration: Declaration): void {
 export function computePlan(options: PlanOptions): MaterializationPlan {
   const { tree, declaration } = options;
   requireUsableDeclaration(declaration);
+
+  const contentRoot = declaration.source.contentRoot as string;
   const trace = options.trace ?? createTrace();
-  const source =
-    options.source ?? createTreeSource(tree, declaration.source.contentRoot);
+  const source = options.source ?? createTreeSource(tree, contentRoot);
+  const manifestPath = options.manifestPath ?? MANIFEST_PATH;
 
   const confirm = new Set(
     (options.confirm ?? []).map((dest, index) =>
@@ -320,8 +338,13 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
   /** Каталог пути → `dest`, ради которого он обязан быть каталогом. */
   const claimedDirs = new Map<string, string>();
 
-  // Объявленные цели — в каноничной форме и без непригодных: дальше по ним
-  // и сверяется скан, и считаются сироты, поэтому написание должно быть одно.
+  const manifest = trace.span('plan.manifest', () =>
+    readManifest(tree, manifestPath),
+  );
+  trace.event('plan.owned', { records: manifest.size });
+
+  // Объявленные цели — в каноничной форме и без непригодных: по ним же
+  // считаются сироты, поэтому написание должно быть одно.
   const declaredDests = new Set(
     declaration.layout
       .map((entry) => toRepoPath(entry?.dest as string))
@@ -329,50 +352,25 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
       .map((path) => path.path),
   );
 
-  // Скан владения идёт ДО обхода `layout`: сироты нужны уже на проверке
-  // достижимости — путь, занятый файлом, который этот же план снимает, не
-  // является препятствием.
-  const scan = trace.span('plan.scan-ownership', () =>
-    scanOwnership(tree, {
-      ...options.scan,
-      // Объявленные `dest` всегда в зоне видимости скана, каким бы ни был
-      // список пропуска: собственный артефакт не имеет права стать невидимым.
-      declared: [...(options.scan?.declared ?? []), ...declaredDests],
-      // Источник шаблонов скан не просматривает: движок туда не пишет
-      // (`dest-in-content-root`), значит и снимать оттуда не вправе.
-      exclude: [
-        ...(options.scan?.exclude ?? []),
-        declaration.source.contentRoot,
-      ],
-    }),
-  );
-  const owned = scan.owned;
-  trace.event('plan.owned', {
-    files: owned.size,
-    ...(scan.failures.length > 0 ? { failed: scan.failures.length } : {}),
-  });
-
-  // Файл, который скан не смог прочитать, — не «его нет»: движок не знает,
-  // наш он или нет, и обязан сказать это адресно, а не пропустить молча.
-  const failedDests = new Set<string>();
-  for (const failure of scan.failures) {
-    failedDests.add(failure.path);
-    conflicts.push(entryFailed(failure.path, undefined, failure.cause));
-  }
-
-  /** Наши артефакты, которые этот прогон снимает: они освобождают свой путь. */
+  /**
+   * Записи, потерявшие объявление, — сироты.
+   *
+   * Ищутся ПО МАНИФЕСТУ, а не сканом дерева: у поиска по записям нет слепых
+   * зон по построению, и пропуск каталогов ради скорости больше ничего не
+   * прячет. Заодно исчезает целый класс дефектов прошлой модели — снятие
+   * чужого файла, случайно похожего на наш.
+   */
   const removed = new Set(
-    [...owned.keys()].filter((dest) => !declaredDests.has(dest)),
+    [...manifest.keys()].filter((dest) => !declaredDests.has(dest)),
   );
 
   trace.span(
     'plan.layout',
     () => {
       for (const declared of declaration.layout) {
-        // Пути приводятся к каноничной форме ЗДЕСЬ, а не там, где их читали:
-        // читать движку больше нечего, а сверять объявленный `dest` с путями
-        // из скана он обязан в одном написании — иначе свежесозданный артефакт
-        // окажется сиротой сам себе.
+        // Пути приводятся к каноничной форме ЗДЕСЬ: движок сверяет объявленный
+        // `dest` с ключами манифеста, и разъехавшись в написании, свежий
+        // артефакт оказался бы сиротой сам себе.
         const entry = repoPathsOf(declared);
         if (entry === null) {
           conflicts.push(invalidPath(declared));
@@ -400,16 +398,15 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
           });
           continue;
         }
+
         // Сбой на ОДНОЙ записи не имеет права уносить план целиком: порт
         // источника и дерево приходят снаружи движка и могут бросить что
-        // угодно. Отказ привязывается к своему `dest` — соседние записи
-        // планируются как обычно (с несколькими источниками это уже не
-        // удобство, а требование: битый шаблон одного поставщика не должен
-        // гасить материализацию всех остальных).
+        // угодно. Отказ привязывается к своему `dest`.
         try {
           const unreachable = reachabilityConflict(entry, {
             tree,
-            contentRoot: declaration.source.contentRoot,
+            contentRoot,
+            manifestPath,
             claimed,
             claimedDirs,
             removed,
@@ -429,6 +426,8 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
           const outcome = planEntry(entry, {
             tree,
             source,
+            sourceId: declaration.source.id,
+            manifest,
             confirmed: confirm.has(entry.dest),
           });
 
@@ -438,19 +437,11 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
           if (outcome.conflict !== undefined) {
             conflicts.push(outcome.conflict);
           }
-          if (outcome.notice !== undefined) {
-            notices.push(outcome.notice);
-          }
           if (outcome.confirmationUsed === true) {
             consumed.add(entry.dest);
           }
         } catch (cause) {
-          // Тот же файл мог сорвать и скан — отказ по нему уже назван, второй
-          // раз называть его незачем: это один и тот же сбой одного артефакта.
-          if (!failedDests.has(entry.dest)) {
-            failedDests.add(entry.dest);
-            conflicts.push(entryFailed(entry.dest, entry.src, cause));
-          }
+          conflicts.push(entryFailed(entry.dest, entry.src, cause));
         }
       }
     },
@@ -472,23 +463,12 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
     });
   }
 
-  // Сужение охвата скана раннером — законно, но обязано быть НАЗВАНО:
-  // движок перестаёт отвечать за полноту снятия сирот, и потребитель обязан
-  // отличать «сирот нет» от «сирот не искали во всём дереве».
-  const narrowing = scanNarrowing(options.scan);
-  if (narrowing !== null) {
-    notices.push(narrowing);
-  }
-
   trace.span('plan.orphans', () => {
     for (const dest of removed) {
       try {
-        const step = planOrphan(tree, dest);
-        if (step !== null) {
-          steps.push(step);
-        }
+        steps.push(planOrphan(tree, dest, manifest.get(dest) as ManifestRecord));
       } catch (cause) {
-        conflicts.push(entryFailed(dest, owned.get(dest)?.src, cause));
+        conflicts.push(entryFailed(dest, manifest.get(dest)?.src, cause));
       }
     }
   });
@@ -505,8 +485,33 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
     steps,
     conflicts,
     notices,
+    manifestPath,
+    manifest: nextManifest(manifest, steps),
     trace: trace.snapshot(),
   };
+}
+
+/**
+ * Манифест после применения плана.
+ *
+ * Считается ЗДЕСЬ, а не на применении, по той же причине, по которой план
+ * вообще существует: служебное состояние читаемо до того, как что-то поедет.
+ * Записи, по которым план заблокирован, остаются как есть — отказ не меняет
+ * ничего, в том числе служебного.
+ */
+function nextManifest(
+  manifest: Manifest,
+  steps: readonly PlanStep[],
+): readonly ManifestRecord[] {
+  const next = new Map(manifest);
+  for (const step of steps) {
+    if (step.kind === 'delete') {
+      next.delete(step.dest);
+    } else if (step.record !== null) {
+      next.set(step.dest, step.record);
+    }
+  }
+  return [...next.values()].sort((left, right) => byBytes(left.dest, right.dest));
 }
 
 /**
@@ -526,7 +531,7 @@ function repoPathsOf(entry: LayoutEntry): LayoutEntry | null {
  *
  * Границу дерева движок держит САМ, даже получая структуру от двери: он и есть
  * тот, кто пишет. Отказ — план, а не исключение: одна кривая запись не имеет
- * права уносить прогон, остальные планируются как обычно.
+ * права уносить прогон.
  */
 function invalidPath(entry: LayoutEntry): PlanConflict {
   const src = toRepoPath(entry?.src as string);
@@ -554,8 +559,7 @@ function invalidPath(entry: LayoutEntry): PlanConflict {
  *
  * Сбой НЕ проглатывается и НЕ превращается в шаг: он попадает в конфликты, то
  * есть план становится неприменимым целиком. Право уносить прогон
- * `TypeError`'ом из недр движка при этом снимается — потребитель получает
- * машинный код и адрес, а не стек.
+ * `TypeError`'ом из недр движка при этом снимается.
  */
 function entryFailed(
   dest: string,
@@ -584,45 +588,10 @@ function statusOf(
   return steps.length === 0 ? 'converged' : 'pending';
 }
 
-/**
- * Извещение о сокращённом охвате скана; `null` — охват полный.
- *
- * Сокращением считается и старт не от корня (`roots`), и пропуск сверх
- * умолчания движка (`ignore`): в обоих случаях часть дерева не просматривалась.
- * Расширение списка пропуска в меньшую сторону извещения не требует — оно
- * охват не сужает.
- */
-function scanNarrowing(scan: ScanOptions | undefined): PlanNotice | null {
-  const roots = scan?.roots;
-  const extraIgnored = (scan?.ignore ?? []).filter(
-    (name) => !DEFAULT_SCAN_IGNORE.includes(name),
-  );
-  const narrowedByRoots = roots !== undefined;
-
-  if (!narrowedByRoots && extraIgnored.length === 0) {
-    return null;
-  }
-
-  return {
-    kind: 'scan-scope-narrowed',
-    detail: {
-      ...(narrowedByRoots ? { roots } : {}),
-      ...(extraIgnored.length > 0 ? { ignored: extraIgnored } : {}),
-    },
-    message:
-      'охват скана сокращён раннером ' +
-      (narrowedByRoots ? `(корни: ${roots.join(', ')}) ` : '') +
-      (extraIgnored.length > 0
-        ? `(пропуск: ${extraIgnored.join(', ')}) `
-        : '') +
-      '— движок не отвечает за полноту снятия сирот вне этого охвата: ' +
-      '«сирот нет» и «сирот не искали во всём дереве» это разные состояния',
-  };
-}
-
 interface ReachabilityContext {
   readonly tree: Tree;
   readonly contentRoot: string;
+  readonly manifestPath: string;
   readonly claimed: ReadonlyMap<string, LayoutEntry>;
   readonly claimedDirs: ReadonlyMap<string, string>;
   /** Наши артефакты, которые этот же план снимает. */
@@ -640,21 +609,33 @@ interface ReachabilityContext {
  *
  * ПРЕПЯТСТВИЕ СНИМАЕТ ТОЛЬКО СОБСТВЕННЫЙ ШАГ УДАЛЕНИЯ. Путь, занятый нашим же
  * артефактом, который этот план снимает как сироту, перекрывать `dest` не
- * может: иначе штатная миграция «файл стал каталогом» блокирует сама себя —
- * план СОДЕРЖИТ снятие мешающего файла и одновременно объявляет состояние
- * недостижимым, применение отклоняется целиком, дерево не меняется, следующий
- * прогон даёт то же самое. Дедлок, снимаемый только руками по ФС.
- *
- * Правило намеренно узкое. Движок НЕ моделирует гипотетическое дерево «после
- * применения» — он смотрит ровно на один факт: есть ли в этом плане шаг
- * удаления этого пути. Файл, который остаётся лежать законно (чужой или
- * по-прежнему объявленный), продолжает мешать законно.
+ * может: иначе штатная миграция «файл стал каталогом» блокирует сама себя.
+ * Правило намеренно узкое — движок НЕ моделирует гипотетическое дерево, а
+ * смотрит на один факт: есть ли в этом плане шаг удаления этого пути.
  */
 function reachabilityConflict(
   entry: LayoutEntry,
   context: ReachabilityContext,
 ): PlanConflict | null {
-  const { tree, contentRoot, claimed, claimedDirs, removed } = context;
+  const { tree, contentRoot, manifestPath, claimed, claimedDirs, removed } =
+    context;
+
+  // Манифест — не артефакт и целью раскладки быть не может. Иначе движок
+  // кладёт артефакт и тут же перезаписывает его собственной служебной записью:
+  // каждый следующий прогон снова видит расхождение, и прогон не сходится
+  // никогда, рапортуя при этом «применено». Найдено зондом переходов.
+  if (entry.dest === manifestPath) {
+    return {
+      kind: 'dest-is-manifest',
+      dest: entry.dest,
+      src: entry.src,
+      detail: { manifestPath },
+      message:
+        `"${entry.dest}" — это манифест материализации, а не артефакт: движок ` +
+        'писал бы поверх собственной служебной записи, и прогон не сошёлся бы ' +
+        'никогда. Объяви артефакт другим путём',
+    };
+  }
 
   if (isInside(entry.dest, contentRoot)) {
     return {
@@ -686,11 +667,8 @@ function reachabilityConflict(
     return unreachable(entry, blockedDest, 'declared-dest');
   }
 
-  // Симметричный случай: сам `dest` уже занят КАТАЛОГОМ. Контракт его отдельно
-  // не перечисляет, но правило то же — файл на месте каталога не создать, и
-  // упадёт это опять при сбросе на диск, вне журнала отката. Каталог, ВСЁ
-  // содержимое которого снимается этим же планом, препятствием не является: от
-  // него не остаётся ничего, что мешало бы.
+  // Симметричный случай: сам `dest` уже занят КАТАЛОГОМ. Каталог, всё
+  // содержимое которого снимается этим же планом, препятствием не является.
   if (
     tree.exists(entry.dest) &&
     !tree.isFile(entry.dest) &&
@@ -712,7 +690,7 @@ function isEmptiedBy(
   while (queue.length > 0) {
     const dir = queue.pop() as string;
     for (const child of tree.children(dir)) {
-      const path = joinRepoPath(dir, child);
+      const path = `${dir}/${child}`;
       if (tree.isFile(path)) {
         if (!removed.has(path)) {
           return false;
@@ -772,15 +750,17 @@ function isInside(path: string, directory: string): boolean {
 interface EntryContext {
   readonly tree: Tree;
   readonly source: CanonSource;
+  /** Идентичность обвеса, от имени которого кладём. */
+  readonly sourceId: string;
+  readonly manifest: Manifest;
   /** Подтверждена ли перезапись чужого файла именно по ЭТОМУ `dest`. */
   readonly confirmed: boolean;
 }
 
-/** Исход одной записи `layout`: не более одного шага, отказа и извещения. */
+/** Исход одной записи `layout`: не более одного шага и одного отказа. */
 interface EntryOutcome {
   readonly step?: PlanStep;
   readonly conflict?: PlanConflict;
-  readonly notice?: PlanNotice;
   /** Подтверждение по этому `dest` пригодилось: отказ снят именно им. */
   readonly confirmationUsed?: boolean;
 }
@@ -788,16 +768,15 @@ interface EntryOutcome {
 /**
  * Целевое состояние одной записи `layout`.
  *
- * Здесь нет развилки по режиму и нет вопроса «каким должно быть содержимое»:
- * содержимое артефакта — это содержимое шаблона целиком (`kb:BASER2-2`).
- * Единственное, что движок решает, — можно ли трогать существующий файл и
- * требуется ли шаг.
+ * Содержимое движок НЕ ТРОГАЕТ: что дал источник, то и ляжет — байт в байт.
+ * Решается здесь ровно два вопроса: можно ли трогать существующий файл и
+ * требуется ли шаг (по содержимому или по служебной записи).
  */
 function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
-  const { tree, source, confirmed } = context;
+  const { tree, source, sourceId, manifest, confirmed } = context;
 
-  const sourceContent = source.read(entry.src);
-  if (sourceContent === null) {
+  const content = source.read(entry.src);
+  if (content === null) {
     return {
       conflict: {
         kind: 'missing-source',
@@ -809,30 +788,35 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
     };
   }
 
-  const format = markerFormatFor(entry.dest);
-  if (format === null) {
+  const record: ManifestRecord = {
+    dest: entry.dest,
+    src: entry.src,
+    source: sourceId,
+    hash: hashContent(content),
+  };
+
+  const known = manifest.get(entry.dest) ?? null;
+  const actual = tree.exists(entry.dest) ? tree.read(entry.dest, 'utf-8') : null;
+
+  // Артефакта нет — кладём впервые. Запись при этом могла остаться от прошлого
+  // прогона (файл снесли руками): она приводится тем же шагом.
+  if (actual === null) {
     return {
-      conflict: {
-        kind: 'unmarkable-dest',
+      step: {
+        kind: 'create',
         dest: entry.dest,
+        reason: 'missing',
         src: entry.src,
-        detail: { unmarkable: 'no-format-for-class' },
-        message:
-          `владение "${entry.dest}" недоказуемо: класс файла не несёт маркер — ` +
-          'движок не берёт файл во владение молча',
+        content,
+        previous: null,
+        record,
       },
     };
   }
 
-  const raw = tree.exists(entry.dest) ? tree.read(entry.dest, 'utf-8') : null;
-  const record = raw !== null ? format.parse(raw) : null;
-
-  // Подтверждение адресно: снимает отказ ТОЛЬКО по своему `dest`.
-  let confirmationUsed = false;
-
-  // Отказ вместо тихой перезаписи: файл, которого движок не материализовал,
-  // перезаписывается только по поимённому подтверждению.
-  if (raw !== null && record === null) {
+  // Файл есть, а записи о нём нет — он не наш. Отказ вместо тихой перезаписи;
+  // снимается только поимённым подтверждением.
+  if (known === null) {
     if (!confirmed) {
       return {
         conflict: {
@@ -841,111 +825,96 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
           src: entry.src,
           detail: { resolution: 'confirm' },
           message:
-            `конфликт владения: "${entry.dest}" уже существует и не помечен как ` +
-            'материализованный движком. Отказ вместо тихой перезаписи: подтверди ' +
+            `конфликт владения: "${entry.dest}" уже существует, а записи о том, что ` +
+            'его положил движок, нет. Отказ вместо тихой перезаписи: подтверди ' +
             'этот dest поимённо или сними запись из layout',
         },
       };
     }
-    confirmationUsed = true;
+    return {
+      confirmationUsed: true,
+      step: {
+        kind: 'update',
+        dest: entry.dest,
+        reason: 'adopted',
+        src: entry.src,
+        content,
+        previous: actual,
+        record,
+      },
+    };
   }
 
-  let content: string;
-  try {
-    content = format.stamp(format.strip(sourceContent), { src: entry.src });
-  } catch (error) {
-    if (error instanceof UnmarkableContentError) {
-      return {
-        confirmationUsed,
-        conflict: {
-          kind: 'unmarkable-dest',
-          dest: entry.dest,
-          src: entry.src,
-          detail: { unmarkable: 'content-shape' },
-          message: `владение "${entry.dest}" недоказуемо: ${error.message}`,
-        },
-      };
-    }
-    throw error;
+  // Содержимое не то, которое должно лежать, — перегенерация целиком. Почему
+  // разошлось (правили руками либо уехал шаблон), потребитель отличает
+  // ДАННЫМИ: хеш в прошлой записи против `previous` в шаге. Действие от этого
+  // не меняется, поэтому причина одна и она не врёт.
+  if (actual !== content) {
+    return {
+      step: {
+        kind: 'update',
+        dest: entry.dest,
+        reason: 'diverged',
+        src: entry.src,
+        content,
+        previous: actual,
+        record,
+      },
+    };
   }
 
-  const reason = transitionReason({ raw, content, record, entry });
-  if (reason === null) {
-    return { confirmationUsed };
+  // ИНВАРИАНТ Д10 (`tasker:BASER2-16`), внесённый явно: содержимое целевое, но
+  // запись утверждает не то, что объявлено СЕЙЧАС, — приведение обязательно и
+  // обязано быть шагом. Совпадение содержимого не повод молчать: устаревшая
+  // запись переживает смену объявления и всплывает потом снятием не того файла.
+  if (!claimMatches(known, record)) {
+    return {
+      step: {
+        kind: 'record',
+        dest: entry.dest,
+        reason: 'reclaimed',
+        src: entry.src,
+        content: null,
+        previous: actual,
+        record,
+      },
+    };
   }
 
-  return {
-    confirmationUsed,
-    step: {
-      kind: raw === null ? 'create' : 'update',
-      dest: entry.dest,
-      reason,
-      src: entry.src,
-      content,
-      previous: raw,
-    },
-  };
+  return {};
 }
 
-interface TransitionInput {
-  readonly raw: string | null;
-  readonly content: string;
-  readonly record: OwnershipRecord | null;
-  readonly entry: LayoutEntry;
-}
-
-/**
- * Что произошло с артефактом — или `null`, если делать нечего.
- *
- * Сравнение ведётся по ТЕЛУ артефакта и по АКТУАЛЬНОСТИ ПРЕТЕНЗИИ. Второе —
- * обязательно и не сводится к первому: **служебная запись обязана утверждать
- * ровно то, что объявляет декларация сейчас, независимо от того, совпало
- * содержимое или нет.** Совпадение тела не повод пропустить приведение записи —
- * устаревшая претензия молча переживает смену объявления и всплывает потом
- * снятием не того файла.
- *
- * Первичное взятие непомеченного файла во владение — отдельное событие
- * (`adopted`), отличное от расхождения: гейт обязан показывать их по-разному.
- */
-function transitionReason(input: TransitionInput): PlanReason | null {
-  const { raw, content, record, entry } = input;
-
-  if (raw === null) {
-    return 'missing';
-  }
-  if (record === null) {
-    return 'adopted';
-  }
-  // Порядок значим: если декларация сменила claim, первичное событие — именно
-  // это, а не расхождение тела (тело разошлось ВСЛЕДСТВИЕ смены объявления).
-  // Причина обязана быть правдой — на неё ветвятся гейт и панель.
-  if (record.src !== entry.src) {
-    return 'reclaimed';
-  }
-  // Сверяются и тело, и служебная строка целиком: маркер, разошедшийся с тем,
-  // что движок записал бы сейчас, — это тоже расхождение, а не «мелочь».
-  return raw !== content ? 'diverged' : null;
+/** Утверждает ли запись ровно то, что объявлено сейчас. */
+function claimMatches(known: ManifestRecord, now: ManifestRecord): boolean {
+  return (
+    known.src === now.src &&
+    known.source === now.source &&
+    known.hash === now.hash
+  );
 }
 
 /**
- * Артефакт потерял объявление — снимается целиком.
+ * Запись потеряла объявление — артефакт снимается целиком.
  *
- * Развилки по классу владения здесь больше нет: всё, что несёт наш маркер,
- * материализовано движком и им же убирается. Файл, который должен пережить
- * снятие записи, — это форкнутый источник, а форк живёт снаружи движка.
+ * Развилки по классу владения нет: всё, что записано манифестом, положил движок
+ * и он же убирает. Файл, который должен пережить снятие записи, — это форкнутый
+ * источник, а форк живёт снаружи движка.
  */
-function planOrphan(tree: Tree, dest: string): PlanStep | null {
-  const raw = tree.read(dest, 'utf-8');
-  if (raw === null) {
-    return null;
-  }
+function planOrphan(
+  tree: Tree,
+  dest: string,
+  known: ManifestRecord,
+): PlanStep {
+  const previous = tree.exists(dest) ? tree.read(dest, 'utf-8') : null;
 
   return {
     kind: 'delete',
     dest,
     reason: 'orphan',
+    src: known.src,
     content: null,
-    previous: raw,
+    previous,
+    record: null,
   };
 }
 

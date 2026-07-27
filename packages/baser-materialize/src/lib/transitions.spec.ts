@@ -19,9 +19,11 @@ import {
   MaterializationApplyError,
   MaterializationConflictError,
 } from './apply.js';
-import { readOwnership } from './ownership.js';
+import { hashContent } from './manifest.js';
 import {
+  SOURCE_ID,
   createWorkspace,
+  manifestOf,
   redeclare,
   snapshotTree,
   treeFailingOnWrite,
@@ -47,16 +49,24 @@ function materialized(only: LayoutEntry = entry) {
   return fixture;
 }
 
-describe('переход: запись появилась в frame', () => {
-  it('артефакт материализован и помечен как наш', () => {
+describe('переход: запись появилась в layout', () => {
+  it('артефакт лёг байт в байт, а владение записано сбоку', () => {
     const { tree } = materialized();
 
-    expect(tree.read(CFG, 'utf-8')).toContain('setting: шаблон');
-    expect(readOwnership(tree, CFG)).toEqual({ src: 'cfg.yml' });
+    // Содержимое движок не трогает вовсе: ни маркера, ни переслаивания.
+    expect(tree.read(CFG, 'utf-8')).toBe(SOURCES['cfg.yml']);
+    expect(manifestOf(tree)).toEqual([
+      {
+        dest: CFG,
+        src: 'cfg.yml',
+        source: SOURCE_ID,
+        hash: hashContent(SOURCES['cfg.yml']),
+      },
+    ]);
   });
 });
 
-describe('переход: запись убрана из frame', () => {
+describe('переход: запись убрана из layout', () => {
   it('артефакт снимается — других исходов у выпиленной записи нет', () => {
     const { tree, declaration } = materialized();
 
@@ -93,11 +103,20 @@ describe('переход: сменился объявленный src', () => {
     });
     applyPlan(tree, plan);
 
-    expect(plan.steps[0]).toMatchObject({ kind: 'update', reason: 'reclaimed' });
-    expect(readOwnership(tree, CFG)).toEqual({ src: 'other.yml' });
+    // Содержимое ТО ЖЕ — шаг про запись, а не про файл: `record` не трогает
+    // артефакт вовсе, но молчать про приведение записи нельзя (Д10).
+    expect(plan.steps[0]).toMatchObject({
+      kind: 'record',
+      reason: 'reclaimed',
+      content: null,
+    });
+    expect(manifestOf(tree)[0].src).toBe('other.yml');
   });
 
-  it('смена src поверх расхождения тела остаётся reclaimed — причина не врёт', () => {
+  it('смена src поверх ПРАВКИ руками называется потерями, а не сменой записи', () => {
+    // Порядок причин: пользователю первично «твои правки будут затёрты» —
+    // это `diverged` с прежним содержимым в `previous`. Смена записи при этом
+    // происходит тем же шагом, отдельного события не требуя.
     const { tree, declaration } = materialized();
     tree.write(CFG, `${tree.read(CFG, 'utf-8') as string}правка руками\n`);
 
@@ -106,7 +125,7 @@ describe('переход: сменился объявленный src', () => {
       declaration: redeclare(declaration, [fromOther]),
     });
 
-    expect(plan.steps[0]).toMatchObject({ kind: 'update', reason: 'reclaimed' });
+    expect(plan.steps[0]).toMatchObject({ kind: 'update', reason: 'diverged' });
     expect(plan.steps[0].previous).toContain('правка руками');
   });
 });
@@ -154,28 +173,42 @@ describe('переход: артефакт правили руками', () => {
     ['стёр содержимое', ''],
   ])('%s → правка не выживает, сходимость перегенерацией', (_case, edit) => {
     const { tree, declaration } = materialized();
-    const format = tree.read(CFG, 'utf-8') as string;
-    tree.write(CFG, `${format.split('\n')[0]}\n${edit}`);
+    const template = tree.read(CFG, 'utf-8') as string;
+    tree.write(CFG, edit);
 
     const plan = computePlan({ tree, declaration });
     applyPlan(tree, plan);
 
     expect(plan.steps[0]).toMatchObject({ kind: 'update', reason: 'diverged' });
-    expect(tree.read(CFG, 'utf-8')).toBe(format);
+    expect(tree.read(CFG, 'utf-8')).toBe(template);
     expect(computePlan({ tree, declaration }).status).toBe('converged');
   });
 
-  it('правка вместе со снятым маркером — файл чужой, отказ вместо перезаписи', () => {
-    // Снял маркер — движок больше не может ДОКАЗАТЬ владение и не трогает файл
-    // молча: это тот же отказ, что и на изначально чужом файле.
+  it('переписанный до неузнаваемости артефакт остаётся НАШИМ', () => {
+    // При наклейке внутри файла правка шапки делала артефакт неопознаваемым:
+    // движок терял владение и брал отказ как на чужом файле — а следом не
+    // находил его сиротой, когда запись уходила из раскладки. Запись сбоку от
+    // содержимого не зависит вовсе: правка это флаг, а не переход владения.
     const { tree, declaration } = materialized();
-    tree.write(CFG, 'setting: теперь моё\n');
+    tree.write(CFG, 'ни строчки от шаблона\n');
 
     const plan = computePlan({ tree, declaration });
 
-    expect(plan.status).toBe('blocked');
-    expect(plan.conflicts[0]).toMatchObject({ kind: 'foreign-dest' });
-    expect(tree.read(CFG, 'utf-8')).toBe('setting: теперь моё\n');
+    expect(plan.status).toBe('pending');
+    expect(plan.conflicts).toEqual([]);
+    expect(plan.steps[0]).toMatchObject({ kind: 'update', reason: 'diverged' });
+    expect(plan.steps[0].previous).toBe('ни строчки от шаблона\n');
+  });
+
+  it('переписанный артефакт всё ещё находится сиротой, когда запись ушла', () => {
+    const { tree, declaration } = materialized();
+    tree.write(CFG, 'ни строчки от шаблона\n');
+
+    const plan = computePlan({ tree, declaration: redeclare(declaration, []) });
+    applyPlan(tree, plan);
+
+    expect(plan.steps[0]).toMatchObject({ kind: 'delete', reason: 'orphan' });
+    expect(tree.exists(CFG)).toBe(false);
   });
 });
 
@@ -230,26 +263,30 @@ describe('переход: артефакт объявлен в каталоге 
     expect(tree.exists('dist/x.yml')).toBe(false);
   });
 
-  it('объявленный каталог сканируется даже под явным пропуском', () => {
-    const kept: LayoutEntry = { src: 'cfg.yml', dest: 'vendor/kept.yml' };
-    const dropped: LayoutEntry = { src: 'cfg.yml', dest: 'vendor/dropped.yml' };
+  it('артефакт в служебном каталоге снимается так же: у записей нет слепых зон', () => {
+    const kept: LayoutEntry = { src: 'cfg.yml', dest: 'node_modules/kept.yml' };
+    const dropped: LayoutEntry = {
+      src: 'cfg.yml',
+      dest: 'node_modules/dropped.yml',
+    };
     const { tree, declaration } = createWorkspace({
       layout: [kept, dropped],
       sources: SOURCES,
     });
-    const scan = { ignore: ['vendor'] };
-    applyPlan(tree, computePlan({ tree, declaration, scan }));
+    applyPlan(tree, computePlan({ tree, declaration }));
 
     const plan = computePlan({
       tree,
       declaration: redeclare(declaration, [kept]),
-      scan,
     });
 
-    // `vendor` пропускается по просьбе раннера, но движок туда материализует —
-    // значит слепой зоны над своими артефактами там быть не может.
+    // Раньше сюда не заглядывал скан, и артефакт оставался вечной сиротой.
+    // Запись сбоку про каталоги ничего не знает — и знать не должна.
     expect(plan.steps).toEqual([
-      expect.objectContaining({ dest: 'vendor/dropped.yml', kind: 'delete' }),
+      expect.objectContaining({
+        dest: 'node_modules/dropped.yml',
+        kind: 'delete',
+      }),
     ]);
   });
 });

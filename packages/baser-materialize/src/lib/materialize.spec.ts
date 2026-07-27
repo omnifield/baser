@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { LayoutEntry } from './declaration.js';
 import { computePlan, describePlan } from './plan.js';
 import { applyPlan } from './apply.js';
-import { createWorkspace } from './workspace.fixture.js';
+import { createWorkspace, manifestOf } from './workspace.fixture.js';
 
 const LAYOUT: readonly LayoutEntry[] = [
   { src: 'ci/build.yml', dest: '.github/workflows/build.yml' },
@@ -37,16 +37,23 @@ describe('материализация из декларации', () => {
     }
   });
 
-  it('каждый объявленный артефакт несёт маркер материализации', () => {
-    // Пользовательских артефактов у движка больше нет: объявил — значит наш,
-    // значит перегенерируется целиком (`kb:BASER2-2`). Файл без маркера был бы
-    // артефактом, владение которым движок доказать не может.
-    const { tree, declaration } = createWorkspace({ layout: LAYOUT, sources: SOURCES });
+  it('каждый артефакт лёг байт в байт, а владение записано сбоку', () => {
+    // Объявил — значит наш; но доказывается это записью в манифесте, а не
+    // наклейкой внутри файла. Содержимое движок не трогает вовсе.
+    const { tree, declaration } = createWorkspace({
+      layout: LAYOUT,
+      sources: SOURCES,
+    });
     applyPlan(tree, computePlan({ tree, declaration }));
 
     for (const entry of LAYOUT) {
-      expect(tree.read(entry.dest, 'utf-8')).toContain('baser-materialize');
+      expect(tree.read(entry.dest, 'utf-8')).toBe(
+        SOURCES[entry.src as keyof typeof SOURCES],
+      );
     }
+    expect(manifestOf(tree).map((record) => record.dest)).toEqual(
+      [...LAYOUT].map((entry) => entry.dest).sort(),
+    );
   });
 
   it('повторный прогон ничего не делает и ничего не портит', () => {
@@ -64,23 +71,26 @@ describe('материализация из декларации', () => {
     );
   });
 
-  it('сходимость не глушит названные состояния (извещения остаются)', () => {
-    // Сошлись — но раннер сузил охват скана. Состояние обязано быть НАЗВАНО,
-    // а не растворяться в «плане нет шагов».
-    const { tree, declaration } = createWorkspace({ layout: LAYOUT, sources: SOURCES });
+  it('подтверждение, которое не понадобилось, названо и на сошедшемся дереве', () => {
+    // Сходимость не глушит названные состояния: «подтвердил, а ничего не
+    // изменилось» — это не молчание движка.
+    const { tree, declaration } = createWorkspace({
+      layout: LAYOUT,
+      sources: SOURCES,
+    });
     applyPlan(tree, computePlan({ tree, declaration }));
 
     const second = computePlan({
       tree,
       declaration,
-      scan: { ignore: ['node_modules', 'vendor'] },
+      confirm: ['.gitignore'],
     });
 
     expect(second.status).toBe('converged');
     expect(second.notices.map((notice) => notice.kind)).toEqual([
-      'scan-scope-narrowed',
+      'confirmation-unused',
     ]);
     expect(describePlan(second)).toContain('план пуст');
-    expect(describePlan(second)).toContain('scan-scope-narrowed');
+    expect(describePlan(second)).toContain('confirmation-unused');
   });
 });
