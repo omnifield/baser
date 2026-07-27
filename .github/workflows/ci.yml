@@ -20,6 +20,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: nrwl/nx-set-shas@v4
-      # ts-preset даёт typecheck+build; lint/test добавим с тулингом (biome/vitest)
-      - run: pnpm exec nx affected -t typecheck build
+      # run-many, а не affected: проектов четыре и они собираются за секунду, а affected
+      # на squash-мерже способен не увидеть зону, которую задел сосед.
+      - run: pnpm exec nx run-many -t typecheck build
+      # Тесты идут ПОСЛЕ сборки всех пакетов: зона импортирует соседей по их публичной
+      # поверхности (`dist`), и без сборки они не резолвятся. Локально это незаметно —
+      # там dist лежит с прошлых прогонов, и зелень держится на устаревших артефактах.
+      # Не `nx -t test`: у @nx/vitest дефолт — watch-режим, в CI он не заканчивается.
+      - run: pnpm exec vitest run
