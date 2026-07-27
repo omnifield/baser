@@ -56,12 +56,18 @@ importers:
 
   packages/baser-cli:
     dependencies:
+      '@omnifield/baser-check':
+        specifier: workspace:*
+        version: link:../baser-check
       '@omnifield/baser-contracts':
         specifier: workspace:*
         version: link:../baser-contracts
       '@omnifield/baser-materialize':
         specifier: workspace:*
         version: link:../baser-materialize
+      '@omnifield/baser-pack':
+        specifier: workspace:*
+        version: link:../baser-pack
       ejs:
         specifier: ^5.0.1
         version: 5.0.1
@@ -75,9 +81,6 @@ importers:
       '@types/ejs':
         specifier: ^3.1.5
         version: 3.1.5
-      nx:
-        specifier: 23.1.0
-        version: 23.1.0
 
   packages/baser-contracts:
     dependencies:
