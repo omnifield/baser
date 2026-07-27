@@ -20,7 +20,10 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import {
   cleanupBoxes,
+  copyDevbox,
   DEVBOX_ROOT,
+  editManifest,
+  readManifest,
   sandbox,
   target,
   treeFiles,
@@ -88,12 +91,20 @@ describe('приёмка на живом обвесе девбокса', () => {
     ).toEqual(manifest);
   });
 
+  /**
+   * Личность обвеса — прибита НАМЕРЕННО.
+   *
+   * `id`, `title` и имя пакета меняются осознанным решением, а не ходом времени:
+   * это то, по чему принимающая сторона узнаёт деталь. Поехала личность — приёмка
+   * обязана покраснеть и потребовать, чтобы человек назвал перемену вслух.
+   *
+   * Версии здесь нет специально: она меняется каждым выпуском соседа и потому
+   * утверждается формой, а не значением, — соседней пробой ниже.
+   */
   it('принимающая сторона узнаёт деталь, не вскрывая её', () => {
-    expect(manifest.source).toEqual({
-      id: 'omnifield/devbox',
-      title: 'Девбокс: проект целиком в контейнере',
-      package: { name: '@omnifield/baser-devbox', version: '0.2.0' },
-    });
+    expect(manifest.source.id).toBe('omnifield/devbox');
+    expect(manifest.source.title).toBe('Девбокс: проект целиком в контейнере');
+    expect(manifest.source.package.name).toBe('@omnifield/baser-devbox');
     expect(manifest.formVersion).toBe(1);
     expect(manifest.artifacts).toEqual([
       {
@@ -107,6 +118,58 @@ describe('приёмка на живом обвесе девбокса', () => {
         render: false,
       },
     ]);
+  });
+
+  /**
+   * Версия — форма, а не значение.
+   *
+   * Номер выпуска обвеса не свойство упаковщика: он меняется каждым выпуском
+   * соседа, и прибитый здесь литерал делал бы ЧУЖОЙ релизный цикл источником
+   * красноты в нашей зоне. Инвариант, который держит только соседняя зона, — не
+   * инвариант.
+   *
+   * Утверждается ровно то, за что упаковка отвечает: версия в описи есть, она
+   * непустая и она НЕ ВЫДУМАНА — совпадает с объявленной самим обвесом там же,
+   * откуда её берёт сборка. Второй половиной проверяется обещание из названия
+   * соседней пробы: то же число лежит и внутри ящика, так что читающему опись
+   * незачем его вскрывать.
+   */
+  it('версия в описи — та, что обвес объявляет сам', () => {
+    const declared = readManifest(DEVBOX_ROOT).version;
+    const version = manifest.source.package.version;
+
+    expect(typeof declared).toBe('string');
+    expect(version).toBe(declared);
+    expect(version ?? '').toMatch(/^\d+\.\d+\.\d+(?:[-+].+)?$/);
+    // Опись не расходится с тем, что реально уехало в нагрузке.
+    expect(readManifest(report.payloadRoot as string).version).toBe(version);
+  });
+
+  /**
+   * Выпуск соседа — не поломка нашей приёмки.
+   *
+   * Прямая проба на дефект, ради которого переписана предыдущая: обвес выпускает
+   * новую версию, и приёмка обязана остаться зелёной, а опись — приехать с новым
+   * номером. Ломается КОПИЯ: чужой каталог мы не трогаем.
+   */
+  it('выпуск обвеса не красит приёмку — номер едет из объявления', () => {
+    const root = copyDevbox();
+    editManifest(root, (declaration) => {
+      declaration.version = '99.0.0-release-probe';
+    });
+
+    const released = packPackage(root, { into: target() });
+
+    expect(released.problems).toEqual([]);
+    expect(released.ok).toBe(true);
+    expect(released.manifest?.source.package.version).toBe(
+      '99.0.0-release-probe',
+    );
+    // Личность обвеса выпуском не меняется — поехал только номер.
+    expect(released.manifest?.source.id).toBe(manifest.source.id);
+    expect(released.manifest?.source.package.name).toBe(
+      manifest.source.package.name,
+    );
   });
 
   it('в описи сказано, чем деталь проверена — обоими вердиктами', () => {
