@@ -1,0 +1,263 @@
+/**
+ * ЧИСТОЕ ДЕРЕВО С ПОСТАВЛЕННЫМ ОБВЕСОМ.
+ *
+ * Приёмка двери — не мок. Дверь берёт обвес с реальной ФС, грузит его резолверы
+ * как настоящие модули и кладёт файлы на настоящий диск; фикстура, подменившая
+ * хоть одно из трёх, проверяла бы не дверь.
+ *
+ * Поэтому здесь именно УСТАНОВКА: обвес девбокса раскладывается в
+ * `node_modules/@omnifield/baser-devbox` временного репозитория ровно так, как
+ * его положил бы npm, — манифест, резолверы, каталог шаблонов. Берётся он из
+ * принятого примера зоны контрактов (`examples/devbox`), а не переписывается
+ * заново: две копии одного обвеса разъехались бы, и приёмка двери начала бы
+ * зеленеть на обвесе, которого нет ни у кого.
+ *
+ * Отсюда же и главный инструмент фикстуры — `updateSource`. Контракт проверяется
+ * ПЕРЕХОДАМИ, а не устойчивыми состояниями (`packages/baser-materialize`,
+ * `transitions.spec.ts`), а центральный переход у двери один: обвес обновился.
+ *
+ * Файл исключён из сборки пакета.
+ */
+
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { markerFormatFor } from '@omnifield/baser-materialize';
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+/** Корень ЭТОГО репозитория — из него берётся живой `.devcontainer`. */
+export const REPO_ROOT = resolve(here, '../../../..');
+
+/** Принятый обвес девбокса — общий с пробой формы зоны контрактов. */
+const DEVBOX_EXAMPLE = join(
+  REPO_ROOT,
+  'packages/baser-contracts/examples/devbox',
+);
+
+export const DEVBOX_PACKAGE = '@omnifield/baser-devbox';
+
+/** Репозиторий потребителя с поставленным обвесом. */
+export interface Consumer {
+  /** Корень репозитория — он же корень дерева движка. */
+  readonly root: string;
+  /** Корень распакованного пакета обвеса. */
+  readonly sourceRoot: string;
+  read(path: string): string | null;
+  exists(path: string): boolean;
+  write(path: string, content: string): void;
+  remove(path: string): void;
+  /** Правит объявление обвеса — переход «обвес обновился». */
+  updateSource(
+    patch: (block: DeclarationBlock) => void,
+    version?: string,
+  ): void;
+  /** Подменяет резолверы обвеса — движение ВЫЧИСЛЯЕМОГО дефолта. */
+  updateResolvers(source: string): void;
+  /** Кладёт файл в каталог шаблонов обвеса. */
+  writeTemplate(name: string, content: string): void;
+  cleanup(): void;
+}
+
+/** Блок `baser` манифеста обвеса — как есть, без типизации формы. */
+export type DeclarationBlock = Record<string, unknown>;
+
+export interface InstallOptions {
+  /**
+   * Имя каталога репозитория. Из него растут имена, которые считает резолвер
+   * обвеса (`<репозиторий>-devbox`), поэтому оно значимо, а не косметика.
+   */
+  readonly repoName?: string;
+  /** Конфиг потребителя. Не передан — файла нет, и дверь его родит сама. */
+  readonly config?: unknown;
+  /** Файлы, уже лежащие в репозитории до прогона. */
+  readonly existing?: Readonly<Record<string, string>>;
+  /** Объявлять ли обвес зависимостью в `package.json` потребителя. */
+  readonly declareDependency?: boolean;
+  /**
+   * Поставить обвес НАД корнем потребителя — раскладка hoisted-workspace.
+   *
+   * Резолв его находит (Node идёт вверх по `node_modules`), а репо-относительного
+   * пути к его шаблонам не существует: это тот самый шов `contentRoot`.
+   */
+  readonly hoisted?: boolean;
+}
+
+export function installDevbox(options: InstallOptions = {}): Consumer {
+  const box = mkdtempSync(join(tmpdir(), 'baser-cli-'));
+  const root = join(box, options.repoName ?? 'baser');
+  mkdirSync(root, { recursive: true });
+
+  const declareDependency = options.declareDependency ?? true;
+  writeFileSync(
+    join(root, 'package.json'),
+    `${JSON.stringify(
+      {
+        name: options.repoName ?? 'baser',
+        version: '0.0.0',
+        private: true,
+        ...(declareDependency
+          ? { devDependencies: { [DEVBOX_PACKAGE]: '0.1.0' } }
+          : {}),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const sourceRoot = join(
+    options.hoisted === true ? box : root,
+    'node_modules',
+    DEVBOX_PACKAGE,
+  );
+  mkdirSync(sourceRoot, { recursive: true });
+
+  // Манифест обвеса — это и есть его объявление: `declaration.json` примера
+  // лежит в форме `package.json` (имя, версия, блок `baser`), поэтому кладётся
+  // под своим настоящим именем, а не пересобирается.
+  cpSync(
+    join(DEVBOX_EXAMPLE, 'declaration.json'),
+    join(sourceRoot, 'package.json'),
+  );
+  cpSync(
+    join(DEVBOX_EXAMPLE, 'defaults.mjs'),
+    join(sourceRoot, 'defaults.mjs'),
+  );
+  cpSync(join(DEVBOX_EXAMPLE, 'template'), join(sourceRoot, 'template'), {
+    recursive: true,
+  });
+
+  const consumer: Consumer = {
+    root,
+    sourceRoot,
+    read(path) {
+      const file = join(root, path);
+      return existsSync(file) ? readFileSync(file, 'utf-8') : null;
+    },
+    exists(path) {
+      return existsSync(join(root, path));
+    },
+    write(path, content) {
+      const file = join(root, path);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, content);
+    },
+    remove(path) {
+      rmSync(join(root, path), { force: true, recursive: true });
+    },
+    updateSource(patch, version) {
+      const manifestPath = join(sourceRoot, 'package.json');
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as {
+        version: string;
+        baser: DeclarationBlock;
+      };
+      patch(manifest.baser);
+      if (version !== undefined) {
+        manifest.version = version;
+      }
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    },
+    updateResolvers(source) {
+      // Новый файл, а не перезапись: ESM-модуль кэшируется загрузчиком по URL
+      // на всё время процесса, и подмена содержимого по тому же пути не
+      // доехала бы до второго прогона. Обвес при этом правится честно — через
+      // своё же объявление.
+      const name = `defaults.${counter()}.mjs`;
+      writeFileSync(join(sourceRoot, name), source);
+      consumer.updateSource((block) => {
+        const settings = block['settings'] as Record<
+          string,
+          { defaultFrom?: string }
+        >;
+        for (const spec of Object.values(settings)) {
+          if (typeof spec.defaultFrom === 'string') {
+            spec.defaultFrom = spec.defaultFrom.replace(
+              /^\.\/defaults[^#]*/,
+              `./${name}`,
+            );
+          }
+        }
+      });
+    },
+    writeTemplate(name, content) {
+      writeFileSync(join(sourceRoot, 'template', name), content);
+    },
+    cleanup() {
+      rmSync(box, { force: true, recursive: true });
+    },
+  };
+
+  if (options.config !== undefined) {
+    consumer.write(
+      'baser.json',
+      `${JSON.stringify(options.config, null, 2)}\n`,
+    );
+  }
+  for (const [path, content] of Object.entries(options.existing ?? {})) {
+    consumer.write(path, content);
+  }
+
+  return consumer;
+}
+
+/**
+ * Переобъявляет артефакт девбокса так, чтобы движок мог взять его во владение.
+ *
+ * ЭТО ОБХОД БЛОКЕРА, а не удобство фикстуры. Живой
+ * `.devcontainer/devcontainer.json` — это JSONC: комментарии разрешены в нём
+ * спецификацией Dev Containers, и обвес их несёт. Движок же для расширения
+ * `.json` умеет ровно один способ доказать владение — ключ `"//"` в РАЗОБРАННОМ
+ * JSON, — поэтому на файле с комментариями он отказывается брать артефакт во
+ * владение (`unmarkable-dest`), и план блокируется целиком.
+ *
+ * Блокер зафиксирован прогоном в `acceptance.spec.ts` и эскалирован в зону
+ * движка. Здесь он обходится сменой `dest` на `.jsonc`, чтобы остальная дверь
+ * проверялась настоящим прогоном, а не ждала чужой правки. Обход законный: это
+ * штатный переход объявления обвеса, а не правка движка под тест.
+ */
+export function makeArtifactOwnable(consumer: Consumer): string {
+  const dest = '.devcontainer/devcontainer.jsonc';
+  consumer.updateSource((block) => {
+    const layout = block['layout'] as { src: string; dest: string }[];
+    const entry = layout.find((item) => item.src.endsWith('.ejs'));
+    if (entry) {
+      entry.dest = dest;
+    }
+  });
+  return dest;
+}
+
+/** Живой `.devcontainer` этого репозитория — эталон приёмки. */
+export function liveArtifact(dest: string): string {
+  return readFileSync(join(REPO_ROOT, dest), 'utf-8');
+}
+
+/**
+ * Тело артефакта без служебной записи владения.
+ *
+ * Снимается ТЕМ ЖЕ механизмом, которым ставилась (`markerFormatFor(dest).strip`),
+ * а не своим разбором: снятие маркера, написанное в тесте отдельно, разошлось бы
+ * с движком при первой же правке формата — и сверка с эталоном начала бы врать.
+ */
+export function withoutMarker(dest: string, content: string): string {
+  const format = markerFormatFor(dest);
+  if (format === null) {
+    throw new Error(`класс файла "${dest}" маркера не несёт`);
+  }
+  return format.strip(content);
+}
+
+let sequence = 0;
+function counter(): number {
+  sequence += 1;
+  return sequence;
+}

@@ -1,0 +1,42 @@
+{
+  "name": "@omnifield/baser-cli",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "baser": "./dist/bin/baser.js"
+  },
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@omnifield/baser-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!**/*.tsbuildinfo"
+  ],
+  "dependencies": {
+    "@omnifield/baser-contracts": "workspace:*",
+    "@omnifield/baser-materialize": "workspace:*",
+    "ejs": "^5.0.1",
+    "tslib": "^2.3.0"
+  },
+  "peerDependencies": {
+    "@nx/devkit": "^23.0.0",
+    "nx": "^23.0.0"
+  },
+  "devDependencies": {
+    "@nx/devkit": "23.1.0",
+    "@types/ejs": "^3.1.5",
+    "nx": "23.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

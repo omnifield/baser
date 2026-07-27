@@ -11,6 +11,9 @@
     },
     {
       "path": "./packages/baser-contracts"
+    },
+    {
+      "path": "./packages/baser-cli"
     }
   ]
 }
