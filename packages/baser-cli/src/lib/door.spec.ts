@@ -23,7 +23,7 @@ import {
   type Consumer,
   type InstallOptions,
 } from './devbox.fixture.js';
-import { cli } from './cli.js';
+import { cli, type CliOutcome } from './cli.js';
 import { run } from './run.js';
 import { renderText } from './report.js';
 
@@ -127,7 +127,7 @@ describe('конфиг потребителя рождается один раз
 
     const outcome = await cli(['apply', '--cwd', box.root], process.cwd());
 
-    expect(outcome.result?.status).toBe('no-sources');
+    expect(door(outcome)?.status).toBe('no-sources');
     expect(outcome.exitCode).toBe(0);
     // Файл, объявляющий ноль обвесов, — мусор в чужом репозитории.
     expect(box.exists('baser.json')).toBe(false);
@@ -191,7 +191,7 @@ describe('отказ говорит чужим кодом, когда код е�
 
     const outcome = await cli(['plan', '--cwd', box.root], process.cwd());
 
-    expect(outcome.result?.problems[0].code).toBe('package-not-found');
+    expect(door(outcome)?.problems[0].code).toBe('package-not-found');
     expect(outcome.exitCode).toBe(2);
   });
 
@@ -283,7 +283,7 @@ describe('коды возврата — производная от состоя
       '// чужой файл, движок его не клал\n{}\n',
     );
     const outcome = await cli(['plan', '--cwd', blocked.root], process.cwd());
-    expect(outcome.result?.plan?.conflicts[0].kind).toBe('foreign-dest');
+    expect(door(outcome)?.plan?.conflicts[0].kind).toBe('foreign-dest');
     expect(outcome.exitCode).toBe(1);
     blocked.cleanup();
 
@@ -301,3 +301,8 @@ describe('коды возврата — производная от состоя
     ).toBe(0);
   });
 });
+
+/** Ответ прогона из общего ответа вызова: семьи команд разные, ответы тоже. */
+function door(outcome: CliOutcome) {
+  return outcome.result?.kind === 'door' ? outcome.result.door : null;
+}

@@ -38,9 +38,28 @@ export { run } from './lib/run.js';
 export type { RunOptions } from './lib/run.js';
 
 export { cli, USAGE } from './lib/cli.js';
-export type { CliOutcome } from './lib/cli.js';
+export type { CliOutcome, CliResult } from './lib/cli.js';
 
-export { renderText } from './lib/report.js';
+export { bundle, BUNDLE_SCHEMA_VERSION } from './lib/bundle.js';
+export type {
+  BundleOptions,
+  BundleReport,
+  BundleSpan,
+  BundleStage,
+  BundleStageName,
+  BundleStageStatus,
+  BundledPackage,
+} from './lib/bundle.js';
+
+export { createRepoTree } from './lib/tree.js';
+export type { ChangeKind, RepoTree } from './lib/tree.js';
+
+export {
+  renderBundle,
+  renderCheck,
+  renderPack,
+  renderText,
+} from './lib/report.js';
 
 export {
   readConsumerConfig,

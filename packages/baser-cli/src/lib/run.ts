@@ -11,7 +11,7 @@
  *          ↓ checkTemplate → EJS           (форма решает, дверь рендерит)
  *   готовое содержимое → CanonSource      ← движок значений не видит
  *          ↓ computePlan / applyPlan       (движок)
- *   виртуальное дерево → flushChanges     ← дверь кладёт на реальную ФС
+ *   виртуальное дерево → tree.flush()     ← дверь кладёт на реальную ФС
  * ```
  *
  * Инварианты прогона, за которые отвечает именно этот файл:
@@ -29,7 +29,6 @@
  * ничего, включая конфиг, который дверь родила бы этим же прогоном.
  */
 
-import { FsTree, flushChanges } from 'nx/src/generators/tree.js';
 import {
   checkSingleProvider,
   FORM_VERSION,
@@ -48,6 +47,7 @@ import {
   type MaterializationPlan,
   type TraceRecorder,
 } from '@omnifield/baser-materialize';
+import { createRepoTree, type RepoTree } from './tree.js';
 import { DOOR_SCHEMA_VERSION } from './schema.js';
 import {
   DoorProblemLog,
@@ -257,7 +257,7 @@ async function runInRepo(
   }
 
   // ── 5. Дерево. `plan` и `apply` строят одно и то же — расходятся на сбросе.
-  const tree = new FsTree(repo.root, false);
+  const tree = createRepoTree(repo.root);
   if (creates) {
     tree.write(session.config.path, serializeConsumerConfig(config));
   }
@@ -328,13 +328,9 @@ async function runInRepo(
   }
 
   try {
-    trace.span(
-      'door.flush',
-      () => flushChanges(repo.root, tree.listChanges()),
-      {
-        writes: writes.length,
-      },
-    );
+    trace.span('door.flush', () => tree.flush(), {
+      writes: writes.length,
+    });
   } catch (cause) {
     log.add(
       'flush-failed',
@@ -447,7 +443,7 @@ function engineRefusal(
  * оно кричало бы каждому новому потребителю и через неделю перестало читаться.
  */
 function diagnoseForeignDests(
-  tree: FsTree,
+  tree: RepoTree,
   plan: MaterializationPlan,
   config: ConfigReport,
 ): DoorProblem | null {
@@ -527,7 +523,7 @@ function describeSource(
  * Список СОСТОЯВШИХСЯ записей, а не намерений: у `plan` он пуст по построению,
  * потому что `plan` не пишет. Намерения читаются из `plan.steps`.
  */
-function changesOf(tree: FsTree): WriteReport[] {
+function changesOf(tree: RepoTree): WriteReport[] {
   return tree
     .listChanges()
     .map((change) => ({ path: change.path, kind: change.type }));
