@@ -26,7 +26,15 @@
  * `drop-frame-entry` → `drop-layout-entry`, спан трейса `plan.frame` →
  * `plan.layout`. Добавлен конфликт `invalid-path` — добавление кода само по
  * себе версию не поднимает, но здесь она поднята за переименования.
+ *
+ * **4** — служебная запись уехала из артефактов в манифест сбоку
+ * (`tasker:BASER2-4`). Несовместимо: план и отчёт несут `manifestPath` и
+ * `manifest`, у шага появилось поле `record` и вид `record`, снят конфликт
+ * `unmarkable-dest` (класс файла больше не условие владения) и извещение
+ * `scan-scope-narrowed` вместе со сканом дерева, из `PlanOptions` ушёл `scan`.
+ * Потребитель, ветвившийся по снятым кодам или читавший владение из содержимого
+ * артефакта, обязан это увидеть, а не молча промахнуться.
  */
-export const OUTPUT_SCHEMA_VERSION = 3;
+export const OUTPUT_SCHEMA_VERSION = 4;
 
 export type OutputSchemaVersion = typeof OUTPUT_SCHEMA_VERSION;

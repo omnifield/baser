@@ -6,8 +6,10 @@ import {
   MaterializationConflictError,
   applyPlan,
 } from './apply.js';
+import { MANIFEST_PATH } from './manifest.js';
 import {
   createWorkspace,
+  manifestOf,
   redeclare,
   snapshotTree,
   treeFailingOnWrite,
@@ -42,7 +44,10 @@ describe('applyPlan', () => {
 
     const report = applyPlan(tree, computePlan({ tree, declaration }));
 
-    expect(report.trace.map((span) => span.name)).toEqual(['apply.steps']);
+    expect(report.trace.map((span) => span.name)).toEqual([
+      'apply.steps',
+      'apply.manifest',
+    ]);
     expect(report.trace[0].detail).toEqual({ steps: 2 });
   });
 
@@ -58,6 +63,59 @@ describe('applyPlan', () => {
 
     expect(() => applyPlan(tree, plan)).toThrow(MaterializationConflictError);
     expect(snapshotTree(tree)).toEqual(before);
+  });
+});
+
+describe('служебная запись применяется вместе с артефактами', () => {
+  it('манифест ложится последним и назван в отчёте', () => {
+    const { tree, declaration } = createWorkspace({
+      layout: LAYOUT,
+      sources: SOURCES,
+    });
+
+    const report = applyPlan(tree, computePlan({ tree, declaration }));
+
+    expect(report.manifestPath).toBe(MANIFEST_PATH);
+    expect(manifestOf(tree).map((record) => record.dest)).toEqual(
+      [...LAYOUT].map((entry) => entry.dest).sort(),
+    );
+  });
+
+  it('сходящийся план манифест не трогает', () => {
+    const { tree, declaration } = createWorkspace({
+      layout: LAYOUT,
+      sources: SOURCES,
+    });
+    applyPlan(tree, computePlan({ tree, declaration }));
+    const written = tree.read(MANIFEST_PATH, 'utf-8');
+
+    applyPlan(tree, computePlan({ tree, declaration }));
+
+    expect(tree.read(MANIFEST_PATH, 'utf-8')).toBe(written);
+  });
+
+  it('сбой применения откатывает и запись: полуправды о состоянии не бывает', () => {
+    // Откат, вернувший файлы, но оставивший запись о том, чего на диске нет, —
+    // это ровно та ложь служебного состояния, ради которой затевался переезд.
+    const { tree, declaration } = createWorkspace({
+      layout: LAYOUT,
+      sources: SOURCES,
+    });
+    applyPlan(tree, computePlan({ tree, declaration }));
+
+    tree.write(WORKFLOW, 'name: правка\n');
+    const plan = computePlan({ tree, declaration });
+    const before = snapshotTree(tree);
+    expect(plan.steps).toHaveLength(1);
+
+    // Сбой ровно НА ЗАПИСИ МАНИФЕСТА: артефакт к этому моменту уже переписан.
+    expect(() => applyPlan(treeFailingOnWrite(tree, 2), plan)).toThrow(
+      MaterializationApplyError,
+    );
+
+    // Откат вернул и артефакт, и запись — состояние целиком, а не наполовину.
+    expect(snapshotTree(tree)).toEqual(before);
+    expect(tree.read(WORKFLOW, 'utf-8')).toBe('name: правка\n');
   });
 });
 

@@ -38,9 +38,10 @@ import {
 } from '@omnifield/baser-contracts';
 import {
   applyPlan,
+  BaserMaterializeError,
   computePlan,
   createTrace,
-  DeclarationError,
+  MANIFEST_PATH,
   OUTPUT_SCHEMA_VERSION,
   type ApplyReport,
   type Declaration,
@@ -48,7 +49,11 @@ import {
   type TraceRecorder,
 } from '@omnifield/baser-materialize';
 import { DOOR_SCHEMA_VERSION } from './schema.js';
-import { DoorProblemLog, type DoorProblem } from './problems.js';
+import {
+  DoorProblemLog,
+  type DoorProblem,
+  type ProblemCode,
+} from './problems.js';
 import {
   locateContentRoot,
   resolveInstalledPackage,
@@ -163,7 +168,7 @@ async function runInRepo(
         .join(
           ' · ',
         )}). Форма это допускает с первого дня, а движок сегодня — нет: ` +
-        'план строится по ОДНОЙ декларации, а сироты ищутся сканом всего дерева, ' +
+        'план строится по ОДНОЙ декларации, а сироты ищутся по всем записям манифеста, ' +
         'поэтому второй прогон снял бы артефакты первого как потерявшие объявление. ' +
         'Отказ вместо тихой порчи; много источников целиком — отдельная работа (A5)',
     );
@@ -273,7 +278,19 @@ async function runInRepo(
   const base = { ...shell(session), source, settings: movements, plan };
 
   if (plan.status === 'blocked') {
-    return { ...base, status: 'blocked', trace: trace.snapshot() };
+    // Отказы движка остаются его отказами — дверь их не переписывает. Но у
+    // пачки «файл уже существует» бывает одна общая причина, которую видно
+    // только отсюда, и назвать её обязана дверь.
+    const lost = lostManifest(tree, plan);
+    if (lost !== null) {
+      log.addAll([lost]);
+    }
+    return {
+      ...base,
+      status: 'blocked',
+      problems: log.list(),
+      trace: trace.snapshot(),
+    };
   }
 
   // Есть ли работа — вопрос ко ВСЕМУ прогону, а не к одному плану. Конфиг,
@@ -298,11 +315,7 @@ async function runInRepo(
   try {
     applied = applyPlan(tree, plan);
   } catch (cause) {
-    log.add(
-      'engine-refused',
-      source.id,
-      `применение не прошло: ${describe(cause)}`,
-    );
+    log.add(...engineRefusal(cause, source));
     return refused(session, log.list(), source, movements, plan);
   }
 
@@ -357,14 +370,11 @@ function engineInput(
   return {
     source: {
       id: declaration.source.id,
-      // Форма «источника в этом дереве нет» принята architect'ом (2026-07-27);
-      // типом движок её пока не объявляет — это правка его зоны. Дверь подаёт
-      // её уже сейчас: переучивать дверь потом не придётся, а до тех пор отказ
-      // движка переводится в названный `source-outside-tree`.
-      contentRoot:
-        location.kind === 'in-tree'
-          ? location.path
-          : (null as unknown as string),
+      // `null` — «источника в этом дереве нет». Форма честная, а не заглушка:
+      // подделать репо-относительный путь значило бы получить защиту, которая
+      // защищает пустоту, а настоящий источник оставить незакрытым. Движок
+      // называет этот случай сам (`SourceOutsideTreeError`).
+      contentRoot: location.kind === 'in-tree' ? location.path : null,
     },
     layout: declaration.layout.map((item) => ({
       src: item.src,
@@ -374,43 +384,83 @@ function engineInput(
 }
 
 /**
- * Отказ движка на входе — в код двери.
+ * Отказ движка — его же кодом и его же текстом.
  *
- * Отдельный код у случая «источник вне дерева» потому, что чинят его в разных
- * местах: непригодную структуру правит дверь, а вырожденную защиту закрывает
- * зона движка. Один код на оба означал бы «что-то не так со входом» — то есть
- * ничего.
+ * Дверь больше НЕ угадывает причину по типу исключения плюс собственному знанию
+ * о раскладке: у отказов движка есть машинный код (`EngineProblemCode`), и он
+ * пробрасывается как есть. Своё дверь дописывает ровно там, где знает то, чего
+ * не знает движок, — путь установки обвеса. Так на одно событие остаётся один
+ * текст, а не два (`tasker:BASER2-24`).
  */
 function engineRefusal(
   cause: unknown,
   source: SourceReport,
-): [
-  code: 'source-outside-tree' | 'engine-refused',
-  at: string,
-  message: string,
-] {
-  const detail = describe(cause);
+): [code: ProblemCode, at: string, message: string] {
+  if (!(cause instanceof BaserMaterializeError)) {
+    // Не отказ движка, а срыв: машинного кода у него нет, и выдумывать его
+    // нечем — назвать можно только то, что это сорвалось, а не отказало.
+    return ['door-failed', source.id, `движок сорвался: ${describe(cause)}`];
+  }
 
-  if (
-    source.location.kind === 'outside-tree' &&
-    cause instanceof DeclarationError
-  ) {
+  if (cause.code === 'source-outside-tree') {
+    const where =
+      source.location.kind === 'outside-tree'
+        ? source.location.absolute
+        : source.packageRoot;
     return [
-      'source-outside-tree',
+      cause.code,
       `${source.packageName}/${source.contentRoot}`,
-      `обвес "${source.packageName}" поставлен вне репозитория ("${source.location.absolute}"), ` +
-        'поэтому репо-относительного пути к его шаблонам не существует. Движок адресует ' +
-        'источник таким путём и им же защищается от записи в собственный источник; форма ' +
-        '«источника в этом дереве нет» принята, но зоной движка ещё не выпущена. ' +
-        `Пока её нет — поставь обвес в этот репозиторий. Отказ движка: ${detail}`,
+      `${cause.message} (обвес установлен в "${where}")`,
     ];
   }
 
-  return [
-    'engine-refused',
-    source.id,
-    `движок отверг поданный вход: ${detail}`,
-  ];
+  // Адрес — это КУДА ИДТИ ЧИНИТЬ, а не «чей отказ». У битой служебной записи
+  // это сам файл: приписать ему обвес значило бы отправить человека править
+  // объявление, с которым всё в порядке.
+  if (cause.code === 'manifest-unreadable') {
+    return [cause.code, MANIFEST_PATH, cause.message];
+  }
+
+  return [cause.code, source.id, cause.message];
+}
+
+/**
+ * Потерянный манифест — названный ПРИЧИНОЙ, а не оставленный следствием.
+ *
+ * Для движка «манифеста нет» и «мы тут ещё ничего не клали» — одно состояние, и
+ * он честно объявляет все существующие артефакты чужими: без записи владение
+ * недоказуемо. Отличить первый прогон от потери может только тот, кто видит и
+ * файл, и отказы разом, то есть дверь.
+ *
+ * Условие узкое намеренно: манифеста нет И при этом есть отказы «файл уже
+ * существует». На чистом дереве первого прогона таких отказов нет — и сообщения
+ * тоже, иначе оно кричало бы каждому новому потребителю.
+ */
+function lostManifest(
+  tree: FsTree,
+  plan: MaterializationPlan,
+): DoorProblem | null {
+  if (tree.exists(MANIFEST_PATH)) {
+    return null;
+  }
+
+  const foreign = plan.conflicts.filter(
+    (conflict) => conflict.kind === 'foreign-dest',
+  );
+  if (foreign.length === 0) {
+    return null;
+  }
+
+  return {
+    code: 'manifest-missing',
+    at: MANIFEST_PATH,
+    message:
+      `служебной записи "${MANIFEST_PATH}" нет, а объявленные артефакты на диске есть ` +
+      `(${foreign.length}). Без записи движок не может доказать владение ни одним из них и ` +
+      'считает их чужими — отсюда отказы выше. Этот файл обязан коммититься: восстанови ' +
+      'его из истории. Если он потерян насовсем — подтверди артефакты поимённо ' +
+      '(--confirm), и запись родится заново',
+  };
 }
 
 function describeSource(

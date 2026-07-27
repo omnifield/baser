@@ -21,29 +21,26 @@ export type {
   MaterializationSource,
 } from './lib/declaration.js';
 
-export { BaserMaterializeError, DeclarationError } from './lib/errors.js';
+export {
+  BaserMaterializeError,
+  DeclarationError,
+  SourceOutsideTreeError,
+} from './lib/errors.js';
+export type { EngineProblemCode } from './lib/errors.js';
 
 export { joinRepoPath, normalizeRepoPath, toRepoPath } from './lib/paths.js';
 export type { RepoPath, RepoPathProblem } from './lib/paths.js';
 
 export {
-  DEFAULT_SCAN_IGNORE,
-  ENGINE_ID,
-  JSON_MARKER_KEY,
-  UnmarkableContentError,
-  markerFormatFor,
-  markerText,
-  parseMarkerText,
-  readOwnership,
-  scanOwnership,
-} from './lib/ownership.js';
-export type {
-  MarkerFormat,
-  OwnershipRecord,
-  ScanFailure,
-  ScanOptions,
-  ScanResult,
-} from './lib/ownership.js';
+  EMPTY_MANIFEST,
+  MANIFEST_PATH,
+  MANIFEST_VERSION,
+  ManifestError,
+  hashContent,
+  readManifest,
+  serializeManifest,
+} from './lib/manifest.js';
+export type { Manifest, ManifestRecord } from './lib/manifest.js';
 
 export { createTreeSource } from './lib/source.js';
 export type { CanonSource } from './lib/source.js';
