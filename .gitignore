@@ -44,4 +44,8 @@ Thumbs.db
 .claude/worktrees
 .claude/settings.local.json
 
+# Артефакт установки харнесса: сама обвязка (.claude/, .omnifield/) коммитится,
+# бандл, из которого её поставили, — нет.
+agent-harness-plugin
+
 vitest.config.*.timestamp*
