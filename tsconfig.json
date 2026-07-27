@@ -17,6 +17,9 @@
     },
     {
       "path": "./packages/baser-check"
+    },
+    {
+      "path": "./packages/baser-pack"
     }
   ]
 }
