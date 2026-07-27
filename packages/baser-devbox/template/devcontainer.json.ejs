@@ -1,0 +1,96 @@
+<%
+// Слой «настройки» собирается здесь, чтобы ниже читался готовый devcontainer.
+const mounts = [];
+if (secretsVolume) mounts.push(`source=${secretsVolume},target=/home/node/.secrets,type=volume`);
+if (pnpmStoreVolume) mounts.push(`source=${pnpmStoreVolume},target=/home/node/.local/share/pnpm/store,type=volume`);
+const mountTargets = mounts.map((m) => m.split(',')[1].slice('target='.length));
+
+const runArgs = [];
+if (network) runArgs.push(`--network=${network}`, `--network-alias=${networkAlias}`);
+runArgs.push('--add-host=host.docker.internal:host-gateway', '--restart=unless-stopped');
+
+const onCreate = ['sudo corepack enable'];
+if (installAssistant) onCreate.push('npm install -g @anthropic-ai/claude-code@latest');
+
+const post = [];
+if (mountTargets.length) post.push(`sudo chown -R node:node ${mountTargets.join(' ')}`);
+if (installAssistant) post.push('mkdir -p "$CLAUDE_CONFIG_DIR" && { [ -f "$CLAUDE_CONFIG_DIR/.claude.json" ] || printf \'%s\\n\' \'{"hasCompletedOnboarding":true,"hasTrustDialogAccepted":true,"theme":"dark"}\' > "$CLAUDE_CONFIG_DIR/.claude.json"; }');
+post.push(installCommand);
+
+const list = (items) => items.map((v) => `    ${JSON.stringify(v)}`).join(',\n');
+-%>
+{
+  // <%- name %> — Ф2 (kb:ADR-16 volume-workspace, kb:FUND-4 containers-only).
+  // ГРИНФИЛД на стандартном Dev Containers (adopt-not-invent, kb:ADR-20): upstream-образ +
+  // features + native "Clone Repository in Container Volume". БЕЗ skeleton-скриптов
+  // (devbox.sh/-manifest/-session/-services) и БЕЗ biome/GH-Packages — это devopser-legacy.
+  // Docker-инварианты канон-чистого девбокса сохранены (kb:DEVOPSER-3).
+  "name": "<%- name %>",
+  "image": "<%- image %>:<%- runtimeVersion %>",
+  "remoteUser": "node",
+
+<% if (network) { -%>
+  // Канон-чистые инварианты (kb:DEVOPSER-3): peer-alias в общей сети <%- network %>
+  // (видят tasker/knowledger по имени), host-gateway, НОЛЬ host-портов (single-origin —
+  // наружу только дверь :8080; verdaccio :4873 остаётся внутренним), контейнер переживает
+  // рестарт демона.
+<% } else { -%>
+  // host-gateway (виден хост изнутри) и рестарт вместе с демоном — базовые инварианты.
+<% } -%>
+  "runArgs": [
+<%- list(runArgs) %>
+  ],
+
+<% if (secretsVolume) { -%>
+  // Секрет-модель (kb:FUND-4): креды/кэши — в named-volume'ах, ENV указывает в /home/node/.secrets.
+  // Ничего не хардкодим в образ/репо; тома переживают recreate.
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/node/.secrets/claude",
+    "GIT_CONFIG_GLOBAL": "/home/node/.secrets/gitconfig",
+    "GH_CONFIG_DIR": "/home/node/.secrets/gh",
+    "NPM_CONFIG_USERCONFIG": "/home/node/.secrets/npmrc"
+  },
+
+<% } -%>
+  // gh — для git-flow (rulesets/PR). node/pnpm/git несёт базовый образ (pnpm-версия — из пина
+  // репо `packageManager: pnpm@10.11.0` через corepack; образ = тонкая оболочка, версии — репо).
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+<% if (mounts.length) { -%>
+  // Общие на машине named-volume'ы (одни креды/стор на все omnifield-девбоксы), переживают recreate.
+  // Workspace-ТОМ здесь НЕ объявляем: им управляет "Clone Repository in Container Volume"
+  // (kb:ADR-16) — VS Code сам создаёт том, клонирует репо, монтирует как workspace. См. runbook.
+  "mounts": [
+<%- list(mounts) %>
+  ],
+
+<% } -%>
+  "customizations": {
+    "vscode": {
+      // baser-стек = prettier + Nx (НЕ biome). Дополняет .vscode/extensions.json репо.
+      "extensions": [<%- editorExtensions.map((e) => JSON.stringify(e)).join(', ') %>],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "typescript.tsdk": "node_modules/typescript/lib"
+      }
+    }
+  },
+
+<% if (installAssistant) { -%>
+  // Одноразовая (per-volume) настройка: corepack→pnpm-пин + глобальный ассистент
+  // (kb:FUND-4 — исполнение/ассистент живут В контейнере, не на хосте).
+<% } else { -%>
+  // Одноразовая (per-volume) настройка: corepack→pnpm-пин.
+<% } -%>
+  "onCreateCommand": "<%- onCreate.join(' && ') %>",
+
+<% if (mounts.length && installAssistant) { -%>
+  // Репо-зависимая настройка: права на общие тома, seed claude-онбординга, install по lock.
+<% } else { -%>
+  // Репо-зависимая настройка: install по lock.
+<% } -%>
+  "postCreateCommand": <%- JSON.stringify(post.join(' && ')) %>
+}

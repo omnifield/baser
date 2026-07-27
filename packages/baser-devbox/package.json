@@ -1,0 +1,108 @@
+{
+  "name": "@omnifield/baser-devbox",
+  "version": "0.1.0",
+  "description": "Обвес девбокса: .devcontainer как шаблон с пресетом omnifield",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./package.json": "./package.json",
+    "./defaults.mjs": "./defaults.mjs"
+  },
+  "files": [
+    "template",
+    "defaults.mjs"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "baser": {
+    "formVersion": 1,
+    "source": {
+      "id": "omnifield/devbox",
+      "title": "Девбокс: проект целиком в контейнере",
+      "contentRoot": "template"
+    },
+    "settings": {
+      "name": {
+        "title": "Имя девбокса",
+        "description": "Как контейнер подписан в списке. По умолчанию — из имени репозитория.",
+        "type": "string",
+        "defaultFrom": "./defaults.mjs#devboxName"
+      },
+      "image": {
+        "title": "Базовый образ",
+        "description": "Upstream-образ Dev Containers. Версия рантайма приезжает отдельной настройкой.",
+        "type": "string",
+        "default": "mcr.microsoft.com/devcontainers/typescript-node"
+      },
+      "runtimeVersion": {
+        "title": "Версия Node в образе",
+        "description": "Пин, поставленный при ВЫПУСКЕ обвеса, а не вычисленный при установке. В артефакт попадает число, не latest.",
+        "type": "string",
+        "defaultFrom": "./defaults.mjs#latestStableNode"
+      },
+      "installCommand": {
+        "title": "Команда установки зависимостей",
+        "type": "string",
+        "default": "pnpm install --frozen-lockfile"
+      },
+      "editorExtensions": {
+        "title": "Расширения редактора",
+        "description": "Дополняют .vscode/extensions.json репозитория, а не заменяют его.",
+        "type": "list",
+        "default": [
+          "esbenp.prettier-vscode",
+          "nrwl.angular-console"
+        ]
+      },
+      "network": {
+        "title": "Docker-сеть, в которую включить девбокс",
+        "description": "Не задана — девбокс живёт в сети по умолчанию и соседей по имени не видит.",
+        "type": "string",
+        "default": null
+      },
+      "networkAlias": {
+        "title": "Имя девбокса в этой сети",
+        "type": "string",
+        "defaultFrom": "./defaults.mjs#repoName"
+      },
+      "secretsVolume": {
+        "title": "Том с кредами (переживает пересоздание)",
+        "type": "string",
+        "default": null
+      },
+      "pnpmStoreVolume": {
+        "title": "Том под общий pnpm-store",
+        "type": "string",
+        "default": null
+      },
+      "installAssistant": {
+        "title": "Ставить ассистента внутрь контейнера",
+        "type": "boolean",
+        "default": false
+      }
+    },
+    "presets": {
+      "omnifield": {
+        "title": "Раскладка omnifield: общая сеть, общие тома, ассистент внутри",
+        "values": {
+          "network": "omnifield-gateway",
+          "secretsVolume": "omnifield-secrets",
+          "pnpmStoreVolume": "omnifield-pnpm-store",
+          "installAssistant": true
+        }
+      }
+    },
+    "layout": [
+      {
+        "src": "devcontainer.json.ejs",
+        "dest": ".devcontainer/devcontainer.json"
+      },
+      {
+        "src": "devcontainer-lock.json",
+        "dest": ".devcontainer/devcontainer-lock.json",
+        "render": false
+      }
+    ]
+  }
+}

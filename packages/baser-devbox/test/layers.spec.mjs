@@ -1,0 +1,269 @@
+/**
+ * ТРИ СЛОЯ ОБВЕСА — и каждый проверяется отдельно.
+ *
+ * | слой              | что это                                                    |
+ * | ----------------- | ---------------------------------------------------------- |
+ * | **универсальное** | всё в контейнере, рабочая папка в томе, креды и кэши — в     |
+ * |                   | отдельных томах, host-gateway, рестарт вместе с демоном      |
+ * | **настройки**     | имя девбокса, образ и версия рантайма, команда установки     |
+ * |                   | зависимостей, расширения редактора                          |
+ * | **пресет**        | сеть, peer-alias, ноль портов наружу, общие тома            |
+ *
+ * **Пресет, а не второй обвес.** Два источника не могут делить один файл
+ * (`kb:BASER2-6`), поэтому «базовый + надстройка omnifield» выражается
+ * ИМЕНОВАННЫМ НАБОРОМ ЗНАЧЕНИЙ внутри одного обвеса. Проверка этого — не
+ * формальность: если бы слои разъехались, снятие пресета унесло бы с собой
+ * что-нибудь универсальное, и внешний пользователь получил бы сломанный
+ * девбокс. Поэтому здесь есть отдельный тест «универсальное переживает снятие
+ * пресета».
+ *
+ * Слои меряются через ДВЕРЬ, а не собственным рендером: свой шаблонизатор в
+ * тесте был бы второй правдой о подстановке и разошёлся бы с тем, что реально
+ * приезжает потребителю.
+ */
+
+import { afterEach, describe, expect, it } from 'vitest';
+import { run } from '../../baser-cli/src/index.ts';
+import {
+  consumerConfig,
+  installConsumer,
+  LIVE,
+  parseJsonc,
+} from './packed.mjs';
+
+let consumer = null;
+
+afterEach(() => {
+  consumer?.cleanup();
+  consumer = null;
+});
+
+/** Раскладывает обвес и отдаёт разобранный devcontainer вместе с ответом. */
+async function materialize({
+  presets = [],
+  settings,
+  repoName = 'baser',
+} = {}) {
+  consumer = installConsumer({
+    repoName,
+    config: consumerConfig({ presets, settings }),
+  });
+  const result = await run({ command: 'apply', cwd: consumer.root });
+  if (result.status !== 'applied') {
+    throw new Error(
+      `обвес не разложился: ${result.status}\n${JSON.stringify(result.problems, null, 2)}`,
+    );
+  }
+  const text = consumer.read(LIVE);
+  return { result, text, json: parseJsonc(text) };
+}
+
+describe('слой УНИВЕРСАЛЬНОЕ: тот же обвес без пресета', () => {
+  it('валидный devcontainer, в котором нет ничего от omnifield', async () => {
+    const { json, text } = await materialize();
+
+    expect(json.remoteUser).toBe('node');
+    expect(json.name).toBe('baser-devbox');
+    // Ни сети, ни общих томов, ни ассистента: слой пресета не развернулся вовсе.
+    expect(json.runArgs).toEqual([
+      '--add-host=host.docker.internal:host-gateway',
+      '--restart=unless-stopped',
+    ]);
+    expect(json.mounts).toBeUndefined();
+    expect(json.containerEnv).toBeUndefined();
+    expect(text).not.toContain('omnifield');
+    expect(json.postCreateCommand).toBe('pnpm install --frozen-lockfile');
+  });
+
+  it('ВСЁ В КОНТЕЙНЕРЕ: образ с конкретной версией, работа под node', async () => {
+    const { json } = await materialize();
+
+    // Тег обязан быть конкретным: `latest` в артефакт не попадает.
+    expect(json.image).toMatch(
+      /^mcr\.microsoft\.com\/devcontainers\/typescript-node:\d+$/,
+    );
+    expect(json.remoteUser).toBe('node');
+    // Тулинг git-flow приезжает feature'ом, а не установкой на хосте.
+    expect(Object.keys(json.features)).toEqual([
+      'ghcr.io/devcontainers/features/github-cli:1',
+    ]);
+  });
+
+  it('РАБОЧАЯ ПАПКА В ТОМЕ: workspace-том обвес не объявляет и объявлять не должен', async () => {
+    const { json, text } = await materialize();
+
+    // Томом рабочей папки управляет native «Clone Repository in Container
+    // Volume» (kb:ADR-16). Объявить его здесь значило бы отобрать управление у
+    // того, кто его создаёт, — поэтому проверяется именно ОТСУТСТВИЕ, а
+    // причина названа в самом артефакте.
+    expect(json.workspaceMount).toBeUndefined();
+    expect(json.workspaceFolder).toBeUndefined();
+    expect(text).toContain('Clone Repository in Container Volume');
+  });
+
+  it('HOST-GATEWAY и РЕСТАРТ ВМЕСТЕ С ДЕМОНОМ есть в ЛЮБОЙ раскладке', async () => {
+    // Универсальное обязано пережить и включение пресета, и его снятие: слой,
+    // который держится только пресетом, универсальным не является.
+    const bare = await materialize();
+    consumer.cleanup();
+    consumer = null;
+    const preset = await materialize({ presets: ['omnifield'] });
+
+    for (const { json } of [bare, preset]) {
+      expect(json.runArgs).toContain(
+        '--add-host=host.docker.internal:host-gateway',
+      );
+      expect(json.runArgs).toContain('--restart=unless-stopped');
+      expect(json.remoteUser).toBe('node');
+    }
+  });
+});
+
+describe('слой НАСТРОЙКИ: регулировка вместо правки файла', () => {
+  it('имя девбокса приезжает из ИМЕНИ РЕПОЗИТОРИЯ — пользователь не вводит ничего', async () => {
+    const { json, result } = await materialize({ repoName: 'weber' });
+
+    expect(json.name).toBe('weber-devbox');
+    // Ни одного заполненного значения в конфиге — и ни одного вопроса.
+    expect(result.settings.every((setting) => setting.ours)).toBe(true);
+  });
+
+  it('образ, версия рантайма и команда установки — заполняемые', async () => {
+    const { json } = await materialize({
+      settings: {
+        image: 'mcr.microsoft.com/devcontainers/base',
+        runtimeVersion: '20',
+        installCommand: 'npm ci',
+      },
+    });
+
+    expect(json.image).toBe('mcr.microsoft.com/devcontainers/base:20');
+    expect(json.postCreateCommand).toBe('npm ci');
+  });
+
+  it('расширения редактора — список, и он едет в customizations целиком', async () => {
+    const { json } = await materialize({
+      settings: {
+        editorExtensions: ['esbenp.prettier-vscode', 'ms-vscode.live-server'],
+      },
+    });
+
+    expect(json.customizations.vscode.extensions).toEqual([
+      'esbenp.prettier-vscode',
+      'ms-vscode.live-server',
+    ]);
+  });
+
+  it('ЗАПОЛНЕННОЕ БЬЁТ ПРЕСЕТ, но слоя не отменяет', async () => {
+    const { json, result } = await materialize({
+      presets: ['omnifield'],
+      settings: { runtimeVersion: '20', installCommand: 'npm ci' },
+    });
+
+    expect(json.image).toBe(
+      'mcr.microsoft.com/devcontainers/typescript-node:20',
+    );
+    expect(json.postCreateCommand).toMatch(/&& npm ci$/);
+    // Пресет при этом на месте: заполнено одно значение, а не снят слой.
+    expect(json.runArgs).toContain('--network=omnifield-gateway');
+    expect(json.postCreateCommand).toContain('/home/node/.secrets');
+
+    const runtime = result.settings.find(
+      (setting) => setting.key === 'runtimeVersion',
+    );
+    expect(runtime.origin.kind).toBe('filled');
+    expect(runtime.ours).toBe(false);
+  });
+});
+
+describe('слой ПРЕСЕТ omnifield: ходовое положение регулировок', () => {
+  it('СЕТЬ и PEER-ALIAS: соседей видно по имени', async () => {
+    const { json } = await materialize({ presets: ['omnifield'] });
+
+    expect(json.runArgs).toContain('--network=omnifield-gateway');
+    expect(json.runArgs).toContain('--network-alias=baser');
+  });
+
+  it('НОЛЬ ПОРТОВ НАРУЖУ: single-origin — наружу только дверь', async () => {
+    const { json, text } = await materialize({ presets: ['omnifield'] });
+
+    expect(json.forwardPorts).toBeUndefined();
+    expect(json.appPort).toBeUndefined();
+    expect(text).not.toMatch(/-p\s+\d+:/);
+    expect(json.runArgs.some((arg) => arg.startsWith('--publish'))).toBe(false);
+  });
+
+  it('ОБЩИЕ ТОМА: креды и кэши переживают пересоздание контейнера', async () => {
+    const { json } = await materialize({ presets: ['omnifield'] });
+
+    expect(json.mounts).toEqual([
+      'source=omnifield-secrets,target=/home/node/.secrets,type=volume',
+      'source=omnifield-pnpm-store,target=/home/node/.local/share/pnpm/store,type=volume',
+    ]);
+    // ENV указывает В ТОМ: ничего не хардкодится в образ и в репозиторий.
+    expect(json.containerEnv).toEqual({
+      CLAUDE_CONFIG_DIR: '/home/node/.secrets/claude',
+      GIT_CONFIG_GLOBAL: '/home/node/.secrets/gitconfig',
+      GH_CONFIG_DIR: '/home/node/.secrets/gh',
+      NPM_CONFIG_USERCONFIG: '/home/node/.secrets/npmrc',
+    });
+    // Права на тома выставляются на месте — том создаётся от root.
+    expect(json.postCreateCommand).toContain(
+      'sudo chown -R node:node /home/node/.secrets',
+    );
+  });
+
+  it('АССИСТЕНТ ВНУТРИ контейнера, а не на хосте', async () => {
+    const { json } = await materialize({ presets: ['omnifield'] });
+
+    expect(json.onCreateCommand).toContain(
+      'npm install -g @anthropic-ai/claude-code@latest',
+    );
+    expect(json.postCreateCommand).toContain('$CLAUDE_CONFIG_DIR');
+  });
+
+  it('ПРЕСЕТ — НЕ ВТОРОЙ ОБВЕС: он двигает только объявленные значения', async () => {
+    const { result } = await materialize({ presets: ['omnifield'] });
+
+    const fromPreset = result.settings
+      .filter((setting) => setting.origin.kind === 'preset')
+      .map((setting) => setting.key)
+      .sort();
+
+    // Ровно четыре регулировки — и ни одной строки содержимого сверх них.
+    expect(fromPreset).toEqual([
+      'installAssistant',
+      'network',
+      'pnpmStoreVolume',
+      'secretsVolume',
+    ]);
+    for (const setting of result.settings) {
+      if (setting.origin.kind === 'preset') {
+        expect(setting.chain[0].kind).toMatch(/^(default|computed)$/);
+        expect(setting.moved).toBe(true);
+      }
+    }
+  });
+
+  it('пресет снимается — и артефакт ДОГОНЯЕТ, а не остаётся с хвостом', async () => {
+    const box = installConsumer({
+      repoName: 'baser',
+      config: consumerConfig({ presets: ['omnifield'] }),
+    });
+    consumer = box;
+    await run({ command: 'apply', cwd: box.root });
+    expect(box.read(LIVE)).toContain('omnifield-gateway');
+
+    box.write('baser.json', `${JSON.stringify(consumerConfig(), null, 2)}\n`);
+    await run({ command: 'apply', cwd: box.root });
+
+    // Артефакт перегенерирован ЦЕЛИКОМ: следов пресета не осталось нигде.
+    expect(box.read(LIVE)).not.toContain('omnifield');
+    expect(box.read(LIVE)).not.toContain('mounts');
+    expect(box.read(LIVE)).not.toContain('containerEnv');
+    expect(parseJsonc(box.read(LIVE)).runArgs).toEqual([
+      '--add-host=host.docker.internal:host-gateway',
+      '--restart=unless-stopped',
+    ]);
+  });
+});
