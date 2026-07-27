@@ -9,13 +9,99 @@ const runArgs = [];
 if (network) runArgs.push(`--network=${network}`, `--network-alias=${networkAlias}`);
 runArgs.push('--add-host=host.docker.internal:host-gateway', '--restart=unless-stopped');
 
+// Настройки редактора. Форматтер — РЕГУЛИРОВКА, а не константа: прибитый гвоздями,
+// он заставляет потребителя с другим стеком форкать обвес целиком из-за одной строки,
+// и это дефект шаблона, а не проблема пользователя (kb:BASER2-2 §5).
+// Не задан вовсе (null) — обвес форматирование не навязывает и обе строки не кладёт.
+const editorSettings = [];
+if (editorFormatter) {
+  editorSettings.push('"editor.formatOnSave": true');
+  editorSettings.push(`"editor.defaultFormatter": ${JSON.stringify(editorFormatter)}`);
+}
+// tsdk слотом НЕ становится: он указывает на TypeScript САМОГО репозитория, и для
+// devbox-образа typescript-node другого верного значения нет.
+editorSettings.push('"typescript.tsdk": "node_modules/typescript/lib"');
+
+// ЗАДАННЫЙ ФОРМАТТЕР ОБВЕС ДЕРЖИТ В СПИСКЕ РАСШИРЕНИЙ САМ.
+//
+// `editor.defaultFormatter` принимает ИДЕНТИФИКАТОР РАСШИРЕНИЯ, поставляющего
+// форматтер. Значит «форматтер задан» и «расширение стоит» — одно и то же
+// утверждение, и обвес может гарантировать его по построению, а не называть отказом:
+// отказ требовал бы действия от человека там, где верный ответ обвесу известен.
+// Так класс ошибки (форматтер, которого в контейнере нет) исчезает, а не ловится.
+//
+// ИСКЛЮЧЕНИЕ — встроенные расширения. Издатель `vscode.` зарезервирован за теми, что
+// уже в редакторе (`vscode.json-language-features` и прочие). Их не ставят из
+// маркетплейса, и запись в `extensions` для них — не «на всякий случай», а
+// несуществующий идентификатор в артефакте, то есть та же тихая неверность с другой
+// стороны. Условие сужает правило, а не отменяет: чинить по построению — значит не
+// чинить одно, ломая соседнее.
+const builtInFormatter = Boolean(editorFormatter) && editorFormatter.startsWith('vscode.');
+const injectedFormatter =
+  Boolean(editorFormatter) && !builtInFormatter && !editorExtensions.includes(editorFormatter);
+const extensions = injectedFormatter ? [...editorExtensions, editorFormatter] : editorExtensions;
+
 const onCreate = ['sudo corepack enable'];
 if (installAssistant) onCreate.push('npm install -g @anthropic-ai/claude-code@latest');
+
+// Куда человеку класть креды. Путь настоящий, а не «куда-нибудь»: обещание в тексте
+// отказа — такой же контракт, как код, и непроверенное оно заводит в тупик.
+const npmrc = secretsVolume
+  ? '/home/node/.secrets/npmrc — том, переживает пересоздание контейнера'
+  : '~/.npmrc — ВНИМАНИЕ: не переживёт пересоздание контейнера, заведи том с кредами';
+
+// Проверка доступа к приватному реестру ДО установки зависимостей.
+// Без неё npm идёт в npmjs.org и отвечает «404, пакета нет» — человек идёт искать
+// несуществующий пакет вместо своих кредов. Стена без указателя.
+// Внешнему потребителю не нужна вовсе: scope не задан — в артефакте нет ни строки.
+const say = (...args) => `printf '%s\\n' ${args.join(' ')} >&2`;
+const q = (line) => `'[devbox] ${line}'`;
+const registryCheck = privateScope && [
+  '(',
+  `reg=$(npm config get ${privateScope}:registry);`,
+  'case "$reg" in',
+  'http*) ;;',
+  '*)',
+  say(
+    q(`Пакеты ${privateScope}/* тянутся из приватного реестра, а он не настроен.`),
+    q('Установка пойдёт в npmjs.org и ответит «404, пакета нет» — хотя пакет есть, нет доступа.'),
+    q(`Настрой доступ в ${npmrc}:`),
+    q(`  npm config set ${privateScope}:registry <адрес-реестра> --location=user`),
+    q('  npm config set //<хост-реестра>/:_authToken <токен> --location=user'),
+  ),
+  '; exit 1;;',
+  'esac;',
+  'h=${reg#*://}; h=${h%/};',
+  'npm whoami --registry="$reg" --fetch-retries=0 >/dev/null 2>&1 ||',
+  '{',
+  say(
+    q(`Реестр для ${privateScope} настроен, а доступа к нему нет: токен не положен или протух.`),
+    '"[devbox]   реестр: $reg"',
+    '"[devbox]   проверка руками: npm whoami --registry=$reg"',
+    q(`Положи токен в ${npmrc}:`),
+    '"[devbox]   npm config set //$h/:_authToken <токен> --location=user"',
+  ),
+  '; exit 1; }',
+  ')',
+].join(' ');
 
 const post = [];
 if (mountTargets.length) post.push(`sudo chown -R node:node ${mountTargets.join(' ')}`);
 if (installAssistant) post.push('mkdir -p "$CLAUDE_CONFIG_DIR" && { [ -f "$CLAUDE_CONFIG_DIR/.claude.json" ] || printf \'%s\\n\' \'{"hasCompletedOnboarding":true,"hasTrustDialogAccepted":true,"theme":"dark"}\' > "$CLAUDE_CONFIG_DIR/.claude.json"; }');
+// Порядок несущий: креды лежат в томе, права на который выставляет chown выше, а
+// проверка обязана стоять ПЕРЕД установкой — иначе она рассказывает про уже
+// случившийся невнятный отказ.
+if (registryCheck) post.push(registryCheck);
 post.push(installCommand);
+
+// Комментарий над шагом собирается из ТЕХ ЖЕ частей, что и сам шаг. Отдельный текст
+// про постсоздание разошёлся бы с постсозданием при первой же новой настройке — ровно
+// так «БЕЗ biome» пережило появление настройки форматтера.
+const postWhat = [];
+if (mountTargets.length) postWhat.push('права на общие тома');
+if (installAssistant) postWhat.push('seed claude-онбординга');
+if (registryCheck) postWhat.push('проверка доступа к реестру');
+postWhat.push('установка зависимостей');
 
 const list = (items) => items.map((v) => `    ${JSON.stringify(v)}`).join(',\n');
 -%>
@@ -69,12 +155,14 @@ const list = (items) => items.map((v) => `    ${JSON.stringify(v)}`).join(',\n')
 <% } -%>
   "customizations": {
     "vscode": {
-      // baser-стек = prettier + Nx (НЕ biome). Дополняет .vscode/extensions.json репо.
-      "extensions": [<%- editorExtensions.map((e) => JSON.stringify(e)).join(', ') %>],
+      // Расширения и форматтер — настройки обвеса. Дополняют .vscode/extensions.json репо.
+<% if (injectedFormatter) { -%>
+      // Форматтер в списке — от обвеса: его значение и есть идентификатор расширения,
+      // поэтому ставить его вторым перечислением человеку незачем.
+<% } -%>
+      "extensions": [<%- extensions.map((e) => JSON.stringify(e)).join(', ') %>],
       "settings": {
-        "editor.formatOnSave": true,
-        "editor.defaultFormatter": "esbenp.prettier-vscode",
-        "typescript.tsdk": "node_modules/typescript/lib"
+<%- editorSettings.map((line) => `        ${line}`).join(',\n') %>
       }
     }
   },
@@ -87,10 +175,6 @@ const list = (items) => items.map((v) => `    ${JSON.stringify(v)}`).join(',\n')
 <% } -%>
   "onCreateCommand": "<%- onCreate.join(' && ') %>",
 
-<% if (mounts.length && installAssistant) { -%>
-  // Репо-зависимая настройка: права на общие тома, seed claude-онбординга, install по lock.
-<% } else { -%>
-  // Репо-зависимая настройка: install по lock.
-<% } -%>
+  // Репо-зависимая настройка: <%- postWhat.join(', ') %>.
   "postCreateCommand": <%- JSON.stringify(post.join(' && ')) %>
 }

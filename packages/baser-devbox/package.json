@@ -1,6 +1,6 @@
 {
   "name": "@omnifield/baser-devbox",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Обвес девбокса: .devcontainer как шаблон с пресетом omnifield",
   "license": "MIT",
   "type": "module",
@@ -54,6 +54,18 @@
           "esbenp.prettier-vscode",
           "nrwl.angular-console"
         ]
+      },
+      "editorFormatter": {
+        "title": "Расширение-форматтер по умолчанию",
+        "description": "Диктуется стеком репозитория (prettier, biome, …). Значение — идентификатор расширения, поэтому заданный форматтер обвес САМ добавляет в editorExtensions, если его там нет: перечислять его дважды не нужно. Исключение — встроенные расширения (издатель vscode.): они уже в редакторе и из маркетплейса не ставятся. null — обвес форматирование не навязывает вовсе.",
+        "type": "string",
+        "default": "esbenp.prettier-vscode"
+      },
+      "privateScope": {
+        "title": "npm-scope из приватного реестра",
+        "description": "Задан — перед установкой зависимостей девбокс проверяет, что реестр для scope настроен и доступ к нему есть, и говорит куда положить креды. null — проверки нет: внешнему потребителю приватный реестр не нужен.",
+        "type": "string",
+        "default": null
       },
       "network": {
         "title": "Docker-сеть, в которую включить девбокс",

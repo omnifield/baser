@@ -12,23 +12,40 @@
  * - эталон — файл, который прямо сейчас поднимает контейнер, в котором это
  *   выполняется, а не снимок в фикстуре.
  *
- * ── РАСХОЖДЕНИЯ, НАЗВАННЫЕ ЗАРАНЕЕ ──────────────────────────────────────────
+ * ── ДВА ПОТРЕБИТЕЛЯ, А НЕ ОДИН ──────────────────────────────────────────────
+ *
+ * С выпуска 0.2.0 приёмка идёт на ДВУХ стеках: нашем (prettier + Nx) и weber
+ * (biome + Nx, приватный реестр, установка без `--frozen-lockfile`). Обвес,
+ * проверенный на единственном потребителе, доказывает совместимость с самим
+ * собой: ровно так «прибитый гвоздями» форматтер прожил до weber.
+ *
+ * ── РАСХОЖДЕНИЯ С ЖИВЫМ ФАЙЛОМ, НАЗВАННЫЕ ЗАРАНЕЕ ───────────────────────────
  *
  * «С точностью до настроек» — не оговорка, а утверждение, и оно проверяется
  * ПОИМЁННО: тест считает список различающихся строк и сверяет его целиком.
- * Расхождений ровно два, оба на настройках, и оба ниже названы своим тестом:
+ * Инвариант, который держит это утверждение честным: **расходятся только
+ * значения настроек и комментарии, эти значения описывающие.** Ни одной строки
+ * данных.
  *
- * | # | строка                       | почему                                  |
- * |---|------------------------------|-----------------------------------------|
- * | 1 | комментарий-заголовок (стр.2)| в живом файле руками написано «baser     |
- * |   |                              | devbox», обвес подставляет `name` →      |
- * |   |                              | «baser-devbox». Прозаическое, не         |
- * |   |                              | структурное.                             |
- * | 2 | `"image": …:22` vs `…:24`    | живой репозиторий стоит на Node 22, а    |
- * |   |                              | дефолт выпуска 0.1.0 — 24 (Active LTS на |
- * |   |                              | дату выпуска, `defaults.mjs`). Это и     |
- * |   |                              | есть «до настроек»: заполни              |
- * |   |                              | `runtimeVersion` — расхождение исчезает. |
+ * | строка | что                     | почему                                  |
+ * |--------|-------------------------|-----------------------------------------|
+ * | 2      | комментарий-заголовок   | в живом файле руками написано «baser     |
+ * |        |                         | devbox», обвес подставляет `name` →      |
+ * |        |                         | «baser-devbox». Прозаическое, не         |
+ * |        |                         | структурное.                             |
+ * | 8      | `"image": …:22` / `:24` | живой репозиторий на Node 22, дефолт     |
+ * |        |                         | выпуска — 24. Заполни `runtimeVersion`   |
+ * |        |                         | — расхождение исчезает (отдельный тест). |
+ * | 47     | комментарий о редакторе | в живом файле «baser-стек = prettier +   |
+ * |        |                         | Nx (НЕ biome)» — утверждение о стеке     |
+ * |        |                         | ПОТРЕБИТЕЛЯ, которое врёт всякому, у     |
+ * |        |                         | кого стек другой. Форматтер стал         |
+ * |        |                         | настройкой — ярлык обязан был перестать  |
+ * |        |                         | быть прибитым вместе с ним (0.2.0).      |
+ * | 61     | комментарий о шагах     | перечисляет шаги постсоздания и потому   |
+ * |        | постсоздания            | собирается из тех же частей, что и сами  |
+ * |        |                         | шаги. «install по lock» врал бы weber:   |
+ * |        |                         | у него установка без lock (0.2.0).       |
  *
  * Структурных расхождений нет: остальные строки сверяются точно.
  */
@@ -85,12 +102,26 @@ describe('ПРИЁМКА: поставил пакет → позвал двер�
       [LIVE, LOCK, MANIFEST_PATH].sort(),
     );
 
-    // Вот оно, утверждение целиком: различается РОВНО одна строка, и это
-    // рукописный комментарий-заголовок живого файла.
+    // Вот оно, утверждение целиком: расходятся три строки, каждая названа.
     const diff = differingLines(box.read(LIVE), liveArtifact(LIVE));
-    expect(diff.map((item) => item.line)).toEqual([2]);
+    expect(diff.map((item) => item.line)).toEqual([2, 47, 61]);
     expect(diff[0].ours).toContain('baser-devbox — Ф2');
     expect(diff[0].live).toContain('baser devbox — Ф2');
+    expect(diff[1].live).toContain('НЕ biome');
+    expect(diff[2].live).toContain('install по lock');
+  });
+
+  it('НИ ОДНА строка данных не расходится — только комментарии', async () => {
+    // Утверждение, которое держит «до настроек» честным: расхождения живут в
+    // комментариях, а не в том, что читает Docker. Комментарий разъезжается
+    // потому, что описывает настройку; строка данных разъехаться не имеет права.
+    const box = clean({ config: AS_LIVE });
+    await run({ command: 'apply', cwd: box.root });
+
+    const diff = differingLines(box.read(LIVE), liveArtifact(LIVE));
+    const data = diff.filter((item) => !item.ours.trim().startsWith('//'));
+
+    expect(data).toEqual([]);
   });
 
   it('render: false лёг БАЙТ В БАЙТ — и с живым локом, и с шаблоном', async () => {
@@ -160,12 +191,17 @@ describe('РАСХОЖДЕНИЕ, названное до user: дефолт в�
       'mcr.microsoft.com/devcontainers/typescript-node:24',
     );
 
-    // Ровно две строки: рукописный заголовок и версия образа. Всё остальное —
-    // универсальный слой и пресет — сходится с живым файлом точно.
+    // К трём комментариям добавилась ОДНА строка данных — версия образа, и она
+    // же единственная. Всё остальное сходится с живым файлом точно.
     const diff = differingLines(landed, liveArtifact(LIVE));
-    expect(diff.map((item) => item.line)).toEqual([2, 8]);
+    expect(diff.map((item) => item.line)).toEqual([2, 8, 47, 61]);
     expect(diff[1].ours).toContain('typescript-node:24');
     expect(diff[1].live).toContain('typescript-node:22');
+    expect(
+      diff
+        .filter((item) => !item.ours.trim().startsWith('//'))
+        .map((i) => i.line),
+    ).toEqual([8]);
   });
 
   it('заполненное значение убирает расхождение — «до настроек» проверяемо', async () => {
@@ -174,6 +210,91 @@ describe('РАСХОЖДЕНИЕ, названное до user: дефолт в�
 
     const diff = differingLines(box.read(LIVE), liveArtifact(LIVE));
     expect(diff.map((item) => item.line)).not.toContain(8);
+  });
+});
+
+/**
+ * ВТОРОЙ ПОТРЕБИТЕЛЬ — не «ещё один тест», а условие пригодности обвеса.
+ *
+ * weber настоящий и чужой: biome вместо prettier, приватные `@omnifield/*`,
+ * установка без `--frozen-lockfile`. Ровно на нём вскрылось, что прибитый гвоздями
+ * форматтер оставлял потребителю единственный ход — форк обвеса целиком из-за одной
+ * строки. Обвес, который умеет ровно свой первый репозиторий, ничего не обещает.
+ */
+const AS_WEBER = consumerConfig({
+  presets: ['omnifield'],
+  settings: {
+    editorExtensions: ['biomejs.biome', 'nrwl.angular-console'],
+    editorFormatter: 'biomejs.biome',
+    privateScope: '@omnifield',
+    installCommand: 'pnpm install',
+  },
+});
+
+describe('ВТОРОЙ ПОТРЕБИТЕЛЬ: тот же обвес под стек weber', () => {
+  it('раскладывается целиком, и в артефакте НЕТ следов нашего стека', async () => {
+    consumer = installConsumer({ repoName: 'weber', config: AS_WEBER });
+
+    const result = await run({ command: 'apply', cwd: consumer.root });
+
+    expect(result.status).toBe('applied');
+    const artifact = parseJsonc(consumer.read(LIVE));
+
+    expect(artifact.name).toBe('weber-devbox');
+    expect(artifact.customizations.vscode.extensions).toEqual([
+      'biomejs.biome',
+      'nrwl.angular-console',
+    ]);
+    expect(
+      artifact.customizations.vscode.settings['editor.defaultFormatter'],
+    ).toBe('biomejs.biome');
+    // Прибитый гвоздями форматтер оставил бы здесь prettier рядом с biome —
+    // редактор звал бы расширение, которого в контейнере нет.
+    expect(consumer.read(LIVE)).not.toContain('prettier');
+  });
+
+  it('приватный реестр проверяется, установка идёт БЕЗ --frozen-lockfile', async () => {
+    consumer = installConsumer({ repoName: 'weber', config: AS_WEBER });
+    await run({ command: 'apply', cwd: consumer.root });
+
+    const post = parseJsonc(consumer.read(LIVE)).postCreateCommand;
+
+    expect(post).toContain('npm config get @omnifield:registry');
+    expect(post.endsWith(' && pnpm install')).toBe(true);
+    expect(post).not.toContain('--frozen-lockfile');
+    // Комментарий над шагом собран из тех же частей — он назвал проверку.
+    expect(consumer.read(LIVE)).toContain('проверка доступа к реестру');
+  });
+
+  it('универсальный слой и пресет у weber те же, что у нас', async () => {
+    // Второй стек не должен утаскивать за собой инварианты: то, что универсально,
+    // обязано выглядеть одинаково у обоих потребителей.
+    consumer = installConsumer({ repoName: 'weber', config: AS_WEBER });
+    await run({ command: 'apply', cwd: consumer.root });
+    const weber = parseJsonc(consumer.read(LIVE));
+
+    expect(weber.remoteUser).toBe('node');
+    expect(weber.runArgs).toEqual([
+      '--network=omnifield-gateway',
+      '--network-alias=weber',
+      '--add-host=host.docker.internal:host-gateway',
+      '--restart=unless-stopped',
+    ]);
+    expect(weber.mounts).toEqual(parseJsonc(liveArtifact(LIVE)).mounts);
+    expect(weber.containerEnv).toEqual(
+      parseJsonc(liveArtifact(LIVE)).containerEnv,
+    );
+    expect(weber.features).toEqual(parseJsonc(liveArtifact(LIVE)).features);
+  });
+
+  it('второй прогон сходится — обвес держит и чужой стек тоже', async () => {
+    consumer = installConsumer({ repoName: 'weber', config: AS_WEBER });
+    await run({ command: 'apply', cwd: consumer.root });
+
+    const again = await run({ command: 'apply', cwd: consumer.root });
+
+    expect(again.status).toBe('converged');
+    expect(again.writes).toEqual([]);
   });
 });
 

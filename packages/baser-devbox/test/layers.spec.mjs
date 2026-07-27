@@ -154,6 +154,121 @@ describe('слой НАСТРОЙКИ: регулировка вместо пр�
     ]);
   });
 
+  it('ФОРМАТТЕР — слот, а не константа: стек репозитория, а не наш вкус', async () => {
+    // Дыра, найденная на weber: прибитый гвоздями prettier оставлял потребителю с
+    // другим стеком единственный ход — форк обвеса целиком из-за одной строки, а
+    // это дефект шаблона, а не проблема пользователя (kb:BASER2-2 §5).
+    const { json, text } = await materialize({
+      settings: {
+        editorExtensions: ['biomejs.biome'],
+        editorFormatter: 'biomejs.biome',
+      },
+    });
+
+    expect(json.customizations.vscode.settings['editor.defaultFormatter']).toBe(
+      'biomejs.biome',
+    );
+    expect(text).not.toContain('prettier');
+  });
+
+  it('ФОРМАТТЕР ВНЕ СПИСКА → список, где он есть: чинится по построению', async () => {
+    // `editor.defaultFormatter` принимает идентификатор расширения, значит
+    // «форматтер задан» и «расширение стоит» — одно утверждение. Обвес держит его
+    // сам, а не называет отказом: отказ требовал бы действия от человека там, где
+    // верный ответ обвесу известен. Класс ошибки исчезает, а не ловится.
+    const { json, text } = await materialize({
+      settings: {
+        editorExtensions: ['nrwl.angular-console'],
+        editorFormatter: 'biomejs.biome',
+      },
+    });
+
+    expect(json.customizations.vscode.extensions).toEqual([
+      'nrwl.angular-console',
+      'biomejs.biome',
+    ]);
+    expect(json.customizations.vscode.settings['editor.defaultFormatter']).toBe(
+      'biomejs.biome',
+    );
+    // Видно в артефакте и объяснено на месте, а не только в доке.
+    expect(text).toContain('Форматтер в списке — от обвеса');
+  });
+
+  it('форматтер УЖЕ в списке — ни дубля, ни перестановки', async () => {
+    const { json, text } = await materialize({
+      settings: {
+        editorExtensions: ['biomejs.biome', 'nrwl.angular-console'],
+        editorFormatter: 'biomejs.biome',
+      },
+    });
+
+    expect(json.customizations.vscode.extensions).toEqual([
+      'biomejs.biome',
+      'nrwl.angular-console',
+    ]);
+    // Обвес ничего не добавлял — и не рассказывает, будто добавлял.
+    expect(text).not.toContain('Форматтер в списке — от обвеса');
+  });
+
+  it('ВСТРОЕННЫЙ форматтер в список НЕ добавляется — его не ставят из маркетплейса', async () => {
+    // Издатель `vscode.` зарезервирован за расширениями, которые уже в редакторе.
+    // Запись о них в `extensions` — несуществующий идентификатор в артефакте, то
+    // есть та же тихая неверность с другой стороны. Правило сужено, а не отменено.
+    const { json } = await materialize({
+      settings: {
+        editorExtensions: ['nrwl.angular-console'],
+        editorFormatter: 'vscode.json-language-features',
+      },
+    });
+
+    expect(json.customizations.vscode.extensions).toEqual([
+      'nrwl.angular-console',
+    ]);
+    // Настройка при этом на месте: форматтер задан, ставить его просто незачем.
+    expect(json.customizations.vscode.settings['editor.defaultFormatter']).toBe(
+      'vscode.json-language-features',
+    );
+  });
+
+  it('форматтер null — список расширений остаётся как задан', async () => {
+    const { json } = await materialize({
+      settings: {
+        editorExtensions: ['nrwl.angular-console'],
+        editorFormatter: null,
+      },
+    });
+
+    expect(json.customizations.vscode.extensions).toEqual([
+      'nrwl.angular-console',
+    ]);
+  });
+
+  it('форматтер null — обвес форматирование НЕ навязывает', async () => {
+    // «Не задано» здесь осмысленно: обе строки идут парой, и форматирование по
+    // сохранению без форматтера — половина настройки, а не половина результата.
+    const { json } = await materialize({ settings: { editorFormatter: null } });
+    const settings = json.customizations.vscode.settings;
+
+    expect(settings['editor.defaultFormatter']).toBeUndefined();
+    expect(settings['editor.formatOnSave']).toBeUndefined();
+    // А tsdk на месте: он слотом НЕ стал.
+    expect(settings['typescript.tsdk']).toBe('node_modules/typescript/lib');
+  });
+
+  it('ГРАНИЦА СЛОТА: сквозного проброса настроек редактора нет', async () => {
+    // Обвес отдаёт регулировки под то, что диктует СТЕК репозитория (форматтер), и
+    // не превращается в редактор JSON с лишним шагом. Проверяемо: набор ключей в
+    // customizations.vscode.settings ЗАКРЫТ, и расширить его конфигом нельзя —
+    // форма настроек не знает вложенных структур намеренно.
+    const { json } = await materialize();
+
+    expect(Object.keys(json.customizations.vscode.settings).sort()).toEqual([
+      'editor.defaultFormatter',
+      'editor.formatOnSave',
+      'typescript.tsdk',
+    ]);
+  });
+
   it('ЗАПОЛНЕННОЕ БЬЁТ ПРЕСЕТ, но слоя не отменяет', async () => {
     const { json, result } = await materialize({
       presets: ['omnifield'],
