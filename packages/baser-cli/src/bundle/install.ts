@@ -21,6 +21,25 @@
  * повторяет то, что сделал бы пакетный менеджер, и ничего не обещает сверх
  * этого: `npm i` поверх заменит поставку на месте, а дверь не узнает разницы,
  * потому что её и нет.
+ *
+ * ## Почему запись в `dependencies` снимается ПОСЛЕ прогона
+ *
+ * Имитация пакетного менеджера верна ровно до момента коммита (`BASER2-35`).
+ * Записанная зависимость не резолвится ни у кого, кроме того, кто прямо сейчас
+ * держит бандл в руках: пакет нигде не опубликован. Закоммитил `package.json` —
+ * у коллеги падает `pnpm install`, а первым падает CI.
+ *
+ * Это не дефект двери и не дефект контракта, а **цена временного способа
+ * доставки**: через реестр всё сходится само — менеджер и файлы положит, и
+ * строку напишет, и лок обновит. Поэтому чинится это здесь, в файле,
+ * существующем ровно ради ручной доставки, а не в контракте двери: контракт,
+ * изменённый ради временного костыля, переживает костыль.
+ *
+ * Отсюда формулировка задачи — не «убрать строку», а **ручная доставка не
+ * оставляет за собой того, что нельзя закоммитить**. Значит: убирать ВСЕГДА (и
+ * после `--plan`, и после установки, и после ОТКАЗА двери), убирать `package.json`
+ * целиком, если его до нас не было, и говорить, что убрал, — молчаливая уборка
+ * это тоже молчание.
  */
 
 import {
@@ -31,7 +50,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cli } from '@omnifield/baser-cli';
 
@@ -53,8 +72,9 @@ const USAGE = `установка обвеса из бандла
   --confirm <dest>  подтвердить замену ЭТОГО своего файла, поимённо
   --json            отдать ответ данными
 
-Сухой прогон делает то же, что npm i: кладёт обвес в node_modules и добавляет
-его в dependencies. Артефактов не раскладывает — план читается до применения.`;
+Обвес кладётся в node_modules цели и на ВРЕМЯ прогона объявляется в
+package.json — иначе дверь его не найдёт. После прогона запись снимается:
+коммитить нечего. Сухой прогон артефактов не раскладывает.`;
 
 interface Args {
   readonly plan: boolean;
@@ -131,7 +151,16 @@ async function install(args: Args): Promise<number> {
   // без этой записи скопированный каталог для неё не существует — прогон
   // отвечает «обвесов не поставлено», и человек ищет причину на ровном месте.
   // Это половина имитации, а половина имитации хуже её отсутствия.
-  declareDependency(args.cwd, name, manifest.source?.package?.version ?? null);
+  //
+  // Запись живёт РОВНО прогон: снимок делается до неё, уборка идёт в `finally`,
+  // и отказ двери на неё не влияет — отказ штатный исход, а не повод оставить
+  // мину в чужом манифесте.
+  const before = snapshot(args.cwd);
+  const written = declareDependency(
+    args.cwd,
+    name,
+    manifest.source?.package?.version ?? null,
+  );
 
   process.stdout.write(
     `обвес ${name}${
@@ -142,27 +171,146 @@ async function install(args: Args): Promise<number> {
     } → ${target}\n\n`,
   );
 
-  const outcome = await cli(
-    [args.plan ? 'plan' : 'apply', '--cwd', args.cwd, ...args.rest],
-    args.cwd,
+  try {
+    const outcome = await cli(
+      [args.plan ? 'plan' : 'apply', '--cwd', args.cwd, ...args.rest],
+      args.cwd,
+    );
+    process.stdout.write(outcome.stdout);
+    return outcome.exitCode;
+  } finally {
+    process.stdout.write(
+      `\n${restore(before, written, name, relative(args.cwd, target))}`,
+    );
+  }
+}
+
+/** Манифест потребителя до того, как мы его тронули. `null` — файла не было. */
+interface Snapshot {
+  readonly path: string;
+  readonly text: string | null;
+}
+
+function snapshot(cwd: string): Snapshot {
+  const path = join(cwd, 'package.json');
+  return {
+    path,
+    text: existsSync(path) ? readFileSync(path, 'utf-8') : null,
+  };
+}
+
+/**
+ * Возвращает манифест в то состояние, в котором мы его застали, и РАССКАЗЫВАЕТ
+ * об этом.
+ *
+ * Восстановление побайтовое, а не «удалить ключ и записать заново»: чужой файл
+ * не должен даже переформатироваться. Разошедшийся отступ — это тоже строка в
+ * `git status`, которую человек не просил.
+ *
+ * Если во время прогона манифест изменил КТО-ТО ЕЩЁ, побайтовый возврат затёр бы
+ * чужую работу. Тогда снимается ровно своя запись, а остальное остаётся как
+ * есть, и это говорится вслух: тихо выбирать за человека между его правкой и
+ * нашей уборкой мы не вправе.
+ */
+function restore(
+  before: Snapshot,
+  written: string,
+  name: string,
+  installed: string,
+): string {
+  const store = `обвес остался в ${installed} — git его не отслеживает.\n`;
+  const current = existsSync(before.path)
+    ? readFileSync(before.path, 'utf-8')
+    : null;
+
+  if (current !== written) {
+    return `${surgical(before, current, name)}${store}`;
+  }
+
+  if (before.text === null) {
+    rmSync(before.path, { force: true });
+    return (
+      `package.json у тебя не было — создали на время прогона и убрали.\n` +
+      `Дверь ищет обвесы по объявленным зависимостям, и на прогон запись нужна; ` +
+      `коммитить её нельзя — пакет нигде не опубликован.\n${store}`
+    );
+  }
+
+  writeFileSync(before.path, before.text, 'utf-8');
+  return (
+    `package.json возвращён как был: запись "${name}" снята.\n` +
+    `Она нужна была на прогон — дверь ищет обвесы по объявленным зависимостям, — ` +
+    `но закоммитить её нельзя: пакет нигде не опубликован, и у коллеги такая ` +
+    `строка не резолвится.\n${store}`
   );
-  process.stdout.write(outcome.stdout);
-  return outcome.exitCode;
+}
+
+/**
+ * Уборка, когда манифест во время прогона изменили не мы.
+ *
+ * Случай узкий (артефакт обвеса, целящийся в `package.json`, — известный долг
+ * `tasker:BASER2-25`), но выбор в нём неочевиден, поэтому он назван, а не
+ * оставлен на «обычно не случается».
+ */
+function surgical(
+  before: Snapshot,
+  current: string | null,
+  name: string,
+): string {
+  if (current === null) {
+    return `package.json во время прогона исчез — убирать нечего.\n`;
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(current) as Record<string, unknown>;
+  } catch {
+    // Разобрать не смогли — трогать тем более не станем: снести чужой файл
+    // вслепую хуже, чем оставить строку и честно сказать про неё.
+    return (
+      `package.json изменился во время прогона и не разбирается как JSON — ` +
+      `запись "${name}" оставлена. Сними её руками перед коммитом: ` +
+      `пакет нигде не опубликован.\n`
+    );
+  }
+
+  const dependencies = {
+    ...((parsed['dependencies'] as object) ?? {}),
+  } as Record<string, string>;
+  delete dependencies[name];
+  const hadBlock =
+    before.text !== null &&
+    (JSON.parse(before.text) as Record<string, unknown>)['dependencies'] !==
+      undefined;
+  const next = { ...parsed, dependencies };
+  if (Object.keys(dependencies).length === 0 && !hadBlock) {
+    delete (next as Record<string, unknown>)['dependencies'];
+  }
+
+  writeFileSync(before.path, `${JSON.stringify(next, null, 2)}\n`, 'utf-8');
+  return (
+    `package.json изменился во время прогона не нами — вернули не файл целиком, ` +
+    `а сняли только свою запись "${name}". Остальное оставлено как есть.\n`
+  );
 }
 
 /**
  * Объявляет обвес зависимостью репозитория — вторая половина того, что делает
- * пакетный менеджер.
+ * пакетный менеджер. **На время прогона**: снимает запись `restore`.
  *
- * `package.json` создаётся, если его нет: `npm i` в каталоге без манифеста
- * поступает так же, и отдельного правила для этого случая заводить не за чем.
- * Всё прочее в чужом манифесте не трогается — меняется ровно одна запись.
+ * `package.json` создаётся, если его нет: без манифеста дверь не видит ни одной
+ * объявленной зависимости, а значит и обвеса. Файл при этом временный ровно так
+ * же, как запись, — в Go- или Python-репозитории он чужероден, и оставить его
+ * значило бы оставить след, которого там отродясь не было.
+ *
+ * Отдаёт то, что записал: уборка сверяется с этим текстом, чтобы отличить
+ * «манифест как мы его оставили» от «манифест успели изменить».
  */
 function declareDependency(
   cwd: string,
   name: string,
   version: string | null,
-): void {
+): string {
   const path = join(cwd, 'package.json');
   const manifest = existsSync(path)
     ? (JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>)
@@ -173,9 +321,7 @@ function declareDependency(
     [name]: version === null ? '*' : version,
   };
 
-  writeFileSync(
-    path,
-    `${JSON.stringify({ ...manifest, dependencies }, null, 2)}\n`,
-    'utf-8',
-  );
+  const text = `${JSON.stringify({ ...manifest, dependencies }, null, 2)}\n`;
+  writeFileSync(path, text, 'utf-8');
+  return text;
 }
