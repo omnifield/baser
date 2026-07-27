@@ -62,15 +62,31 @@ export function cleanupBoxes(): void {
   }
 }
 
+/**
+ * Манифест обвеса — прочитанный ОТТУДА ЖЕ, откуда его читает упаковка.
+ *
+ * Проба, которой нужно значение из чужого объявления (имя пакета, версия),
+ * спрашивает его у объявления, а не переписывает к себе литералом: переписанное
+ * расходится с источником молча и краснеет не тогда, когда что-то сломалось, а
+ * тогда, когда сосед выпустился.
+ */
+export function readManifest(root: string): Manifest {
+  return JSON.parse(
+    readFileSync(join(root, 'package.json'), 'utf-8'),
+  ) as Manifest;
+}
+
 /** Правит манифест копии — точечная поломка одного пункта. */
 export function editManifest(
   root: string,
   edit: (manifest: Manifest) => void,
 ): void {
-  const path = join(root, 'package.json');
-  const manifest = JSON.parse(readFileSync(path, 'utf-8')) as Manifest;
+  const manifest = readManifest(root);
   edit(manifest);
-  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+  writeFileSync(
+    join(root, 'package.json'),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
 }
 
 /** Все файлы дерева, путями от его корня, в байтовом порядке. */
