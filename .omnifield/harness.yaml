@@ -1,0 +1,67 @@
+# harness.yaml — роль-модель продукта baser (agent-harness plugin).
+#
+# Доставлен плагином как seed, дальше файлом ВЛАДЕЕТ продукт. Рамка (инварианты ролей)
+# впаяна в .claude/agents/*.md + shared-policy.md; здесь — ДАННЫЕ под baser (kb:BRAIN-3).
+apiVersion: omnifield.dev/v1
+kind: harness
+
+# Идёт в identity-баннер каждой сессии ("architect/main продукта baser").
+product: baser
+
+# Число архитекторов (main-сессий). baser — один продукт, один архитектор.
+architects: 1
+
+# Пины моделей по роли (решение user 2026-07-26): architect — Opus 5 (проверен
+# на живой main-сессии), овнеры — Opus 4.8, слои — Haiku.
+models:
+  architect: claude-opus-5
+  owner: claude-opus-4-8
+  layer: claude-haiku-4-5-20251001
+
+# Зоны продукта: scope (leaf-имя) → paths[] + назначение. scope=main → architect.
+# owner-<zone> владеет папкой целиком (код+тесты+доки), commit-only под git-gate.
+# Пути разных зон не пересекаются: одна папка — один владелец.
+#
+# Раскладка = один пакет монорепы = одна зона. Зоны под будущие пакеты
+# (формат шаблона — этап B, tasker:BASER2-8) заводятся при старте этапа, не заранее.
+zones:
+  materialize:
+    paths: [packages/baser-materialize]
+    description: ядро материализации — декларация, план, применение, владение
+  contracts:
+    paths: [packages/baser-contracts]
+    description: хвостовик — форма объявления обвеса, против неё программируют все зоны
+  cli:
+    paths: [packages/baser-cli]
+    description: дверь — раннер, который зовёт движок и пишет на диск
+  check:
+    paths: [packages/baser-check]
+    description: деталь подходит патрону — ответ данными, звено цепи
+  pack:
+    paths: [packages/baser-pack]
+    description: проверенная деталь, нормализованная и с манифестом выдачи
+  devbox:
+    paths: [packages/baser-devbox]
+    description: обвес девбокса — .devcontainer как шаблон с пресетом
+  release:
+    paths: [packages/baser-release]
+    description: release-капабилити поверх nx release
+
+# Git-доступ по роли — РАМКА (инвариант shared-policy), выключить нельзя:
+# architect=full; owner=commit-only (gate); layer=none.
+git:
+  architect: full
+  owner: commit-only
+  layer: none
+
+# Слот grabli (BRAIN2-7): tasker-ws под затыки/грабли, пишем ПОСЛЕ обсуждения с user
+# (класс проблемы = родитель, конкретные случаи = дети). Актуальна старшая версия.
+grabli:
+  workspace: GRABLI2
+
+# Слот services (BRAIN2-9): базы omnifield-сервисов. Доступ — CURL (Bash), НЕ MCP.
+# Проверено 2026-07-26 изнутри девбокса: оба соседа отвечают на /healthz.
+# Дверь через хост (http://host.docker.internal:8080/api/...) — запасной вход.
+services:
+  tasker: http://tasker:8030/tasker
+  knowledger: http://knowledger:8040/knowledger

@@ -241,25 +241,25 @@ describe('УНЕСЛИ И ЗАРАБОТАЛО', () => {
     expect(existsSync(join(repo, 'baser.json'))).toBe(false);
   });
 
-  it('INSTALL.md не врёт про то, что сухой прогон ТРОГАЕТ', () => {
+  it('INSTALL.md не врёт про то, что сухой прогон ТРОГАЕТ и что оставляет', () => {
     const { far, repo } = carried();
+    const before = readFileSync(join(repo, 'package.json'), 'utf-8');
+
     install(far, repo, '--plan');
 
-    // Тронуто ровно то же, что тронул бы `npm i`: каталог в `node_modules` и
-    // одна запись в `package.json`. Инструкция, назвавшая только первое, была
-    // бы неточна — а неточная инструкция это тот же уверенный указатель не
-    // туда, за который здесь уже приходилось чинить сообщения.
+    // Тронуто то же, что тронул бы `npm i`, — но остаётся из этого только
+    // склад: запись в манифесте живёт ровно прогон (`tasker:BASER2-35`).
+    // Инструкция, назвавшая одно и умолчавшая о другом, была бы тем же
+    // уверенным указателем не туда, за который здесь уже чинили сообщения.
     expect(existsSync(join(repo, 'node_modules/@omnifield/baser-devbox'))).toBe(
       true,
     );
-    const manifest = JSON.parse(
-      readFileSync(join(repo, 'package.json'), 'utf-8'),
-    ) as { dependencies?: Record<string, string> };
-    expect(manifest.dependencies?.['@omnifield/baser-devbox']).toBeDefined();
+    expect(readFileSync(join(repo, 'package.json'), 'utf-8')).toBe(before);
 
     const doc = readFileSync(join(far, 'INSTALL.md'), 'utf-8');
     expect(doc).toContain('node_modules/');
-    expect(doc).toContain('`dependencies`');
+    expect(doc).toContain('package.json');
+    expect(doc).toMatch(/сниме|снимае/);
   });
 
   it('WEBER: первая установка в непустой репозиторий — отказ, --confirm снимает', () => {
@@ -296,17 +296,24 @@ describe('УНЕСЛИ И ЗАРАБОТАЛО', () => {
     expect(landed).toContain('weber-devbox');
   });
 
-  it('обвес встал так, как его поставил бы пакетный менеджер', () => {
+  it('обвес встал так, как его поставил бы пакетный менеджер — НА ПРОГОН', () => {
     const { far, repo } = carried();
-    install(far, repo, '--plan');
 
-    // Файлы на месте — и пакет ОБЪЯВЛЕН зависимостью. Без второго дверь
-    // скопированного каталога не видит: половина имитации хуже её отсутствия.
+    const out = install(far, repo, '--plan');
+
+    // Файлы на месте — и пакет был ОБЪЯВЛЕН зависимостью, иначе дверь
+    // скопированного каталога не увидела бы: половина имитации хуже её
+    // отсутствия. Доказательство объявления — сам план: без него ответом было
+    // бы «обвесов не поставлено».
     const installed = join(repo, 'node_modules/@omnifield/baser-devbox');
     expect(statSync(installed).isDirectory()).toBe(true);
+    expect(out).toContain('план применим');
+
+    // А после прогона имитация сворачивается: запись, которую нельзя
+    // закоммитить, за собой не оставляют (`tasker:BASER2-35`).
     const manifest = JSON.parse(
       readFileSync(join(repo, 'package.json'), 'utf-8'),
     ) as { dependencies?: Record<string, string> };
-    expect(manifest.dependencies?.['@omnifield/baser-devbox']).toBeDefined();
+    expect(manifest.dependencies?.['@omnifield/baser-devbox']).toBeUndefined();
   });
 });
