@@ -1,47 +1,73 @@
 /**
  * РАЗБОР ВЫЗОВА — тонкий слой, и намеренно тонкий.
  *
- * Здесь argv превращается в `RunOptions`, а `DoorResult` — в поток и код
- * возврата. Ни одного решения о материализации в этом файле нет и не должно
- * быть: всё, что можно узнать, узнаётся прогоном, а не разбором флагов.
+ * Здесь argv превращается в вызов механики, а её ответ — в поток и код
+ * возврата. Ни одного решения в этом файле нет и не должно быть: всё, что можно
+ * узнать, узнаётся прогоном, а не разбором флагов.
  *
  * **Ноль интерактива по построению.** Ни `process.stdin`, ни промптов, ни флага
  * «неинтерактивный режим»: режима, который надо выключать, не существует, и
  * поэтому в CI команда ведёт себя ровно как у человека
  * (`tasker:BASER2-18`, `tasker:BASER2-20`).
  *
- * Команд ровно две — показать план не применяя и применить. Две фазы разнесены
- * не двумя флагами одной команды, а двумя командами, потому что читаемость плана
- * ДО применения — инвариант, а не удобство (рынок подтвердил дважды: `nx
- * migrate` и схематики).
+ * ## Две семьи команд, и они разные
+ *
+ * **Материализация** — `plan` и `apply`. Две фазы разнесены не флагами одной
+ * команды, а двумя командами, потому что читаемость плана ДО применения —
+ * инвариант, а не удобство (рынок подтвердил дважды: `nx migrate` и схематики).
+ *
+ * **Подготовка детали** — `check`, `pack`, `bundle` (`kb:BASER2-9`). Механики
+ * живут в соседних зонах; дверь их зовёт и отдаёт ответ данными плюс текст
+ * поверх. Своей семантики поверх чужой она не изобретает: коды приходят снизу,
+ * и вторая правда о чужом событии нам уже дважды выходила боком.
+ *
+ * `bundle` — ОТДЕЛЬНАЯ команда, а не флаг у `pack`. Подготовка ≠ доставка
+ * (`tasker:BASER2-31`): собрать нагрузку — всегда одно и то же, а бандл это
+ * ровно один способ её вынести. Флагом это выглядело бы как настройка упаковки
+ * и стёрло бы различение, на котором построена вся цепь.
  */
 
-import { DOOR_SCHEMA_VERSION } from './schema.js';
+import { checkPackage, type CheckReport } from '@omnifield/baser-check';
 import { FORM_VERSION } from '@omnifield/baser-contracts';
 import { OUTPUT_SCHEMA_VERSION } from '@omnifield/baser-materialize';
+import { packPackage, type PackReport } from '@omnifield/baser-pack';
+import { bundle, BUNDLE_SCHEMA_VERSION, type BundleReport } from './bundle.js';
+import { renderBundle, renderCheck, renderPack, renderText } from './report.js';
 import { run } from './run.js';
-import { renderText } from './report.js';
-import { exitCodeOf, type DoorCommand, type DoorResult } from './result.js';
+import { DOOR_SCHEMA_VERSION } from './schema.js';
+import { exitCodeOf, type DoorResult } from './result.js';
 
-export const USAGE = `baser — дверь материализации
+export const USAGE = `baser — дверь материализации и подготовка обвеса
 
-  baser plan   показать план, ничего не применяя
-  baser apply  применить план и записать на диск
+  baser plan    показать план, ничего не применяя
+  baser apply   применить план и записать на диск
+
+  baser check  <каталог обвеса>                 деталь подходит патрону?
+  baser pack   <каталог обвеса> --into <куда>   собрать нагрузку к выдаче
+  baser bundle <каталог обвеса> --into <куда>   собрать запускаемый бандл
 
   --json            отдать ответ данными (то же, поверх чего рендерится текст)
   --cwd <path>      корень репозитория потребителя (по умолчанию — текущий каталог)
   --confirm <dest>  подтвердить перезапись ЭТОГО чужого артефакта, поимённо
-  --version         версии схем: двери, формы, вывода движка
+  --into <path>     каталог выдачи для pack и bundle
+  --version         версии схем: двери, формы, вывода движка, бандла
   --help            это сообщение
 
 Вопросов пользователю дверь не задаёт: не заполнено — работает дефолт.
-Код возврата: 0 сделано либо нечего делать · 1 конфликт владения · 2 отказ двери.`;
+Код возврата: 0 сделано либо нечего делать · 1 конфликт владения · 2 отказ.`;
+
+/** Что произвёл вызов. Семьи команд разные, и ответы у них тоже разные. */
+export type CliResult =
+  | { readonly kind: 'door'; readonly door: DoorResult }
+  | { readonly kind: 'check'; readonly check: CheckReport }
+  | { readonly kind: 'pack'; readonly pack: PackReport }
+  | { readonly kind: 'bundle'; readonly bundle: BundleReport };
 
 export interface CliOutcome {
   readonly stdout: string;
   readonly exitCode: number;
-  /** Ответ прогона; `null` — до прогона не дошло (разбор вызова). */
-  readonly result: DoorResult | null;
+  /** Ответ механики; `null` — до прогона не дошло (разбор вызова). */
+  readonly result: CliResult | null;
 }
 
 export async function cli(
@@ -53,28 +79,84 @@ export async function cli(
     return { stdout: parsed.stdout, exitCode: parsed.exitCode, result: null };
   }
 
-  const result = await run({
-    command: parsed.command,
-    cwd: parsed.cwd ?? cwd,
-    confirm: parsed.confirm,
+  const emit = (
+    result: CliResult,
+    text: string,
+    exitCode: number,
+  ): CliOutcome => ({
+    stdout: parsed.json
+      ? `${JSON.stringify(payload(result), null, 2)}\n`
+      : `${text}\n`,
+    exitCode,
+    result,
   });
 
-  return {
-    stdout: parsed.json
-      ? `${JSON.stringify(result, null, 2)}\n`
-      : `${renderText(result)}\n`,
-    exitCode: exitCodeOf(result),
-    result,
-  };
+  if (parsed.command === 'plan' || parsed.command === 'apply') {
+    const door = await run({
+      command: parsed.command,
+      cwd: parsed.cwd ?? cwd,
+      confirm: parsed.confirm,
+    });
+    return emit({ kind: 'door', door }, renderText(door), exitCodeOf(door));
+  }
+
+  if (parsed.command === 'check') {
+    const report = checkPackage(parsed.target);
+    return emit(
+      { kind: 'check', check: report },
+      renderCheck(report),
+      report.ok ? 0 : 2,
+    );
+  }
+
+  if (parsed.command === 'pack') {
+    const report = packPackage(parsed.target, { into: parsed.into });
+    return emit(
+      { kind: 'pack', pack: report },
+      renderPack(report),
+      report.ok ? 0 : 2,
+    );
+  }
+
+  const report = bundle(parsed.target, { into: parsed.into });
+  return emit(
+    { kind: 'bundle', bundle: report },
+    renderBundle(report),
+    report.ok ? 0 : 2,
+  );
 }
+
+/** Машинный ответ — сам отчёт механики, без обёртки двери поверх него. */
+function payload(result: CliResult): unknown {
+  switch (result.kind) {
+    case 'door':
+      return result.door;
+    case 'check':
+      return result.check;
+    case 'pack':
+      return result.pack;
+    case 'bundle':
+      return result.bundle;
+  }
+}
+
+type Command = 'plan' | 'apply' | 'check' | 'pack' | 'bundle';
+
+/** Командам подготовки нужен каталог обвеса; `pack` и `bundle` — ещё и `--into`. */
+const NEEDS_TARGET: readonly Command[] = ['check', 'pack', 'bundle'];
+const NEEDS_INTO: readonly Command[] = ['pack', 'bundle'];
 
 type ParsedArgv =
   | {
       readonly ok: true;
-      readonly command: DoorCommand;
+      readonly command: Command;
       readonly json: boolean;
       readonly cwd: string | null;
       readonly confirm: readonly string[];
+      /** Каталог обвеса для команд подготовки. */
+      readonly target: string;
+      /** Каталог выдачи для `pack` и `bundle`. */
+      readonly into: string;
     }
   | { readonly ok: false; readonly stdout: string; readonly exitCode: number };
 
@@ -100,12 +182,13 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
       doorSchemaVersion: DOOR_SCHEMA_VERSION,
       formVersion: FORM_VERSION,
       outputSchemaVersion: OUTPUT_SCHEMA_VERSION,
+      bundleSchemaVersion: BUNDLE_SCHEMA_VERSION,
     };
     return { ok: false, stdout: `${JSON.stringify(versions)}\n`, exitCode: 0 };
   }
 
   const [command, ...rest] = argv;
-  if (command !== 'plan' && command !== 'apply') {
+  if (!isCommand(command)) {
     return {
       ok: false,
       stdout: `неизвестная команда "${command}".\n\n${USAGE}\n`,
@@ -115,40 +198,92 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
 
   let json = false;
   let cwd: string | null = null;
+  let into: string | null = null;
   const confirm: string[] = [];
+  const positional: string[] = [];
 
   for (let index = 0; index < rest.length; index += 1) {
     const flag = rest[index];
-    switch (flag) {
-      case '--json':
-        json = true;
-        break;
-      case '--cwd':
-      case '--confirm': {
-        const argument = rest[index + 1];
-        if (argument === undefined || argument.startsWith('--')) {
-          return {
-            ok: false,
-            stdout: `флаг "${flag}" ждёт значения.\n\n${USAGE}\n`,
-            exitCode: 2,
-          };
-        }
-        index += 1;
-        if (flag === '--cwd') {
-          cwd = argument;
-        } else {
-          confirm.push(argument);
-        }
-        break;
-      }
-      default:
+
+    if (!flag.startsWith('--')) {
+      positional.push(flag);
+      continue;
+    }
+
+    if (flag === '--json') {
+      json = true;
+      continue;
+    }
+
+    if (flag === '--cwd' || flag === '--confirm' || flag === '--into') {
+      const argument = rest[index + 1];
+      if (argument === undefined || argument.startsWith('--')) {
         return {
           ok: false,
-          stdout: `неизвестный флаг "${flag}".\n\n${USAGE}\n`,
+          stdout: `флаг "${flag}" ждёт значения.\n\n${USAGE}\n`,
           exitCode: 2,
         };
+      }
+      index += 1;
+      if (flag === '--cwd') {
+        cwd = argument;
+      } else if (flag === '--into') {
+        into = argument;
+      } else {
+        confirm.push(argument);
+      }
+      continue;
     }
+
+    return {
+      ok: false,
+      stdout: `неизвестный флаг "${flag}".\n\n${USAGE}\n`,
+      exitCode: 2,
+    };
   }
 
-  return { ok: true, command, json, cwd, confirm };
+  const wantsTarget = NEEDS_TARGET.includes(command);
+  if (wantsTarget && positional.length !== 1) {
+    return {
+      ok: false,
+      stdout:
+        `команда "${command}" ждёт ОДИН каталог обвеса` +
+        `${positional.length > 1 ? `, получено ${positional.length}` : ''}.\n\n${USAGE}\n`,
+      exitCode: 2,
+    };
+  }
+  if (!wantsTarget && positional.length > 0) {
+    return {
+      ok: false,
+      stdout: `команда "${command}" не ждёт позиционных аргументов.\n\n${USAGE}\n`,
+      exitCode: 2,
+    };
+  }
+  if (NEEDS_INTO.includes(command) && into === null) {
+    return {
+      ok: false,
+      stdout: `команда "${command}" ждёт "--into <каталог выдачи>".\n\n${USAGE}\n`,
+      exitCode: 2,
+    };
+  }
+
+  return {
+    ok: true,
+    command,
+    json,
+    cwd,
+    confirm,
+    target: positional[0] ?? '',
+    into: into ?? '',
+  };
+}
+
+function isCommand(value: string): value is Command {
+  return (
+    value === 'plan' ||
+    value === 'apply' ||
+    value === 'check' ||
+    value === 'pack' ||
+    value === 'bundle'
+  );
 }

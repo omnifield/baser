@@ -11,10 +11,16 @@
   "include": ["src/**/*.ts"],
   "references": [
     {
+      "path": "../baser-check/tsconfig.lib.json"
+    },
+    {
       "path": "../baser-contracts/tsconfig.lib.json"
     },
     {
       "path": "../baser-materialize/tsconfig.lib.json"
+    },
+    {
+      "path": "../baser-pack/tsconfig.lib.json"
     }
   ],
   "exclude": [

@@ -17,6 +17,9 @@
 
 import { describeProblems, type FormProblem } from '@omnifield/baser-contracts';
 import { describePlan } from '@omnifield/baser-materialize';
+import type { CheckReport } from '@omnifield/baser-check';
+import type { PackReport } from '@omnifield/baser-pack';
+import type { BundleReport } from './bundle.js';
 import type { DoorResult } from './result.js';
 import type { SettingLink, SettingMovement } from './values.js';
 
@@ -142,4 +145,153 @@ function indent(text: string): string {
     .split('\n')
     .map((line) => `  ${line}`)
     .join('\n');
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// ПОДГОТОВКА ДЕТАЛИ: check · pack · bundle
+//
+// Те же правила, что и у рендера прогона. Механики живут в соседних зонах, и
+// дверь их ответы НЕ пересказывает: коды и адреса печатаются как есть тем же
+// `describeProblems` контрактов, каким печатает свои. Второй рендер для чужих
+// отказов означал бы вторую правду об одном событии.
+//
+// Объём сверки печатается всегда. `check` и `pack` считают его сами (`stages`
+// со счётчиком), и ровно ради того, чтобы зелёный прогон, ничего не сверивший,
+// был виден — прятать этот счётчик в человеческом выводе значило бы вернуть
+// ему возможность быть незамеченным.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Строка шага: имя, состояние, объём. Форма общая у всех трёх механик. */
+interface RenderedStage {
+  readonly name: string;
+  readonly status: string;
+  readonly counted: number;
+  readonly reason?: string;
+}
+
+function renderStages(stages: readonly RenderedStage[]): string[] {
+  const width = Math.max(...stages.map((stage) => stage.name.length));
+  return stages.map((stage) => {
+    const tail = stage.reason === undefined ? '' : `  — ${stage.reason}`;
+    return `  ${stage.name.padEnd(width)}  ${stage.status.padEnd(7)} ${String(
+      stage.counted,
+    ).padStart(4)}${tail}`;
+  });
+}
+
+function renderProblems(
+  problems: readonly { code: string; at: string; message: string }[],
+): string[] {
+  if (problems.length === 0) {
+    return [];
+  }
+  return [
+    '',
+    `отказов: ${problems.length}`,
+    indent(describeProblems(problems as readonly FormProblem[])),
+  ];
+}
+
+export function renderCheck(report: CheckReport): string {
+  const lines = [
+    `baser check · ${report.root}`,
+    report.packageName === null
+      ? '  пакет не назван'
+      : `  пакет ${report.packageName}${
+          report.packageVersion === null ? '' : `@${report.packageVersion}`
+        }`,
+  ];
+
+  if (report.declaration !== null) {
+    lines.push(
+      `  обвес ${report.declaration.source.id} — ${report.declaration.source.title}`,
+    );
+  }
+
+  lines.push(
+    '',
+    `проверено (слой · итог · сверено):`,
+    ...renderStages(report.stages),
+  );
+  lines.push(...renderProblems(report.problems));
+  lines.push(
+    '',
+    report.ok
+      ? 'деталь подходит патрону'
+      : 'деталь патрону не подходит — причины выше',
+  );
+  return lines.join('\n');
+}
+
+export function renderPack(report: PackReport): string {
+  const lines = [`baser pack · ${report.source} → ${report.target}`];
+
+  const manifest = report.manifest;
+  if (manifest !== null) {
+    lines.push(
+      `  обвес ${manifest.source.id} · пакет ${manifest.source.package.name}${
+        manifest.source.package.version === null
+          ? ''
+          : `@${manifest.source.package.version}`
+      }`,
+      `  файлов ${manifest.files.length} · артефактов ${manifest.artifacts.length}`,
+      // Состояние «не могу сказать» доезжает до человека, а не растворяется в
+      // «годен»: его назвала проверка, и снял его не разбор, а npm.
+      `  состав: ${manifest.shipping.claim} (решил ${manifest.shipping.decidedBy})${
+        manifest.shipping.reason === undefined
+          ? ''
+          : ` — ${manifest.shipping.reason}`
+      }`,
+    );
+  }
+
+  lines.push(
+    '',
+    'собрано (шаг · итог · сверено):',
+    ...renderStages(report.stages),
+  );
+  lines.push(...renderProblems(report.problems));
+  lines.push(
+    '',
+    report.ok
+      ? `нагрузка собрана: ${report.payloadRoot ?? ''}`
+      : 'нагрузка не собрана — причины выше',
+  );
+  return lines.join('\n');
+}
+
+export function renderBundle(report: BundleReport): string {
+  const lines = [`baser bundle · ${report.source} → ${report.target}`];
+
+  if (report.runtime.length > 0) {
+    const bytes = report.runtime.reduce((sum, item) => sum + item.bytes, 0);
+    lines.push(
+      `  вложено пакетов ${report.runtime.length}, ${Math.round(bytes / 1024)} КБ:`,
+      ...report.runtime.map(
+        (item) =>
+          `    ${item.name}${item.version === null ? '' : `@${item.version}`}` +
+          ` — ${item.files} ф., ${Math.round(item.bytes / 1024)} КБ`,
+      ),
+    );
+  }
+
+  lines.push(
+    '',
+    'собрано (шаг · итог · сверено):',
+    ...renderStages(report.stages),
+  );
+
+  // Отказ упаковки печатается ЕЁ рендером: бандл его не пересказывает.
+  if (!report.pack.ok) {
+    lines.push('', indent(renderPack(report.pack)));
+  }
+
+  lines.push(...renderProblems(report.problems));
+  lines.push(
+    '',
+    report.ok
+      ? `бандл собран — унеси папку и прочти ${report.target}/INSTALL.md`
+      : 'бандл не собран — причины выше',
+  );
+  return lines.join('\n');
 }
