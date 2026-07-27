@@ -402,7 +402,15 @@ describe('переход: служебная запись потеряна ил�
       (problem) => problem.code === 'manifest-missing',
     );
     expect(named?.at).toBe(MANIFEST_PATH);
-    expect(named?.message).toContain('обязан коммититься');
+    // Сообщение начинается с НАБЛЮДЕНИЯ, а не с указания: конфиг есть, записи
+    // нет — вот из чего вывод, что мы тут уже были.
+    expect(named?.message).toContain('раскладка здесь уже была');
+    expect(named?.message).toContain('обязана коммититься');
+    expect(named?.message).toContain('Восстанови запись из истории');
+    // Признак не абсолютен — конфиг можно написать и руками. Дверь этого не
+    // скрывает и отдаёт человеку дешёвую проверку вместо второй догадки:
+    // уверенный указатель не туда хуже отсутствующего.
+    expect(named?.message).toContain('если в истории её нет');
     expect(named?.message).toContain('--confirm');
   });
 
@@ -433,11 +441,53 @@ describe('переход: служебная запись потеряна ил�
     expect(box.read(LIVE)).toContain('baser-devbox');
   });
 
+  it('второй выход из того же сообщения работает: конфиг написан руками', async () => {
+    // Остаточный случай признака: конфиг есть, но раскладки не было — его
+    // написали руками, а файл на месте артефакта чужой. Дверь этого не
+    // различает и не притворяется, что различает: она называет второй исход
+    // прямо в сообщении, и он обязан работать так же буквально, как первый.
+    consumer = installDevbox({
+      config: CONFIG,
+      existing: { [LIVE]: '{\n  "name": "свой, руками"\n}\n' },
+    });
+
+    const blocked = await run({ command: 'plan', cwd: consumer.root });
+    expect(
+      blocked.problems.find((problem) => problem.code === 'manifest-missing')
+        ?.message,
+    ).toContain('файлы на этих местах не наши');
+
+    const fixed = await run({
+      command: 'apply',
+      cwd: consumer.root,
+      confirm: [LIVE],
+    });
+
+    expect(fixed.status).toBe('applied');
+    expect(consumer.read(LIVE)).not.toContain('свой, руками');
+    expect(manifestOf(consumer)).toContainEqual(
+      expect.objectContaining({ dest: LIVE }),
+    );
+  });
+
   it('ПЕРВЫЙ ПРОГОН молчит: записи нет и там, а кричать не о чем', async () => {
     // То же отсутствие манифеста, но артефактов на диске нет — это норма, а не
     // потеря. Условие обязано их различать, иначе сообщение кричит каждому.
     const result = await run({ command: 'plan', cwd: clean().root });
 
+    expect(result.problems).toEqual([]);
+    expect(result.status).toBe('pending');
+  });
+
+  it('ПУСТОЙ РЕПОЗИТОРИЙ БЕЗ КОНФИГА молчит тоже', async () => {
+    // Ветка «первой установки» не имеет права срабатывать там, где чужих файлов
+    // нет: предупреждение, которое видит каждый новый потребитель, за неделю
+    // перестаёт читаться.
+    consumer = installDevbox();
+
+    const result = await run({ command: 'plan', cwd: consumer.root });
+
+    expect(result.config.existed).toBe(false);
     expect(result.problems).toEqual([]);
     expect(result.status).toBe('pending');
   });
@@ -461,6 +511,95 @@ describe('переход: служебная запись потеряна ил�
     expect(problem.at).toBe(MANIFEST_PATH);
     // И на диск не ушло ничего.
     expect(box.read(MANIFEST_PATH)).toBe('{ это не JSON\n');
+  });
+});
+
+describe('ПЕРВАЯ УСТАНОВКА В НЕПУСТОЙ РЕПОЗИТОРИЙ', () => {
+  /** Чужой `.devcontainer` от старого девбокса — как у weber. */
+  const THEIRS = '{\n  "name": "мой старый девбокс"\n}\n';
+
+  /** Живой репозиторий: свой файл лежит, baser здесь никогда не был. */
+  function occupied(): Consumer {
+    consumer = installDevbox({ existing: { [LIVE]: THEIRS } });
+    return consumer;
+  }
+
+  it('это НЕ потеря: человека не посылают искать то, чего не было', async () => {
+    const box = occupied();
+
+    const result = await run({ command: 'apply', cwd: box.root });
+
+    expect(result.status).toBe('blocked');
+    const named = result.problems.find(
+      (problem) => problem.code === 'first-install',
+    );
+
+    // Ровно тот дефект, который нашли на weber: тут раньше говорили
+    // «восстанови из истории» про запись, которой никогда не существовало.
+    expect(named).toBeDefined();
+    expect(named?.message).not.toContain('из истории');
+    expect(named?.message).not.toContain('пропала');
+    expect(
+      result.problems.some((problem) => problem.code === 'manifest-missing'),
+    ).toBe(false);
+
+    // Человек узнаёт главное: его файл цел и мы к нему не притронулись.
+    expect(named?.message).toContain('НЕ ТРОНУЛИ');
+    expect(named?.message).toContain('не поломка');
+    expect(box.read(LIVE)).toBe(THEIRS);
+  });
+
+  it('оба выхода названы, и цена согласия названа вместе с ним', async () => {
+    const result = await run({ command: 'plan', cwd: occupied().root });
+    const message =
+      result.problems.find((problem) => problem.code === 'first-install')
+        ?.message ?? '';
+
+    // Не «жми сюда, чтобы затереть своё»: оба пути стоят рядом, и у согласия
+    // прямо названа цена — файл станет нашим и правки в нём не переживут.
+    expect(message).toContain('решаешь ты');
+    expect(message).toContain('--confirm');
+    expect(message).toContain('правки руками в ней не переживут');
+    expect(message).toContain('сними обвес');
+  });
+
+  it('ОБЕЩАНИЕ 1: согласился — файл стал нашим, и это видно', async () => {
+    const box = occupied();
+
+    const fixed = await run({
+      command: 'apply',
+      cwd: box.root,
+      confirm: [LIVE],
+    });
+
+    expect(fixed.status).toBe('applied');
+    // Обещали замену целиком — она и произошла, а не мердж с чужим файлом.
+    expect(box.read(LIVE)).not.toContain('мой старый девбокс');
+    expect(box.read(LIVE)).toContain('baser-devbox');
+    // И обещали, что дальше файл ведёт обвес: запись это подтверждает.
+    expect(manifestOf(box)).toContainEqual(
+      expect.objectContaining({ dest: LIVE, source: 'omnifield/devbox' }),
+    );
+    expect((await run({ command: 'apply', cwd: box.root })).status).toBe(
+      'converged',
+    );
+  });
+
+  it('ОБЕЩАНИЕ 2: снял обвес — baser сюда больше не целится', async () => {
+    const box = occupied();
+    await run({ command: 'plan', cwd: box.root });
+
+    // Второй выход из сообщения. Он должен работать так же буквально, как
+    // первый, иначе выбор был бы предложен нечестно.
+    box.remove('node_modules/@omnifield/baser-devbox');
+
+    const result = await run({ command: 'apply', cwd: box.root });
+
+    expect(result.status).toBe('no-sources');
+    expect(result.problems).toEqual([]);
+    expect(box.read(LIVE)).toBe(THEIRS);
+    // И конфига после себя дверь не оставила: раскладывать было нечего.
+    expect(box.exists('baser.json')).toBe(false);
   });
 });
 
