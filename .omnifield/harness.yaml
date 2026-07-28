@@ -36,10 +36,10 @@ zones:
     description: дверь — раннер, который зовёт движок и пишет на диск
   check:
     paths: [packages/baser-check]
-    description: деталь подходит патрону — ответ данными, звено цепи
+    description: обвес подходит посадочному месту — ответ данными, звено цепи
   pack:
     paths: [packages/baser-pack]
-    description: проверенная деталь, нормализованная и с манифестом выдачи
+    description: проверенный обвес, нормализованный и с манифестом выдачи
   devbox:
     paths: [packages/baser-devbox]
     description: обвес девбокса — .devcontainer как шаблон с пресетом
