@@ -60,8 +60,9 @@ grabli:
   workspace: GRABLI2
 
 # Слот services (BRAIN2-9): базы omnifield-сервисов. Доступ — CURL (Bash), НЕ MCP.
-# Проверено 2026-07-26 изнутри девбокса: оба соседа отвечают на /healthz.
-# Дверь через хост (http://host.docker.internal:8080/api/...) — запасной вход.
+# Сервисы живут на домашней машине user, сюда приходят через VPN-тоннель — единая
+# дверь :8080 (FUND-5), соседи по docker-сети (tasker:8030 / knowledger:8040) НЕ видны.
+# Проверено 2026-07-28 изнутри девбокса: оба /healthz → 200 ok.
 services:
-  tasker: http://tasker:8030/tasker
-  knowledger: http://knowledger:8040/knowledger
+  tasker: http://10.8.1.1:8080/api/tasker
+  knowledger: http://10.8.1.1:8080/api/knowledger
