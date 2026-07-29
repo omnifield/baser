@@ -158,6 +158,55 @@ describe('объявление обвеса', () => {
       });
       expect(problems[0].message).toContain('пакет — доставка');
     });
+
+    it('ГРАММАТИКА ЛИЧНОСТИ НАЗВАНА В САМОМ ОТКАЗЕ', () => {
+      // Личность — первое, что пишет чужой автор, и отказ он получает на форме,
+      // которой дока не описывала (`tasker:BASER2-70` §3). Теперь правило целиком
+      // лежит там, где его читают, — в тексте отказа.
+      const problems = refusals({
+        source: {
+          id: 'omnifield/baser/devbox',
+          title: 'Девбокс',
+          contentRoot: 'template',
+        },
+      });
+      expect(codesOf(problems)).toEqual([
+        'invalid-source-id @ baser.source.id',
+      ]);
+      expect(problems[0].message).toContain('ровно два сегмента');
+      expect(problems[0].message).toContain('первый символ сегмента');
+    });
+
+    it('ровно два сегмента, и каждый начинается с буквы или цифры', () => {
+      for (const id of [
+        'omnifield/baser/devbox', // три сегмента
+        '-omnifield/devbox', // сегмент начинается с дефиса
+        'omnifield/.devbox', // и с точки тоже нельзя
+        'omnifield/dev box', // пробел не буква и не цифра
+        'omnifield//devbox', // пустой сегмент
+      ]) {
+        expect(
+          codesOf(
+            refusals({
+              source: { ...(declarationBlock().source as object), id },
+            }),
+          ),
+        ).toContain('invalid-source-id @ baser.source.id');
+      }
+    });
+
+    it('точка, дефис и подчёркивание внутри сегмента законны', () => {
+      for (const id of [
+        'omnifield/devbox-plus',
+        'omnifield.dev/devbox_2',
+        'a1/b2',
+      ]) {
+        const result = parse({
+          source: { id, title: 'Обвес', contentRoot: 'template' },
+        });
+        expect(result.ok).toBe(true);
+      }
+    });
   });
 
   describe('настройки', () => {
@@ -379,6 +428,39 @@ describe('объявление обвеса', () => {
       }
     });
 
+    it('ПУТЬ НОРМАЛИЗУЕТСЯ ВЕЗДЕ ОДИНАКОВО: src, dest и contentRoot', () => {
+      // Дока обещала, что форма берёт путь «как есть» (`tasker:BASER2-70` §3), —
+      // неправда: обратный слеш становится прямым, `./` вырезается, а результат
+      // и есть ключ владения. Правило одно на все три поля.
+      const result = parse({
+        source: {
+          id: 'omnifield/devbox',
+          title: 'Девбокс',
+          contentRoot: '.\\template\\',
+        },
+        layout: [{ src: 'tpl\\a.json', dest: './.devcontainer/./a.json' }],
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.source.contentRoot).toBe('template');
+      expect(result.value.layout[0]).toMatchObject({
+        src: 'tpl/a.json',
+        dest: '.devcontainer/a.json',
+      });
+    });
+
+    it('contentRoot за пределы пакета не выпускается — правило то же', () => {
+      for (const contentRoot of ['/шаблоны', '../соседний', '.']) {
+        expect(
+          codesOf(
+            refusals({
+              source: { id: 'omnifield/devbox', title: 'Девбокс', contentRoot },
+            }),
+          ),
+        ).toContain('invalid-path @ baser.source.contentRoot');
+      }
+    });
+
     it('ловит столкновение внутри одного обвеса и не разрешает его порядком', () => {
       const problems = refusals({
         layout: [
@@ -431,6 +513,15 @@ describe('объявление обвеса', () => {
       expect(codesOf(refusals({ layouts: [] }))).toEqual([
         'unknown-field @ baser.layouts',
       ]);
+    });
+
+    it('$schema здесь НЕ поле формы, и асимметрия названа', () => {
+      // В `baser.json` он пропускается: это самостоятельный JSON, редактору надо
+      // чем-то подтянуть подсказки. Здесь схема у файла своя и живёт на верхнем
+      // уровне package.json, а в файле настроек $schema лежит вне ключа `baser`.
+      expect(
+        codesOf(refusals({ $schema: 'https://omnifield.dev/baser.json' })),
+      ).toEqual(['unknown-field @ baser.$schema']);
     });
   });
 });

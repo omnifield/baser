@@ -10,7 +10,12 @@ import {
   type SourceDeclaration,
 } from './declaration.js';
 import { codesOf, declarationBlock } from './form.fixture.js';
-import { resolveSettings, type ComputeDefault } from './settings.js';
+import {
+  resolveSettings,
+  type ComputeDefault,
+  type ResolverContext,
+  type SettingResolver,
+} from './settings.js';
 
 const BLOCK = declarationBlock({
   settings: {
@@ -204,6 +209,38 @@ describe('разрешение значений', () => {
       expect(codesOf(result.problems)).toEqual([
         'value-type-mismatch @ omnifield/devbox.settings.name.defaultFrom',
       ]);
+    });
+
+    describe('версия обвеса в контексте резолвера', () => {
+      /** Контекст собирает дверь; форма только объявляет, что в нём бывает. */
+      function context(version: string | null): ResolverContext {
+        return {
+          repo: { name: 'baser', root: '/репо' },
+          source: {
+            id: 'omnifield/devbox',
+            packageName: '@omnifield/baser-devbox',
+            version,
+          },
+        };
+      }
+
+      it('ОБВЕС БЕЗ ВЕРСИИ В МАНИФЕСТЕ: отсутствие названо, а не изображено', () => {
+        // У одного факта одна форма во всех зонах — `string | null`, как в
+        // паспорте укладки и на входе движка (`tasker:BASER2-69`). Пока форма
+        // требовала здесь строку, дверь изображала отсутствие пустой строкой.
+        const резолвер: SettingResolver = (ctx) =>
+          ctx.source.version === null ? 'без версии' : ctx.source.version;
+
+        expect(резолвер(context(null))).toBe('без версии');
+        expect(резолвер(context('0.5.0'))).toBe('0.5.0');
+      });
+
+      it('версия доезжает до резолвера через порт двери', () => {
+        const result = resolve({}, () => context(null).source.version ?? 'нет');
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.values['name']).toBe('нет');
+      });
     });
   });
 });
