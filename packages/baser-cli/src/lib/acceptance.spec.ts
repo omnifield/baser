@@ -31,6 +31,7 @@ import {
   installDevbox,
   liveArtifact,
   manifestOf,
+  soleRun,
   DEVBOX_PACKAGE,
   type Consumer,
 } from './devbox.fixture.js';
@@ -144,7 +145,7 @@ describe('переход: тот же прогон второй раз', () => {
 
     // Операционное определение сходимости: второй прогон не порождает шагов.
     expect(again.status).toBe('converged');
-    expect(again.plan?.steps).toEqual([]);
+    expect(soleRun(again).plan?.steps).toEqual([]);
     expect(again.writes).toEqual([]);
     expect(box.read(LIVE)).toBe(after);
   });
@@ -166,7 +167,9 @@ describe('переход: пресет убран из конфига', () => {
     );
 
     const plan = await run({ command: 'plan', cwd: box.root });
-    const network = plan.settings.find((setting) => setting.key === 'network');
+    const network = soleRun(plan).settings.find(
+      (setting) => setting.key === 'network',
+    );
     // Цепочка укоротилась до одного звена: движения больше нет.
     expect(network?.chain).toEqual([{ kind: 'default', value: null }]);
     expect(network?.moved).toBe(false);
@@ -194,12 +197,12 @@ export function latestStableNode() { return '24'; }
 
     // Сначала ПЛАН: движение обязано быть названо до того, как что-то поедет.
     const plan = await run({ command: 'plan', cwd: box.root });
-    const runtime = plan.settings.find(
+    const runtime = soleRun(plan).settings.find(
       (setting) => setting.key === 'runtimeVersion',
     );
     expect(runtime?.value).toBe('24');
     expect(runtime?.ours).toBe(true);
-    expect(plan.plan?.steps[0].reason).toBe('diverged');
+    expect(soleRun(plan).plan?.steps[0].reason).toBe('diverged');
     // Названо — и не применено: команда `plan` дерева не трогает.
     expect(box.read(LIVE)).toContain('typescript-node:22');
 
@@ -240,7 +243,7 @@ describe('переход: артефакт правили руками', () => {
     box.write(LIVE, `${landed}\n// правка руками\n`);
 
     const plan = await run({ command: 'plan', cwd: box.root });
-    const [step] = plan.plan?.steps ?? [];
+    const [step] = soleRun(plan).plan?.steps ?? [];
 
     expect(step.reason).toBe('diverged');
     // Потери названы ДО применения: прежнее содержимое едет в плане данными.
@@ -264,7 +267,7 @@ describe('переход: запись ушла из раскладки', () => 
 
     const result = await run({ command: 'apply', cwd: box.root });
 
-    expect(result.plan?.steps[0].reason).toBe('orphan');
+    expect(soleRun(result).plan?.steps[0].reason).toBe('orphan');
     expect(result.writes).toContainEqual({ path: LIVE, kind: 'DELETE' });
     // Сброс на ФС обязан уносить удаления так же, как записи.
     expect(box.exists(LIVE)).toBe(false);
@@ -306,7 +309,7 @@ describe('переход: запись разошлась с объявлени�
     // Совпадение содержимого — НЕ повод промолчать: план, скрывший работу,
     // которую всё равно сделает, рапортует сходимость там, где её нет (Д10).
     expect(
-      plan.plan?.steps.map((step) => `${step.kind}/${step.reason}`),
+      soleRun(plan).plan?.steps.map((step) => `${step.kind}/${step.reason}`),
     ).toEqual(['record/reclaimed']);
     expect(plan.status).toBe('pending');
 
@@ -333,7 +336,7 @@ describe('переход: на месте артефакта лежит чужо
     const result = await run({ command: 'apply', cwd: box.root });
 
     expect(result.status).toBe('blocked');
-    expect(result.plan?.conflicts[0].kind).toBe('foreign-dest');
+    expect(soleRun(result).plan?.conflicts[0].kind).toBe('foreign-dest');
     expect(box.read(LIVE)).toContain('не наш');
     // Применение целиком либо никак: соседний артефакт тоже не лёг.
     expect(box.exists(LOCK)).toBe(false);
@@ -353,7 +356,9 @@ describe('переход: на месте артефакта лежит чужо
 
     // Согласие на один не стало согласием на соседний — план всё ещё блокирован.
     expect(result.status).toBe('blocked');
-    expect(result.plan?.conflicts.map((item) => item.dest)).toEqual([LOCK]);
+    expect(soleRun(result).plan?.conflicts.map((item) => item.dest)).toEqual([
+      LOCK,
+    ]);
     expect(box.read(LIVE)).toContain('не наш');
 
     // Подтверждаем оба — и оба берутся во владение как усыновлённые.
@@ -363,9 +368,9 @@ describe('переход: на месте артефакта лежит чужо
       confirm: [LIVE, LOCK],
     });
     expect(both.status).toBe('applied');
-    expect(both.plan?.steps.every((step) => step.reason === 'adopted')).toBe(
-      true,
-    );
+    expect(
+      soleRun(both).plan?.steps.every((step) => step.reason === 'adopted'),
+    ).toBe(true);
     // Усыновление доказано записью сбоку — заглядывать внутрь файла незачем.
     expect(
       manifestOf(box)
@@ -389,7 +394,7 @@ describe('переход: служебная запись потеряна ил�
     // Движок прав: без записи артефакты чужие, перезаписывать их молча нельзя.
     expect(result.status).toBe('blocked');
     expect(
-      result.plan?.conflicts.every(
+      soleRun(result).plan?.conflicts.every(
         (conflict) => conflict.kind === 'foreign-dest',
       ),
     ).toBe(true);
@@ -423,7 +428,7 @@ describe('переход: служебная запись потеряна ил�
 
     const blocked = await run({ command: 'apply', cwd: box.root });
     const dests =
-      blocked.plan?.conflicts.map((conflict) => conflict.dest) ?? [];
+      soleRun(blocked).plan?.conflicts.map((conflict) => conflict.dest) ?? [];
 
     const fixed = await run({
       command: 'apply',

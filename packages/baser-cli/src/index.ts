@@ -31,6 +31,7 @@ export type {
   DoorStatus,
   RepoReport,
   SourceReport,
+  SourceRun,
   WriteReport,
 } from './lib/result.js';
 

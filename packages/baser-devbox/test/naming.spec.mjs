@@ -26,6 +26,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { renderText, run } from '../../baser-cli/src/index.ts';
+// Обвес здесь один — прогон под него берётся хелпером зоны `cli`, а не
+// `runs[0]`: он бросает, если обвес не один (`tasker:BASER2-55`).
+import { soleRun } from '../../baser-cli/src/lib/devbox.fixture.ts';
 import {
   consumerConfig,
   DEVBOX_PACKAGE,
@@ -67,8 +70,9 @@ function alias(json) {
  * не подсовывать пресет только ради того, чтобы алиас было где прочитать.
  */
 function aliasSetting(result) {
-  return result.settings.find((setting) => setting.key === 'networkAlias')
-    .value;
+  return soleRun(result).settings.find(
+    (setting) => setting.key === 'networkAlias',
+  ).value;
 }
 
 describe('имя растёт из идентичности репозитория, а не из точки монтирования', () => {
@@ -361,11 +365,12 @@ describe('ПЕРЕИМЕНОВАНИЕ при обновлении обвеса 
     const plan = await run({ command: 'plan', cwd: consumer.root });
     const text = renderText(plan);
 
-    const name = plan.settings.find((setting) => setting.key === 'name');
+    const devbox = soleRun(plan);
+    const name = devbox.settings.find((setting) => setting.key === 'name');
     expect(name.value).toBe('weber-devbox');
     // Значение НАШЕ — пользователь его не заполнял, поэтому оно и поехало.
     expect(name.ours).toBe(true);
-    expect(plan.plan.steps[0].reason).toBe('diverged');
+    expect(devbox.plan.steps[0].reason).toBe('diverged');
     expect(text).toContain('weber-devbox');
 
     // ── НАХОДКА, а не проверка ─────────────────────────────────────────────
