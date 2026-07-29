@@ -70,6 +70,7 @@ import {
   LOCK,
   packedManifest,
   parseJsonc,
+  tuning,
 } from './packed.mjs';
 
 let consumer = null;
@@ -86,19 +87,23 @@ afterEach(() => {
  * и другое имя дало бы расхождение с эталоном не по существу, а по вводу.
  */
 function clean(options = {}) {
-  consumer = installConsumer({ repoName: 'baser', ...options });
+  consumer = installConsumer({
+    repoName: 'baser',
+    config: consumerConfig(),
+    ...options,
+  });
   return consumer;
 }
 
-/** Конфиг, воспроизводящий живой репозиторий: пресет omnifield + его Node. */
-const AS_LIVE = consumerConfig({
+/** Настройки, воспроизводящие живой репозиторий: пресет omnifield + его Node. */
+const AS_LIVE = tuning({
   presets: ['omnifield'],
   settings: { runtimeVersion: '22' },
 });
 
 describe('ПРИЁМКА: поставил пакет → позвал дверь → .devcontainer лёг', () => {
   it('на настройках живого репозитория артефакт СОВПАДАЕТ с ним', async () => {
-    const box = clean({ config: AS_LIVE });
+    const box = clean({ tuning: AS_LIVE });
 
     const result = await run({ command: 'apply', cwd: box.root });
 
@@ -120,7 +125,7 @@ describe('ПРИЁМКА: поставил пакет → позвал двер�
     // Утверждение, которое держит «до настроек» честным: расхождения живут в
     // комментариях, а не в том, что читает Docker. Комментарий разъезжается
     // потому, что описывает настройку; строка данных разъехаться не имеет права.
-    const box = clean({ config: AS_LIVE });
+    const box = clean({ tuning: AS_LIVE });
     await run({ command: 'apply', cwd: box.root });
 
     const diff = differingLines(box.read(LIVE), liveArtifact(LIVE));
@@ -130,7 +135,7 @@ describe('ПРИЁМКА: поставил пакет → позвал двер�
   });
 
   it('render: false лёг БАЙТ В БАЙТ — и с живым локом, и с шаблоном', async () => {
-    const box = clean({ config: AS_LIVE });
+    const box = clean({ tuning: AS_LIVE });
     await run({ command: 'apply', cwd: box.root });
 
     // Пин toolchain по digest: два конца одной проверки — эталон в репозитории
@@ -145,7 +150,7 @@ describe('ПРИЁМКА: поставил пакет → позвал двер�
   });
 
   it('владение доказано записью сбоку, второй прогон сходится', async () => {
-    const box = clean({ config: AS_LIVE });
+    const box = clean({ tuning: AS_LIVE });
     await run({ command: 'apply', cwd: box.root });
     const landed = box.read(LIVE);
 
@@ -158,7 +163,7 @@ describe('ПРИЁМКА: поставил пакет → позвал двер�
   });
 
   it('дверь опознала ИМЕННО поставленный пакет, а не копию в монорепе', async () => {
-    const box = clean({ config: AS_LIVE });
+    const box = clean({ tuning: AS_LIVE });
 
     const result = await run({ command: 'plan', cwd: box.root });
 
@@ -179,7 +184,7 @@ describe('ПРИЁМКА: поставил пакет → позвал двер�
 
 describe('РАСХОЖДЕНИЕ, названное до user: дефолт выпуска ушёл вперёд живого репо', () => {
   it('без заполнения версия 24, живой репозиторий на 22 — и это ЕДИНСТВЕННОЕ различие сверх заголовка', async () => {
-    const box = clean({ config: consumerConfig({ presets: ['omnifield'] }) });
+    const box = clean({ tuning: tuning({ presets: ['omnifield'] }) });
 
     const result = await run({ command: 'apply', cwd: box.root });
 
@@ -211,7 +216,7 @@ describe('РАСХОЖДЕНИЕ, названное до user: дефолт в�
   });
 
   it('заполненное значение убирает расхождение — «до настроек» проверяемо', async () => {
-    const box = clean({ config: AS_LIVE });
+    const box = clean({ tuning: AS_LIVE });
     await run({ command: 'apply', cwd: box.root });
 
     const diff = differingLines(box.read(LIVE), liveArtifact(LIVE));
@@ -227,7 +232,7 @@ describe('РАСХОЖДЕНИЕ, названное до user: дефолт в�
  * форматтер оставлял потребителю единственный ход — форк обвеса целиком из-за одной
  * строки. Обвес, который умеет ровно свой первый репозиторий, ничего не обещает.
  */
-const AS_WEBER = consumerConfig({
+const AS_WEBER = tuning({
   presets: ['omnifield'],
   settings: {
     editorExtensions: ['biomejs.biome', 'nrwl.angular-console'],
@@ -239,7 +244,11 @@ const AS_WEBER = consumerConfig({
 
 describe('ВТОРОЙ ПОТРЕБИТЕЛЬ: тот же обвес под стек weber', () => {
   it('раскладывается целиком, и в артефакте НЕТ следов нашего стека', async () => {
-    consumer = installConsumer({ repoName: 'weber', config: AS_WEBER });
+    consumer = installConsumer({
+      repoName: 'weber',
+      config: consumerConfig(),
+      tuning: AS_WEBER,
+    });
 
     const result = await run({ command: 'apply', cwd: consumer.root });
 
@@ -260,7 +269,11 @@ describe('ВТОРОЙ ПОТРЕБИТЕЛЬ: тот же обвес под с�
   });
 
   it('приватный реестр проверяется, установка идёт БЕЗ --frozen-lockfile', async () => {
-    consumer = installConsumer({ repoName: 'weber', config: AS_WEBER });
+    consumer = installConsumer({
+      repoName: 'weber',
+      config: consumerConfig(),
+      tuning: AS_WEBER,
+    });
     await run({ command: 'apply', cwd: consumer.root });
 
     const post = parseJsonc(consumer.read(LIVE)).postCreateCommand;
@@ -275,7 +288,11 @@ describe('ВТОРОЙ ПОТРЕБИТЕЛЬ: тот же обвес под с�
   it('универсальный слой и пресет у weber те же, что у нас', async () => {
     // Второй стек не должен утаскивать за собой инварианты: то, что универсально,
     // обязано выглядеть одинаково у обоих потребителей.
-    consumer = installConsumer({ repoName: 'weber', config: AS_WEBER });
+    consumer = installConsumer({
+      repoName: 'weber',
+      config: consumerConfig(),
+      tuning: AS_WEBER,
+    });
     await run({ command: 'apply', cwd: consumer.root });
     const weber = parseJsonc(consumer.read(LIVE));
 
@@ -294,7 +311,11 @@ describe('ВТОРОЙ ПОТРЕБИТЕЛЬ: тот же обвес под с�
   });
 
   it('второй прогон сходится — обвес держит и чужой стек тоже', async () => {
-    consumer = installConsumer({ repoName: 'weber', config: AS_WEBER });
+    consumer = installConsumer({
+      repoName: 'weber',
+      config: consumerConfig(),
+      tuning: AS_WEBER,
+    });
     await run({ command: 'apply', cwd: consumer.root });
 
     const again = await run({ command: 'apply', cwd: consumer.root });
@@ -306,7 +327,7 @@ describe('ВТОРОЙ ПОТРЕБИТЕЛЬ: тот же обвес под с�
 
 describe('переход: обвес обновился под потребителем', () => {
   it('дефолт поднялся — движение НАЗВАНО планом до применения', async () => {
-    const box = clean({ config: consumerConfig({ presets: ['omnifield'] }) });
+    const box = clean({ tuning: tuning({ presets: ['omnifield'] }) });
     await run({ command: 'apply', cwd: box.root });
     expect(box.read(LIVE)).toContain('typescript-node:24');
 
@@ -329,7 +350,7 @@ describe('переход: обвес обновился под потребит�
   });
 
   it('заполненное пользователем переживает обновление обвеса', async () => {
-    const box = clean({ config: AS_LIVE });
+    const box = clean({ tuning: AS_LIVE });
     await run({ command: 'apply', cwd: box.root });
 
     bumpPin(box, '26');

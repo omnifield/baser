@@ -19,6 +19,11 @@
  * пакетов. Все проверки этой зоны идут ПО НЕМУ, а не по исходному каталогу.
  */
 
+import {
+  FORM_VERSION,
+  SOURCE_CONFIG_KEY,
+  sourceConfigPath,
+} from '../../baser-contracts/src/index.ts';
 import { execFileSync } from 'node:child_process';
 import {
   cpSync,
@@ -117,6 +122,13 @@ export function packedFiles() {
  *   Python, что угодно);
  * - `gitOrigin` — адрес `origin`, то есть идентичность самого репозитория
  *   (`null` — репозиторий без remote или вовсе распакованный из архива).
+ *
+ * Настройки лежат ОТДЕЛЬНО от перечня поставленного (`tasker:BASER2-10` §3), и
+ * задаются они здесь тоже двумя разными ключами:
+ *
+ * - `config` — `baser.json`, что поставлено (не задан — файла нет, дверь родит);
+ * - `tuning` — ключ `baser` файла настроек обвеса, как настроено (не задан —
+ *   файла нет; это не пробел, а «ничего не выбрано»: работают дефолты).
  */
 export function installConsumer(options = {}) {
   const box = mkdtempSync(join(tmpdir(), 'baser-devbox-'));
@@ -167,6 +179,14 @@ export function installConsumer(options = {}) {
     cleanup() {
       rmSync(box, { force: true, recursive: true });
     },
+    /** Перезаписывает файл настроек — то же, что сделал бы человек руками. */
+    tune(block) {
+      consumer.write(tuningPath(), tuningText(block));
+    },
+    /** Файл настроек как текст: ровно то, что увидит человек. */
+    readTuning() {
+      return consumer.read(tuningPath());
+    },
   };
 
   if (options.config !== undefined) {
@@ -174,6 +194,9 @@ export function installConsumer(options = {}) {
       'baser.json',
       `${JSON.stringify(options.config, null, 2)}\n`,
     );
+  }
+  if (options.tuning !== undefined) {
+    consumer.tune(options.tuning);
   }
   for (const [path, content] of Object.entries(options.existing ?? {})) {
     consumer.write(path, content);
@@ -209,18 +232,82 @@ export function writeGit(root, url, layout = 'dir') {
   writeFileSync(join(root, '.git'), `gitdir: ${worktree}\n`);
 }
 
-/** Конфиг потребителя: обвес + перечисленные пресеты + заполненное. */
-export function consumerConfig({ presets = [], settings } = {}) {
+/**
+ * `baser.json` — ЧТО ПОСТАВЛЕНО, и больше ничего (форма 2, `tasker:BASER2-10` §3).
+ *
+ * Значения и выбор пресетов уехали отсюда в файл на инструмент: `baser.json`
+ * отвечает на вопрос «что стоит», файл настроек — «как настроено». Ссылки на
+ * второй в первом нет намеренно, поэтому и здесь её нет: путь считается из
+ * личности обвеса правилом, а не записью, которая могла бы разъехаться.
+ */
+export function consumerConfig() {
   return {
-    formVersion: 1,
-    sources: [
-      {
-        use: DEVBOX_PACKAGE,
-        ...(presets.length > 0 ? { presets } : {}),
-        ...(settings !== undefined ? { settings } : {}),
-      },
-    ],
+    formVersion: FORM_VERSION,
+    sources: [{ use: DEVBOX_PACKAGE }],
   };
+}
+
+/** Содержимое ключа `baser` в файле настроек: выбор пресетов и заполненное. */
+export function tuning({ presets, settings } = {}) {
+  return {
+    ...(presets === undefined ? {} : { presets }),
+    ...(settings === undefined ? {} : { settings }),
+  };
+}
+
+/**
+ * Путь файла настроек девбокса у потребителя.
+ *
+ * Считается ИЗ ЛИЧНОСТИ ОБВЕСА тем же правилом, что у двери, и берёт её из
+ * опубликованного объявления — не из константы теста. Задай проба путь руками,
+ * она зеленела бы на файле, которого дверь не читает, ровно в тот день, когда
+ * личность обвеса сменится.
+ */
+export function tuningPath() {
+  return sourceConfigPath(packedManifest().baser.source.id);
+}
+
+/**
+ * Файл настроек как текст.
+ *
+ * ── ПОЧЕМУ ЗДЕСЬ СВОЙ ВЫВОД, А НЕ РАЗБОРЩИК YAML ────────────────────────────
+ *
+ * У пакета обвеса нет зависимостей вовсе — он контент, а не код, — и заводить
+ * их ради фикстуры значило бы платить за пробу свойством самого пакета.
+ * Разъехаться с разборщиком двери этот вывод не может по построению: **JSON —
+ * подмножество YAML**, поэтому каждый скаляр печатается `JSON.stringify` и
+ * читается однозначно. Кавычки здесь не украшение: `"22"` без них стало бы
+ * числом, а `@omnifield` — синтаксической ошибкой.
+ *
+ * И отдельно: соврать молча этот вывод тоже не может. Значения из файла
+ * приезжают в артефакт через дверь, и каждая проба зоны читает именно артефакт,
+ * а не то, что фикстура думала записать.
+ */
+export function tuningText(block) {
+  return `${[`${SOURCE_CONFIG_KEY}:`, ...entries(block, '  ')].join('\n')}\n`;
+}
+
+function entries(value, indent) {
+  return Object.entries(value).flatMap(([key, item]) =>
+    line(key, item, indent),
+  );
+}
+
+function line(key, value, indent) {
+  if (Array.isArray(value)) {
+    return value.length === 0
+      ? [`${indent}${key}: []`]
+      : [
+          `${indent}${key}:`,
+          ...value.map((item) => `${indent}  - ${JSON.stringify(item)}`),
+        ];
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.keys(value).length === 0
+      ? [`${indent}${key}: {}`]
+      : [`${indent}${key}:`, ...entries(value, `${indent}  `)];
+  }
+  return [`${indent}${key}: ${JSON.stringify(value)}`];
 }
 
 /** Живой артефакт ЭТОГО репозитория — эталон приёмки. */
