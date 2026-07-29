@@ -73,6 +73,37 @@ describe('объявление пригодно по форме', () => {
     expect(decl.layout[1].render).toBe(false);
   });
 
+  it('ОБА артефакта перегенерируются целиком — placed-once обвесу не нужен', () => {
+    // Класс называется по делу, а не для галочки (`tasker:BASER2-60`). У девбокса
+    // обе записи — наши от первой строки до последней: `devcontainer.json`
+    // собирается из значений целиком, а `devcontainer-lock.json` это пин
+    // toolchain по digest. Человеку заполнять нечего ни в том, ни в другом:
+    // заполняет он файл настроек, а его в раскладке нет и быть не может.
+    //
+    // ЛОВУШКА, которую эта проба закрывает: `.devcontainer/devcontainer.json` —
+    // конфиг, путь которого диктует ЧУЖОЙ инструмент, и по форме такие конфиги
+    // кладутся классом `placed-once` (`tasker:BASER2-10` §3). Исключение это про
+    // конфиги, которые заполняет ЧЕЛОВЕК, а наш он не заполняет. Объяви мы здесь
+    // `placed-once` — девбокс замёрз бы на своей первой версии у каждого
+    // потребителя, и вся механика обновления обвеса перестала бы работать молча.
+    const classes = declaration().layout.map((entry) => [
+      entry.dest,
+      entry.class,
+    ]);
+
+    expect(classes).toEqual([
+      ['.devcontainer/devcontainer.json', 'regenerated'],
+      ['.devcontainer/devcontainer-lock.json', 'regenerated'],
+    ]);
+    // И ни одного `class` в самом объявлении: умолчание проставляет разбор, а
+    // повторять его руками значило бы держать одно правило в двух местах.
+    for (const entry of packedManifest().baser.layout) {
+      expect('class' in entry, `${entry.dest} называет класс руками`).toBe(
+        false,
+      );
+    }
+  });
+
   it('один артефакт — один поставщик: внутри обвеса dest не повторяется', () => {
     const owners = checkSingleProvider([
       { declaration: declaration(), packageName: DEVBOX_PACKAGE },

@@ -33,6 +33,7 @@ import {
   installConsumer,
   LIVE,
   parseJsonc,
+  tuning,
 } from './packed.mjs';
 
 const SCOPE = '@omnifield';
@@ -56,7 +57,8 @@ afterEach(() => {
 function checkStep(privateScope = SCOPE) {
   consumer = installConsumer({
     repoName: 'weber',
-    config: consumerConfig({ settings: { privateScope } }),
+    config: consumerConfig(),
+    tuning: tuning({ settings: { privateScope } }),
   });
   return run({ command: 'apply', cwd: consumer.root }).then(() => {
     const post = parseJsonc(consumer.read(LIVE)).postCreateCommand;
@@ -185,7 +187,8 @@ describe('стена без указателя: проверка ловит об
   it('С ТОМОМ КРЕДОВ адрес другой — и это тот, который реально смонтирован', async () => {
     consumer = installConsumer({
       repoName: 'weber',
-      config: consumerConfig({
+      config: consumerConfig(),
+      tuning: tuning({
         presets: ['omnifield'],
         settings: { privateScope: SCOPE, installAssistant: false },
       }),
@@ -297,6 +300,8 @@ describe('внешнему потребителю приватный реест�
     consumer = installConsumer({
       repoName: 'weber',
       config: consumerConfig(),
+      // Файла настроек нет вовсе — и это рабочее состояние, а не пробел:
+      // ничего не выбрано, работают дефолты обвеса.
     });
     await run({ command: 'apply', cwd: consumer.root });
 
@@ -316,7 +321,8 @@ describe('внешнему потребителю приватный реест�
     // которые ему не нужны. Пресет, ломающий своего же потребителя, — не пресет.
     consumer = installConsumer({
       repoName: 'baser',
-      config: consumerConfig({ presets: ['omnifield'] }),
+      config: consumerConfig(),
+      tuning: tuning({ presets: ['omnifield'] }),
     });
     const result = await run({ command: 'apply', cwd: consumer.root });
 
@@ -333,7 +339,8 @@ describe('проверка стоит ПЕРЕД установкой, а не �
   it('в полном профиле порядок: права на тома → креды → проверка → установка', async () => {
     consumer = installConsumer({
       repoName: 'weber',
-      config: consumerConfig({
+      config: consumerConfig(),
+      tuning: tuning({
         presets: ['omnifield'],
         settings: { privateScope: SCOPE },
       }),

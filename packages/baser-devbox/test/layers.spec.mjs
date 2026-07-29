@@ -32,6 +32,7 @@ import {
   installConsumer,
   LIVE,
   parseJsonc,
+  tuning,
 } from './packed.mjs';
 
 let consumer = null;
@@ -49,7 +50,8 @@ async function materialize({
 } = {}) {
   consumer = installConsumer({
     repoName,
-    config: consumerConfig({ presets, settings }),
+    config: consumerConfig(),
+    tuning: tuning({ presets, settings }),
   });
   const result = await run({ command: 'apply', cwd: consumer.root });
   if (result.status !== 'applied') {
@@ -369,13 +371,16 @@ describe('слой ПРЕСЕТ omnifield: ходовое положение р�
   it('пресет снимается — и артефакт ДОГОНЯЕТ, а не остаётся с хвостом', async () => {
     const box = installConsumer({
       repoName: 'baser',
-      config: consumerConfig({ presets: ['omnifield'] }),
+      config: consumerConfig(),
+      tuning: tuning({ presets: ['omnifield'] }),
     });
     consumer = box;
     await run({ command: 'apply', cwd: box.root });
     expect(box.read(LIVE)).toContain('omnifield-gateway');
 
-    box.write('baser.json', `${JSON.stringify(consumerConfig(), null, 2)}\n`);
+    // Пресет снимается ТАМ, ГДЕ ОН ВЫБРАН, — в файле настроек обвеса; в
+    // `baser.json` его больше нет вовсе (`tasker:BASER2-10` §3).
+    box.tune(tuning({ presets: [] }));
     await run({ command: 'apply', cwd: box.root });
 
     // Артефакт перегенерирован ЦЕЛИКОМ: следов пресета не осталось нигде.

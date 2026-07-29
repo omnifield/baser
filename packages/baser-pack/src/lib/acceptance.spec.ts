@@ -105,7 +105,7 @@ describe('приёмка на живом обвесе девбокса', () => {
     expect(manifest.source.id).toBe('omnifield/devbox');
     expect(manifest.source.title).toBe('Девбокс: проект целиком в контейнере');
     expect(manifest.source.package.name).toBe('@omnifield/baser-devbox');
-    expect(manifest.formVersion).toBe(1);
+    expect(manifest.formVersion).toBe(2);
     expect(manifest.artifacts).toEqual([
       {
         dest: '.devcontainer/devcontainer.json',

@@ -27,7 +27,8 @@
     "@omnifield/baser-materialize": "workspace:*",
     "@omnifield/baser-pack": "workspace:*",
     "ejs": "^5.0.1",
-    "tslib": "^2.3.0"
+    "tslib": "^2.3.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@nx/devkit": "23.1.0",

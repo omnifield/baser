@@ -31,6 +31,7 @@ import { run } from './run.js';
 import { renderText } from './report.js';
 import type { DoorResult, SourceRun } from './result.js';
 import { MANIFEST_PATH } from '@omnifield/baser-materialize';
+import { sourceConfigPath } from '@omnifield/baser-contracts';
 
 const DEVBOX_ID = 'omnifield/devbox';
 const AGENTS_ID = 'omnifield/agent-harness';
@@ -88,7 +89,7 @@ afterEach(() => {
 });
 
 function configOf(uses: readonly string[]): unknown {
-  return { formVersion: 1, sources: uses.map((use) => ({ use })) };
+  return { formVersion: 2, sources: uses.map((use) => ({ use })) };
 }
 
 /** Репозиторий с двумя поставленными инструментами и конфигом в этом порядке. */
@@ -194,7 +195,7 @@ describe('ЦЕЛЬ: два инструмента ставятся ОДНОЙ к
         sources: { use: string }[];
       },
     ).toEqual({
-      formVersion: 1,
+      formVersion: 2,
       sources: [{ use: DEVBOX_PACKAGE }, { use: AGENTS_PACKAGE }],
     });
     expect(consumer.exists(DEVCONTAINER)).toBe(true);
@@ -207,7 +208,20 @@ describe('ЦЕЛЬ: два инструмента ставятся ОДНОЙ к
     const result = await run({ command: 'apply', cwd: box.root });
 
     expect(result.writes.map((write) => write.path).sort()).toEqual(
-      [DEVCONTAINER, DEVLOCK, HARNESS, POLICY, MANIFEST_PATH].sort(),
+      [
+        DEVCONTAINER,
+        DEVLOCK,
+        HARNESS,
+        POLICY,
+        MANIFEST_PATH,
+        // Файлы настроек родились ОБА и уехали тем же сбросом. В паспорте
+        // укладки их при этом нет — они не записи раскладки.
+        sourceConfigPath(DEVBOX_ID),
+        sourceConfigPath(AGENTS_ID),
+      ].sort(),
+    );
+    expect(manifestOf(box).map((record) => record.dest)).not.toContain(
+      sourceConfigPath(DEVBOX_ID),
     );
     // Спан сброса ровно один: два прогона — не два похода на диск.
     expect(

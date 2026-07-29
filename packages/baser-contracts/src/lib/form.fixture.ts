@@ -1,5 +1,5 @@
 /**
- * Заготовки объявления и конфига — чтобы тест говорил про ОДНО отличие, а не
+ * Заготовки объявления и конфигов — чтобы тест говорил про ОДНО отличие, а не
  * перепечатывал форму целиком.
  */
 
@@ -26,7 +26,7 @@ export function declarationBlock(
   };
 }
 
-/** Минимальный пригодный `baser.json`. */
+/** Минимальный пригодный `baser.json` — перечень поставленного, и только. */
 export function consumerConfig(
   patch: Record<string, unknown> = {},
 ): Record<string, unknown> {
@@ -34,6 +34,19 @@ export function consumerConfig(
     sources: [{ use: '@omnifield/baser-devbox' }],
     ...patch,
   };
+}
+
+/**
+ * Файл настроек обвеса у потребителя — как его отдаёт дверь после разбора YAML.
+ *
+ * Ключ `baser` тут не один: у файла два читателя, и проба обязана видеть, что
+ * чужая половина форму не смущает.
+ */
+export function sourceConfigFile(
+  baser: Record<string, unknown> = {},
+  rest: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return { baser, ...rest };
 }
 
 /** Коды отказов в том виде, в каком их удобно сравнивать в тестах. */

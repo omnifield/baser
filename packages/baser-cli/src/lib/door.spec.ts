@@ -41,10 +41,13 @@ function install(options: InstallOptions = {}): Consumer {
   return consumer;
 }
 
-const CONFIG = {
-  formVersion: 1,
-  sources: [{ use: DEVBOX_PACKAGE, presets: ['omnifield'] }],
-};
+const DEVBOX_ID = 'omnifield/devbox';
+
+/** `baser.json` формы 2 — ТОЛЬКО перечень поставленного, ни одного значения. */
+const CONFIG = { formVersion: 2, sources: [{ use: DEVBOX_PACKAGE }] };
+
+/** Выбранное и заполненное — в файле на инструмент, а не в конфиге. */
+const TUNED = { [DEVBOX_ID]: { presets: ['omnifield'] } };
 
 /** Все файлы репозитория вне `node_modules` — снимок для сверки «до/после». */
 function snapshot(box: Consumer): string[] {
@@ -114,7 +117,7 @@ describe('конфиг потребителя рождается один раз
 
   it('СУЩЕСТВУЮЩИЙ конфиг авторитетен: снятый обвес засевом не возвращается', async () => {
     // Пакет поставлен и объявлен зависимостью, но из конфига убран руками.
-    const box = install({ config: { formVersion: 1, sources: [] } });
+    const box = install({ config: { formVersion: 2, sources: [] } });
 
     const result = await run({ command: 'apply', cwd: box.root });
 
@@ -139,10 +142,8 @@ describe('конфиг потребителя рождается один раз
 describe('отказ говорит чужим кодом, когда код есть', () => {
   it('опечатка в настройке — код КОНТРАКТОВ, а не выдумка двери', async () => {
     const box = install({
-      config: {
-        formVersion: 1,
-        sources: [{ use: DEVBOX_PACKAGE, settings: { runtimeVerison: '24' } }],
-      },
+      config: CONFIG,
+      tuning: { [DEVBOX_ID]: { settings: { runtimeVerison: '24' } } },
     });
 
     const result = await run({ command: 'plan', cwd: box.root });
@@ -154,7 +155,7 @@ describe('отказ говорит чужим кодом, когда код е�
   });
 
   it('шаблон на чужом языке — код ФОРМЫ, и он назван ДО подстановки', async () => {
-    const box = install({ config: CONFIG });
+    const box = install({ config: CONFIG, tuning: TUNED });
     // EJS отрендерил бы это сам в себя: артефакт лёг бы с неподставленным
     // "{{ name }}" и ничем бы себя не выдал.
     box.writeTemplate('devcontainer.json.ejs', '{ "name": "{{ name }}" }\n');
@@ -171,7 +172,7 @@ describe('отказ говорит чужим кодом, когда код е�
   });
 
   it('резолвер обвеса не нашёлся — код КОНТРАКТОВ, хотя звала его дверь', async () => {
-    const box = install({ config: CONFIG });
+    const box = install({ config: CONFIG, tuning: TUNED });
     // Модуль на месте, экспорта нет: обвес объявил дефолт, которого не отдаёт.
     box.updateResolvers(
       'export function repoName(ctx) { return ctx.repo.name; }\n',
@@ -190,7 +191,7 @@ describe('отказ говорит чужим кодом, когда код е�
 
   it('пакет назван в конфиге, но не поставлен', async () => {
     const box = install({
-      config: { formVersion: 1, sources: [{ use: '@чужой/обвес' }] },
+      config: { formVersion: 2, sources: [{ use: '@чужой/обвес' }] },
     });
 
     const outcome = await cli(['plan', '--cwd', box.root], process.cwd());
@@ -204,7 +205,7 @@ describe('отказ говорит чужим кодом, когда код е�
     // индекс записи, иначе с двумя одинаковыми кодами непонятно, какую чинить.
     const box = install({
       config: {
-        formVersion: 1,
+        formVersion: 2,
         sources: [{ use: DEVBOX_PACKAGE }, { use: '@omnifield/baser-second' }],
       },
     });
@@ -225,7 +226,7 @@ describe('отказ говорит чужим кодом, когда код е�
 
 describe('шов contentRoot: источник вне дерева', () => {
   it('раскладка hoisted-workspace названа своим кодом, а не подделана путём', async () => {
-    const box = install({ hoisted: true, config: CONFIG });
+    const box = install({ hoisted: true, config: CONFIG, tuning: TUNED });
 
     const result = await run({ command: 'plan', cwd: box.root });
 
@@ -237,7 +238,7 @@ describe('шов contentRoot: источник вне дерева', () => {
   });
 
   it('штатная установка даёт НАСТОЯЩИЙ путь — защита движка работает', async () => {
-    const box = install({ config: CONFIG });
+    const box = install({ config: CONFIG, tuning: TUNED });
 
     const result = await run({ command: 'plan', cwd: box.root });
 
@@ -250,7 +251,7 @@ describe('шов contentRoot: источник вне дерева', () => {
 
 describe('трейсы: свои фазы, чужие отдельно', () => {
   it('дверь мерит СЕБЯ, а движок — себя; списки не смешаны', async () => {
-    const box = install({ config: CONFIG });
+    const box = install({ config: CONFIG, tuning: TUNED });
 
     const result = await run({ command: 'apply', cwd: box.root });
     const door = result.trace.map((span) => span.name);
@@ -259,6 +260,7 @@ describe('трейсы: свои фазы, чужие отдельно', () => {
       'door.config',
       'door.declarations',
       'door.owners',
+      'door.settings',
       'door.resolvers',
       'door.values',
       'door.render',
@@ -274,7 +276,7 @@ describe('трейсы: свои фазы, чужие отдельно', () => {
   });
 
   it('в текст трейсы не идут: телеметрия, а не печать в поток', async () => {
-    const box = install({ config: CONFIG });
+    const box = install({ config: CONFIG, tuning: TUNED });
     const result = await run({ command: 'apply', cwd: box.root });
 
     expect(renderText(result)).not.toContain('door.render');
@@ -284,7 +286,7 @@ describe('трейсы: свои фазы, чужие отдельно', () => {
 describe('коды возврата — производная от состояния, а не отдельный признак', () => {
   it('конфликт владения даёт 1, отказ двери — 2, сделанное — 0', async () => {
     // Настоящий конфликт владения: на месте артефакта лежит чужой файл.
-    const blocked = install({ config: CONFIG });
+    const blocked = install({ config: CONFIG, tuning: TUNED });
     blocked.write(
       '.devcontainer/devcontainer.json',
       '// чужой файл, движок его не клал\n{}\n',
@@ -297,7 +299,7 @@ describe('коды возврата — производная от состоя
     blocked.cleanup();
 
     const refused = install({
-      config: { formVersion: 1, sources: [{ use: '@нет/такого' }] },
+      config: { formVersion: 2, sources: [{ use: '@нет/такого' }] },
     });
     expect(
       (await cli(['plan', '--cwd', refused.root], process.cwd())).exitCode,

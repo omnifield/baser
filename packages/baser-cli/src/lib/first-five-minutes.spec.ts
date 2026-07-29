@@ -299,6 +299,9 @@ describe('BASER2-35 · ручная доставка не оставляет т�
     expect(changed).toContain('.devcontainer/');
     expect(changed).toContain('baser.json');
     expect(changed).toContain('baser.lock.json');
+    // Файл настроек родился и тоже коммитится: без него у коллеги обвес
+    // разложится по дефолтам, а человек будет уверен, что настроил.
+    expect(changed).toContain('.omnifield/');
     expect(changed).not.toContain('package.json');
     expect(readFileSync(join(repo, 'package.json'), 'utf-8')).toBe(before);
   });

@@ -1,13 +1,31 @@
 /**
- * КОНФИГ ПОТРЕБИТЕЛЯ — `baser.json` в корне его репозитория.
+ * СТОРОНА ПОТРЕБИТЕЛЯ — два файла, и они про разное.
  *
- * Движок его не кладёт, не владеет им и ничего оттуда не чистит — только читает
- * (`kb:BASER2-5`). Он рождается сразу пользовательским, поэтому режим владения
- * ему не нужен.
+ * | | что в нём | кто пишет |
+ * |---|---|---|
+ * | `baser.json` | ЧТО ПОСТАВЛЕНО: перечень обвесов, ни одного значения | дверь и человек |
+ * | `.omnifield/<поставщик>-<обвес>.yaml` | КАК НАСТРОЕНО: пресеты и значения | человек |
+ *
+ * Разделение — решение user 2026-07-29 (`tasker:BASER2-10` §3). Настройки уехали
+ * из `baser.json` в файл на инструмент по двум причинам сразу: **конфиги
+ * человека лежат в одной папке** (`kb:BASER2-2` §4), а заполняет их человек — и
+ * ему нужны комментарии, то есть YAML, а не JSON. У каждой настройки в
+ * объявлении есть `title` и `description`, и им место в файле, который человек
+ * открывает, а не в доке, которую он не открывает.
+ *
+ * **Имя файла считается из личности обвеса, а не берётся из ссылки.** Ссылки на
+ * конфиг в `baser.json` нет намеренно: она была бы вторым местом для одного
+ * факта и могла бы разъехаться, а правило разъехаться не может.
+ *
+ * Движок оба файла не кладёт, не владеет ими и ничего оттуда не чистит
+ * (`kb:BASER2-5`). Уточнение формы 2: **файл настроек дверь создаёт один раз,
+ * если его нет** — с закомментированными дефолтами и описаниями. Значений она не
+ * пишет никогда, поэтому инвариант «заполненное не поднимается, потому что
+ * движку писать некуда» остаётся целым. Рождение файла — зона `cli`
+ * (`tasker:BASER2-53`); форма даёт имя, ключ и разбор.
  *
  * **Путей здесь нет и не появится.** Раскладку объявляет обвес, а не потребитель:
- * новая деталь в шаблоне обязана приезжать сама, без правки чужого файла. Всё,
- * что пишет пользователь, — какие обвесы поставлены и чем они у него настроены.
+ * новая деталь в шаблоне обязана приезжать сама, без правки чужого файла.
  *
  * Разбор здесь только структурный: знает ли обвес такую настройку и такой
  * пресет — вопрос к паре «объявление + конфиг», он решается в `settings.ts`.
@@ -19,22 +37,53 @@ import { describeValue, type SettingValue } from './values.js';
 import { isPlainObject } from './declaration.js';
 import { FORM_VERSION, MIN_FORM_VERSION } from './version.js';
 
-/** Где конфиг лежит по умолчанию. Читает его дверь, не движок. */
+/** Где перечень поставленного лежит по умолчанию. Читает его дверь, не движок. */
 export const CONSUMER_CONFIG_PATH = 'baser.json';
+
+/**
+ * Папка, в которой лежит всё, что заполняет человек (`kb:BASER2-2` §4).
+ *
+ * Исключение одно и оно названо: конфиг, путь которого диктует ЧУЖОЙ инструмент
+ * (`.devcontainer/devcontainer.json`, `.claude/settings.json`), сюда не уводится —
+ * там его никто не прочитает. Такой конфиг обвес кладёт обычной записью
+ * раскладки с классом `placed-once`.
+ */
+export const SOURCE_CONFIG_DIR = '.omnifield';
+
+/**
+ * Единственный ключ файла настроек, который читает дверь.
+ *
+ * Всё остальное в файле принадлежит инструменту: у плагина агентов там живут
+ * зоны, модели и адреса сервисов. Один файл, два читателя, конфликта нет — пишет
+ * в него человек, а не два поставщика.
+ *
+ * Ключ назван так же, как блок в манифесте обвеса, по той же причине: **блок
+ * называется по тому, кто его читает**.
+ */
+export const SOURCE_CONFIG_KEY = 'baser';
+
+/**
+ * Имя файла настроек обвеса у потребителя — считается из его личности.
+ *
+ * `omnifield/devbox` → `.omnifield/omnifield-devbox.yaml`. Слеш в имени файла не
+ * живёт, поэтому он становится дефисом; остальное — как в `id`, чтобы человек
+ * узнавал свой обвес по имени файла, а не по содержимому.
+ *
+ * @param sourceId `source.id` из объявления обвеса, уже разобранный
+ */
+export function sourceConfigPath(sourceId: string): string {
+  return `${SOURCE_CONFIG_DIR}/${sourceId.replace(/\//g, '-')}.yaml`;
+}
 
 export interface ConsumerSourceEntry {
   /** Чем привезли: имя пакета обвеса. Идентичность приходит из объявления. */
   readonly use: string;
-  /** Ходовые положения регулировок, выбранные пользователем. */
-  readonly presets: readonly string[];
-  /** Заполненные значения — они бьют и дефолт, и пресет. */
-  readonly settings: Readonly<Record<string, SettingValue>>;
 }
 
 export interface ConsumerConfig {
   /**
    * Версия формы, по которой конфиг написан. НЕОБЯЗАТЕЛЬНА в файле: пишет её
-   * дверь при создании конфига, отсутствие означает первую форму.
+   * дверь при создании конфига, отсутствие означает самую старую разбираемую.
    *
    * Конфиги пользователей — такой же прод, как выпущенные обвесы, и молчаливая
    * поломка там будет нашей виной, а не чужой. Разница только в том, кто файл
@@ -55,8 +104,28 @@ export interface ConsumerConfig {
   readonly sources: readonly ConsumerSourceEntry[];
 }
 
+/** Как человек настроил ОДИН обвес — содержимое ключа `baser` его файла. */
+export interface SourceConfig {
+  /** Выбранные ходовые положения регулировок, в порядке применения. */
+  readonly presets: readonly string[];
+  /** Заполненные значения — они бьют и дефолт, и пресет. */
+  readonly settings: Readonly<Record<string, SettingValue>>;
+}
+
+/** Конфиг обвеса, которого у потребителя нет: ничего не выбрано, ничего не заполнено. */
+export const EMPTY_SOURCE_CONFIG: SourceConfig = { presets: [], settings: {} };
+
 const CONFIG_FIELDS = new Set(['$schema', 'formVersion', 'sources']);
-const ENTRY_FIELDS = new Set(['use', 'presets', 'settings']);
+const ENTRY_FIELDS = new Set(['use']);
+const SOURCE_CONFIG_FIELDS = new Set(['presets', 'settings']);
+
+/**
+ * Поля формы 1, уехавшие в файл на инструмент.
+ *
+ * Человеку надо сказать не «поля нет», а КУДА оно уехало: иначе он ищет опечатку
+ * там, где её нет, — он написал ровно то, что работало вчера.
+ */
+const MOVED_FIELDS = new Set(['presets', 'settings']);
 
 /** Разбирает уже прочитанный `baser.json` (значение, а не текст). */
 export function parseConsumerConfig(
@@ -113,8 +182,8 @@ export function parseConsumerConfig(
       log.add(
         'duplicate-consumer-entry',
         `${at}.sources[${index}].use`,
-        `пакет "${entry.use}" уже перечислен записью [${first}] — неизвестно, ` +
-          'какая из настроек победит; оставь одну запись',
+        `пакет "${entry.use}" уже перечислен записью [${first}] — ` +
+          'два раза поставить один обвес нельзя; оставь одну запись',
       );
       return;
     }
@@ -128,10 +197,14 @@ export function parseConsumerConfig(
 /**
  * Версия формы конфига — необязательная.
  *
- * Отсутствие означает ПЕРВУЮ форму, а не отказ: конфиг пишет пользователь, и
- * требовать от него поле, которого он не понимает, значило бы завести вопрос там,
- * где вопросов не бывает. Проставляет его дверь при создании файла — миграционный
- * крючок появляется, а пользователь ничего не вводит.
+ * Отсутствие означает САМУЮ СТАРУЮ разбираемую форму, а не отказ: конфиг пишет
+ * пользователь, и требовать от него поле, которого он не понимает, значило бы
+ * завести вопрос там, где вопросов не бывает. Проставляет его дверь при создании
+ * файла — миграционный крючок появляется, а пользователь ничего не вводит.
+ *
+ * Форму 1 это молчание не пропускает: `baser.json` первой формы отличается от
+ * второй не версией, а содержимым — настройками и пресетами внутри записи, и они
+ * называются вслух отдельно (`parseEntry`).
  */
 function parseFormVersion(log: ProblemLog, value: unknown, at: string): number {
   const field = `${at}.formVersion`;
@@ -154,6 +227,15 @@ function parseFormVersion(log: ProblemLog, value: unknown, at: string): number {
       `конфиг написан по форме ${value}, этот baser понимает по ${FORM_VERSION} — обнови baser`,
     );
   }
+  if (value < MIN_FORM_VERSION) {
+    log.add(
+      'form-version-unsupported',
+      field,
+      `конфиг написан по форме ${value}, этот baser разбирает с ${MIN_FORM_VERSION}. ` +
+        `Настройки и пресеты переехали из ${CONSUMER_CONFIG_PATH} в файл на инструмент ` +
+        `(${sourceConfigPath('<поставщик>/<обвес>')}); здесь остаётся только перечень поставленного`,
+    );
+  }
   return value;
 }
 
@@ -163,19 +245,30 @@ function parseEntry(
   at: string,
 ): ConsumerSourceEntry | null {
   if (!isPlainObject(value)) {
-    log.add('not-an-object', at, 'ожидался объект {use, presets?, settings?}');
+    log.add('not-an-object', at, 'ожидался объект {use}');
     return null;
   }
 
   for (const key of Object.keys(value).sort(byBytes)) {
-    if (!ENTRY_FIELDS.has(key)) {
-      log.add(
-        'unknown-field',
-        `${at}.${key}`,
-        'запись такого поля не знает; путей в конфиге потребителя не бывает — ' +
-          'раскладку объявляет обвес',
-      );
+    if (ENTRY_FIELDS.has(key)) {
+      continue;
     }
+    if (MOVED_FIELDS.has(key)) {
+      log.add(
+        'consumer-settings-moved',
+        `${at}.${key}`,
+        `"${key}" больше не живёт в ${CONSUMER_CONFIG_PATH}: настройки обвеса переехали в ` +
+          `файл на инструмент — ${sourceConfigPath('<поставщик>/<обвес>')}, ключ "${SOURCE_CONFIG_KEY}". ` +
+          'Здесь — только что поставлено, там — как настроено',
+      );
+      continue;
+    }
+    log.add(
+      'unknown-field',
+      `${at}.${key}`,
+      'запись такого поля не знает; путей в конфиге потребителя не бывает — ' +
+        'раскладку объявляет обвес',
+    );
   }
 
   const use = value['use'];
@@ -192,10 +285,76 @@ function parseEntry(
     return null;
   }
 
-  const presets = parsePresetNames(log, value['presets'], `${at}.presets`);
-  const settings = parseFilledValues(log, value['settings'], `${at}.settings`);
+  return { use: use.trim() };
+}
 
-  return { use: use.trim(), presets, settings };
+/**
+ * Разбирает файл настроек ОДНОГО обвеса — уже разобранный YAML, а не текст.
+ *
+ * **YAML читает дверь.** Пакет контрактов ничего не читает и ничего не исполняет:
+ * ни файловой системы, ни сети, ни чужих модулей. Зависимость на разборщик
+ * ставит зона `cli` (`tasker:BASER2-53`), сюда приезжает значение.
+ *
+ * Файла нет или он пуст (только что рождён и весь закомментирован) — это не
+ * отказ, а «ничего не выбрано»: работают дефолты обвеса.
+ *
+ * @param value содержимое файла как значение; `undefined`/`null` = файла нет
+ * @param at адрес для сообщений — путь файла, `sourceConfigPath(id)`
+ */
+export function parseSourceConfig(
+  value: unknown,
+  at = sourceConfigPath('<поставщик>/<обвес>'),
+): FormResult<SourceConfig> {
+  const log = new ProblemLog();
+
+  if (value === undefined || value === null) {
+    return { ok: true, value: EMPTY_SOURCE_CONFIG };
+  }
+  if (!isPlainObject(value)) {
+    log.add(
+      'not-an-object',
+      at,
+      `ожидался YAML-документ с ключом "${SOURCE_CONFIG_KEY}", получено ${describeValue(value)}`,
+    );
+    return { ok: false, problems: log.list() };
+  }
+
+  // Всё, что вне `baser`, — дело самого инструмента: у плагина агентов там зоны и
+  // модели. Дверь их не открывает и об их полях молчит.
+  const block = value[SOURCE_CONFIG_KEY];
+  if (block === undefined || block === null) {
+    return { ok: true, value: EMPTY_SOURCE_CONFIG };
+  }
+  if (!isPlainObject(block)) {
+    log.add(
+      'not-an-object',
+      `${at}.${SOURCE_CONFIG_KEY}`,
+      `ожидался объект {presets, settings}, получено ${describeValue(block)}`,
+    );
+    return { ok: false, problems: log.list() };
+  }
+
+  const blockAt = `${at}.${SOURCE_CONFIG_KEY}`;
+  for (const key of Object.keys(block).sort(byBytes)) {
+    if (!SOURCE_CONFIG_FIELDS.has(key)) {
+      log.add(
+        'unknown-field',
+        `${blockAt}.${key}`,
+        `в ключе "${SOURCE_CONFIG_KEY}" бывают только "presets" и "settings" — ` +
+          'опечатка либо надежда на поведение, которого нет. ' +
+          `Всё, что принадлежит самому инструменту, кладётся вне "${SOURCE_CONFIG_KEY}"`,
+      );
+    }
+  }
+
+  const presets = parsePresetNames(log, block['presets'], `${blockAt}.presets`);
+  const settings = parseFilledValues(
+    log,
+    block['settings'],
+    `${blockAt}.settings`,
+  );
+
+  return log.result(() => ({ presets, settings }));
 }
 
 function parsePresetNames(
@@ -203,7 +362,7 @@ function parsePresetNames(
   value: unknown,
   at: string,
 ): readonly string[] {
-  if (value === undefined) {
+  if (value === undefined || value === null) {
     return [];
   }
   if (!Array.isArray(value)) {
@@ -247,7 +406,7 @@ function parseFilledValues(
 ): Record<string, SettingValue> {
   const filled: Record<string, SettingValue> = {};
 
-  if (value === undefined) {
+  if (value === undefined || value === null) {
     return filled;
   }
   if (!isPlainObject(value)) {

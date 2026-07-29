@@ -1,9 +1,10 @@
 /**
  * `@omnifield/baser-contracts` — хвостовик.
  *
- * Форма, которой обвес объявляет себя станку: идентичность источника, раскладка,
- * настройки с дефолтами, конфиг потребителя и правило «один артефакт — один
- * поставщик». Против неё программируют все зоны (`packages/baser-contracts/README.md`).
+ * Форма, которой обвес объявляет себя станку: идентичность источника, раскладка с
+ * классом артефакта, настройки с дефолтами, два файла на стороне потребителя и
+ * правило «один артефакт — один поставщик». Против неё программируют все зоны
+ * (`packages/baser-contracts/README.md`).
  *
  * **Пакет ничего не читает и ничего не исполняет.** Ни файловой системы, ни
  * сети, ни загрузки чужих модулей: JSON подаёт дверь, резолверы зовёт тоже она
@@ -49,8 +50,27 @@ export type {
   SourceHead,
 } from './lib/declaration.js';
 
-export { CONSUMER_CONFIG_PATH, parseConsumerConfig } from './lib/config.js';
-export type { ConsumerConfig, ConsumerSourceEntry } from './lib/config.js';
+export {
+  ARTIFACT_CLASSES,
+  DEFAULT_ARTIFACT_CLASS,
+  isArtifactClass,
+} from './lib/classes.js';
+export type { ArtifactClass } from './lib/classes.js';
+
+export {
+  CONSUMER_CONFIG_PATH,
+  EMPTY_SOURCE_CONFIG,
+  parseConsumerConfig,
+  parseSourceConfig,
+  SOURCE_CONFIG_DIR,
+  SOURCE_CONFIG_KEY,
+  sourceConfigPath,
+} from './lib/config.js';
+export type {
+  ConsumerConfig,
+  ConsumerSourceEntry,
+  SourceConfig,
+} from './lib/config.js';
 
 export { resolveSettings } from './lib/settings.js';
 export type {

@@ -12,7 +12,12 @@
  */
 
 import type { ResolverRef, SourceDeclaration } from './declaration.js';
-import type { ConsumerSourceEntry } from './config.js';
+import {
+  EMPTY_SOURCE_CONFIG,
+  SOURCE_CONFIG_KEY,
+  sourceConfigPath,
+  type SourceConfig,
+} from './config.js';
 import { byBytes } from './paths.js';
 import { ProblemLog, type FormResult } from './problems.js';
 import { describeValue, matchesType, type SettingValue } from './values.js';
@@ -89,22 +94,32 @@ export interface ResolveOptions {
 }
 
 /**
- * Сводит объявление обвеса и запись конфига потребителя в готовые значения.
+ * Сводит объявление обвеса и его файл настроек у потребителя в готовые значения.
  *
  * Проверяется здесь ПРИГОДНОСТЬ ПАРЫ: знает ли обвес настройку, которую
  * заполнил пользователь; есть ли у него пресет, который тот выбрал; того ли
  * типа пришло значение.
+ *
+ * Настройки приходят из файла на инструмент (`config.ts`), а не из `baser.json`:
+ * там теперь только перечень поставленного. Порядок разрешения от переезда не
+ * изменился — он в самом порядке шагов ниже.
+ *
+ * @param config содержимое ключа `baser` файла настроек; файла нет — дефолты
  */
 export function resolveSettings(
   declaration: SourceDeclaration,
-  entry: ConsumerSourceEntry,
+  config: SourceConfig = EMPTY_SOURCE_CONFIG,
   options: ResolveOptions = {},
 ): FormResult<ResolvedSettings> {
   const log = new ProblemLog();
   const values: Record<string, SettingValue> = {};
   const origins: Record<string, SettingOrigin> = {};
 
+  // Два адреса, потому что две стороны формы: дефолт живёт в объявлении обвеса,
+  // а выбор человека — в его файле настроек. Человеку надо открыть тот файл, в
+  // котором опечатка, а не тот, который назвали для краткости.
   const at = `${declaration.source.id}`;
+  const mine = `${sourceConfigPath(declaration.source.id)}.${SOURCE_CONFIG_KEY}`;
 
   // ── 1. Дефолты обвеса.
   for (const key of Object.keys(declaration.settings).sort(byBytes)) {
@@ -136,13 +151,13 @@ export function resolveSettings(
   }
 
   // ── 2. Пресеты, в порядке перечисления: следующий бьёт предыдущего.
-  entry.presets.forEach((name, index) => {
+  config.presets.forEach((name, index) => {
     const preset = declaration.presets[name];
     if (!preset) {
       const known = Object.keys(declaration.presets).sort(byBytes);
       log.add(
         'unknown-preset',
-        `${at}.presets[${index}]`,
+        `${mine}.presets[${index}]`,
         `обвес не объявлял пресета "${name}"` +
           (known.length
             ? `; есть: ${known.join(' · ')}`
@@ -157,23 +172,23 @@ export function resolveSettings(
   });
 
   // ── 3. Заполненное пользователем — бьёт всё.
-  for (const key of Object.keys(entry.settings).sort(byBytes)) {
+  for (const key of Object.keys(config.settings).sort(byBytes)) {
     const spec = declaration.settings[key];
     if (!spec) {
       const known = Object.keys(declaration.settings).sort(byBytes);
       log.add(
         'unknown-setting',
-        `${at}.settings.${key}`,
+        `${mine}.settings.${key}`,
         `обвес не объявлял настройки "${key}" — заполненное значение никуда не поедет` +
           (known.length ? `; есть: ${known.join(' · ')}` : ''),
       );
       continue;
     }
-    const raw = entry.settings[key];
+    const raw = config.settings[key];
     if (!matchesType(spec.type, raw)) {
       log.add(
         'value-type-mismatch',
-        `${at}.settings.${key}`,
+        `${mine}.settings.${key}`,
         `настройка объявлена как ${spec.type}, заполнено ${describeValue(raw)}`,
       );
       continue;

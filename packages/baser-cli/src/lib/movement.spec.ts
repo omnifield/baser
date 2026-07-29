@@ -22,6 +22,9 @@ import { run } from './run.js';
 import { renderText } from './report.js';
 import type { SettingMovement } from './values.js';
 
+const DEVBOX_ID = 'omnifield/devbox';
+const CONFIG = { formVersion: 2, sources: [{ use: DEVBOX_PACKAGE }] };
+
 let consumer: Consumer | null = null;
 
 afterEach(() => {
@@ -29,12 +32,16 @@ afterEach(() => {
   consumer = null;
 });
 
-function install(entry: Record<string, unknown> = {}): Consumer {
+/**
+ * Обвес поставлен, пресет выбран, поверх — что просит проба.
+ *
+ * Выбор и значения лежат в ФАЙЛЕ НА ИНСТРУМЕНТ, а не в `baser.json`
+ * (`tasker:BASER2-10` §3): там теперь только перечень поставленного.
+ */
+function install(block: Record<string, unknown> = {}): Consumer {
   consumer = installDevbox({
-    config: {
-      formVersion: 1,
-      sources: [{ use: DEVBOX_PACKAGE, presets: ['omnifield'], ...entry }],
-    },
+    config: CONFIG,
+    tuning: { [DEVBOX_ID]: { presets: ['omnifield'], ...block } },
   });
   return consumer;
 }

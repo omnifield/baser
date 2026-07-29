@@ -39,6 +39,7 @@ import {
   installConsumer,
   LIVE,
   parseJsonc,
+  tuning,
 } from './packed.mjs';
 
 let consumer = null;
@@ -53,7 +54,7 @@ afterEach(() => {
  * заводилась: не наш `typescript-node`, и пользователь в нём не `node`.
  */
 function foreignImage(settings = {}) {
-  return consumerConfig({
+  return tuning({
     presets: ['omnifield'],
     settings: {
       image: 'ghcr.io/omnifield/devbox',
@@ -64,8 +65,12 @@ function foreignImage(settings = {}) {
   });
 }
 
-async function materialize(config, repoName = 'weber') {
-  consumer = installConsumer({ repoName, config });
+async function materialize(block, repoName = 'weber') {
+  consumer = installConsumer({
+    repoName,
+    config: consumerConfig(),
+    tuning: block,
+  });
   const result = await run({ command: 'apply', cwd: consumer.root });
   expect(result.status, 'обвес не разложился').toBe('applied');
   const text = consumer.read(LIVE);
@@ -131,7 +136,11 @@ describe('образ с чужим пользователем раскладыв
   });
 
   it('второй прогон сходится — раскладка под чужим пользователем устойчива', async () => {
-    consumer = installConsumer({ repoName: 'weber', config: foreignImage() });
+    consumer = installConsumer({
+      repoName: 'weber',
+      config: consumerConfig(),
+      tuning: foreignImage(),
+    });
     await run({ command: 'apply', cwd: consumer.root });
 
     const again = await run({ command: 'apply', cwd: consumer.root });
@@ -170,7 +179,7 @@ describe('не заполнил — ничего не поехало', () => {
     // разъехался бы и живой `.devcontainer` этого репозитория, то есть эталон
     // приёмки зоны, а он лежит в чужой зоне и правится не отсюда.
     const { json, text, result } = await materialize(
-      consumerConfig({ presets: ['omnifield'] }),
+      tuning({ presets: ['omnifield'] }),
       'baser',
     );
 
@@ -191,7 +200,7 @@ describe('не заполнил — ничего не поехало', () => {
     // — свойство ВЫБРАННОГО ОБРАЗА. Уехал бы в пресет — включение раскладки
     // omnifield молча переопределяло бы образ, к которому она отношения не имеет.
     const { json } = await materialize(
-      consumerConfig({ settings: { image: 'ghcr.io/omnifield/devbox' } }),
+      tuning({ settings: { image: 'ghcr.io/omnifield/devbox' } }),
     );
 
     expect(json.remoteUser).toBe('node');
@@ -205,15 +214,15 @@ describe('ПЕРЕЕЗД ТОМОВ при смене пользователя �
     // контейнере окажется не там, где его ищут переменные.
     consumer = installConsumer({
       repoName: 'weber',
-      config: consumerConfig({ presets: ['omnifield'] }),
+      config: consumerConfig(),
+      tuning: tuning({ presets: ['omnifield'] }),
     });
     await run({ command: 'apply', cwd: consumer.root });
     expect(consumer.read(LIVE)).toContain('/home/node/.secrets');
 
-    consumer.write(
-      'baser.json',
-      `${JSON.stringify(foreignImage(), null, 2)}\n`,
-    );
+    // Значение меняется ТАМ, ГДЕ ЕГО ЗАПОЛНЯЕТ ЧЕЛОВЕК, — в файле настроек
+    // обвеса, а не в перечне поставленного (`tasker:BASER2-10` §3).
+    consumer.tune(foreignImage());
     const plan = await run({ command: 'plan', cwd: consumer.root });
     const text = renderText(plan);
 

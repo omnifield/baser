@@ -61,7 +61,38 @@ describe('один артефакт — один поставщик', () => {
       packageName: '@omnifield/baser-devbox',
       src: 'devcontainer.json',
       render: true,
+      class: 'regenerated',
     });
+  });
+
+  it('КЛАСС АРТЕФАКТА едет во владение — по нему строится план', () => {
+    const плагин: InstalledSource = {
+      packageName: '@omnifield/brainer-agent-harness',
+      declaration: declare({
+        source: {
+          id: 'omnifield/agent-harness',
+          title: 'Харнесс',
+          contentRoot: 'tpl',
+        },
+        layout: [
+          { src: 'policy.md.ejs', dest: '.claude/agents/shared-policy.md' },
+          {
+            src: 'harness.yaml.ejs',
+            dest: '.omnifield/harness.yaml',
+            class: 'placed-once',
+          },
+        ],
+      }),
+    };
+
+    const result = checkSingleProvider([devbox, плагин]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value['.omnifield/harness.yaml'].class).toBe('placed-once');
+    expect(result.value['.claude/agents/shared-policy.md'].class).toBe(
+      'regenerated',
+    );
   });
 
   it('СТОЛКНОВЕНИЕ ДВУХ ОБВЕСОВ НА ОДИН dest называется вслух', () => {
@@ -142,6 +173,44 @@ describe('один артефакт — один поставщик', () => {
       'duplicate-source-id @ @чужой/devbox-fork.source.id',
     ]);
     expect(result.problems[0].message).toContain('группируется владение');
+  });
+
+  it('НЕ ДАЁТ ДВУМ ОБВЕСАМ ОДИН ФАЙЛ НАСТРОЕК', () => {
+    // Имя файла считается из личности, слеш становится дефисом — и "a-b/c"
+    // сходится с "a/b-c". Личности разные, файл один: человеку негде настроить
+    // их порознь, и каждый назвал бы чужие ключи незнакомыми.
+    const первый: InstalledSource = {
+      packageName: '@omnifield/baser-devbox-plus',
+      declaration: declare({
+        source: {
+          id: 'omnifield/devbox-plus',
+          title: 'Надстройка',
+          contentRoot: 'tpl',
+        },
+        layout: [{ src: 'a.json', dest: 'a.json' }],
+      }),
+    };
+    const второй: InstalledSource = {
+      packageName: '@чужой/plus',
+      declaration: declare({
+        source: {
+          id: 'omnifield-devbox/plus',
+          title: 'Однофамилец',
+          contentRoot: 'tpl',
+        },
+        layout: [{ src: 'b.json', dest: 'b.json' }],
+      }),
+    };
+
+    const result = checkSingleProvider([первый, второй]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(codesOf(result.problems)).toEqual([
+      'source-config-shared @ @чужой/plus.source.id',
+    ]);
+    expect(result.problems[0].message).toContain(
+      '.omnifield/omnifield-devbox-plus.yaml',
+    );
   });
 
   it('пустой набор — пустая карта, а не отказ', () => {

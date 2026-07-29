@@ -10,6 +10,12 @@
  * Разбор ничего не читает с диска: JSON подаёт дверь. Здесь только форма.
  */
 
+import {
+  DEFAULT_ARTIFACT_CLASS,
+  isArtifactClass,
+  ARTIFACT_CLASSES,
+  type ArtifactClass,
+} from './classes.js';
 import { byBytes, checkPath, PATH_PROBLEM, type CheckedPath } from './paths.js';
 import { ProblemLog, type FormResult } from './problems.js';
 import {
@@ -65,9 +71,21 @@ export interface LayoutEntry {
    * умолчание живёт здесь, а не в каждом читателе формы.
    */
   readonly render: boolean;
+  /**
+   * Чем станок держит этот артефакт (`classes.ts`). Приведён к явному значению
+   * при разборе — как и `render`.
+   */
+  readonly class: ArtifactClass;
 }
 
-/** Идентичность обвеса — то, за что цепляются владение, столкновение и форк. */
+/**
+ * Идентичность обвеса — то, за что цепляются владение, столкновение и форк.
+ *
+ * **Версии здесь нет и не будет.** Она уже есть в манифесте пакета, дверь её
+ * оттуда читает и показывает; второе место для одного факта — приглашение им
+ * разъехаться (`tasker:BASER2-10` §1). Из личности же считается имя файла
+ * настроек у потребителя (`config.ts`).
+ */
 export interface SourceHead {
   /** `<поставщик>/<обвес>`. НЕ имя npm-пакета: пакет — доставка, `id` — личность. */
   readonly id: string;
@@ -100,7 +118,24 @@ const SETTING_FIELDS = new Set([
   'defaultFrom',
 ]);
 const PRESET_FIELDS = new Set(['title', 'values']);
-const LAYOUT_FIELDS = new Set(['src', 'dest', 'render']);
+const LAYOUT_FIELDS = new Set(['src', 'dest', 'render', 'class']);
+
+/**
+ * Снятые и не заведённые поля, у которых есть НАЗВАННАЯ замена.
+ *
+ * Обычное «форма такого поля не знает» отправляет человека искать опечатку там,
+ * где её нет: он написал ровно то, что было в форме 1 или что напрашивается по
+ * виду. Поэтому у этих трёх — свой текст, а код остаётся `unknown-field`:
+ * ветвление у двери от подсказки не меняется.
+ */
+const NAMED_ABSENCE: Readonly<Record<string, string>> = {
+  'source.version':
+    'версия обвеса берётся из манифеста пакета ("version" рядом с "name"), а не объявляется вторым полем: ' +
+    'два места для одного факта разъедутся, и разъехались — на приёмке pack',
+  'layout.once':
+    'класс артефакта — перечисление, а не флаг: объяви "class": "placed-once". ' +
+    `Классы формы ${FORM_VERSION}: ${ARTIFACT_CLASSES.join(' · ')}`,
+};
 
 /** `<поставщик>/<обвес>`: без верхнего регистра, чтобы `A/b` и `a/b` не разошлись. */
 const SOURCE_ID = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
@@ -143,9 +178,18 @@ export function parseSourceDeclaration(
     return { ok: false, problems: log.list() };
   }
 
+  // Версия формы разбирается ПЕРВОЙ и в одиночку: она говорит, по каким
+  // правилам читать остальное. Не сойдясь на ней, разбирать дальше нечего —
+  // получится тот самый разбор наполовину, ради отказа от которого версия и
+  // заведена. Поэтому здесь не `log.add`, а выход целиком.
+  const version = checkFormVersion(value['formVersion'], `${at}.formVersion`);
+  if (!version.ok) {
+    return version;
+  }
+  const formVersion = version.value;
+
   namedUnknownFields(log, value, BLOCK_FIELDS, at);
 
-  const formVersion = parseFormVersion(log, value['formVersion'], at);
   const source = parseSource(log, value['source'], `${at}.source`);
   const settings = parseSettings(log, value['settings'], `${at}.settings`);
   const presets = parsePresets(
@@ -165,43 +209,65 @@ export function parseSourceDeclaration(
   }));
 }
 
-function parseFormVersion(log: ProblemLog, value: unknown, at: string): number {
-  const field = `${at}.formVersion`;
+/**
+ * Версия формы объявления — отказ целиком, а не пункт в копилке.
+ *
+ * Обвес чужой формы разбирается не «почти»: поля той формы лежат не там, где их
+ * ищет эта, и половина объявления молча не доедет. Поэтому все четыре случая
+ * (не назвал · назвал не числом · из будущего · из прошлого) — выход, а не
+ * продолжение разбора.
+ */
+function checkFormVersion(value: unknown, field: string): FormResult<number> {
+  const refusal = (
+    code:
+      | 'form-version-missing'
+      | 'form-version-invalid'
+      | 'form-version-unsupported',
+    message: string,
+  ): FormResult<number> => ({
+    ok: false,
+    problems: [{ code, at: field, message }],
+  });
 
   if (value === undefined) {
-    log.add(
+    return refusal(
       'form-version-missing',
-      field,
       `обвес не объявил версию формы — добавь "formVersion": ${FORM_VERSION}. ` +
         'Без неё несовместимость формы выяснялась бы по симптомам, а не вслух',
     );
-    return FORM_VERSION;
   }
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
-    log.add(
+    return refusal(
       'form-version-invalid',
-      field,
       `ожидалось целое число ≥ 1, получено ${describeValue(value)}`,
     );
-    return FORM_VERSION;
   }
   if (value > FORM_VERSION) {
-    log.add(
+    return refusal(
       'form-version-unsupported',
-      field,
       `обвес рассчитан на форму ${value}, этот baser понимает по ${FORM_VERSION} — обнови baser`,
     );
-    return value;
   }
   if (value < MIN_FORM_VERSION) {
-    log.add(
+    return refusal(
       'form-version-unsupported',
-      field,
-      `форма ${value} больше не разбирается (самая старая — ${MIN_FORM_VERSION}) — обнови обвес`,
+      `обвес написан по форме ${value}, этот baser разбирает с ${MIN_FORM_VERSION} — обнови обвес. ` +
+        OLD_FORM_DIFF,
     );
   }
-  return value;
+  return { ok: true, value };
 }
+
+/**
+ * Что именно поменялось между 1 и 2 — в тексте отказа, а не в доке.
+ *
+ * Автор обвеса читает отказ, а не changelog: сказать «форма старая» и не сказать,
+ * чем она старая, значит отправить его гадать.
+ */
+const OLD_FORM_DIFF =
+  'Форма 1 держала настройки и пресеты потребителя в baser.json — форма 2 держит их в ' +
+  'файле на инструмент (.omnifield/<поставщик>-<обвес>.yaml), а у записи раскладки ' +
+  'появился "class"';
 
 function parseSource(log: ProblemLog, value: unknown, at: string): SourceHead {
   const blank: SourceHead = { id: '', title: '', contentRoot: '' };
@@ -215,7 +281,7 @@ function parseSource(log: ProblemLog, value: unknown, at: string): SourceHead {
     return blank;
   }
 
-  namedUnknownFields(log, value, SOURCE_FIELDS, at);
+  namedUnknownFields(log, value, SOURCE_FIELDS, at, 'source');
 
   const id = requiredString(
     log,
@@ -589,7 +655,7 @@ function parseLayoutEntry(
     return null;
   }
 
-  namedUnknownFields(log, value, LAYOUT_FIELDS, at);
+  namedUnknownFields(log, value, LAYOUT_FIELDS, at, 'layout');
 
   const src = requiredPath(
     log,
@@ -614,11 +680,28 @@ function parseLayoutEntry(
     return null;
   }
 
+  const rawClass = value['class'];
+  if (rawClass !== undefined && !isArtifactClass(rawClass)) {
+    log.add(
+      'unknown-artifact-class',
+      `${at}.class`,
+      `ожидался один из классов ${ARTIFACT_CLASSES.join(' · ')}, получено ${describeValue(rawClass)}. ` +
+        'Класс говорит, чем станок держит артефакт: "regenerated" перегенерируется целиком, ' +
+        '"placed-once" кладётся один раз и дальше не трогается',
+    );
+    return null;
+  }
+
   if (src === '' || dest === '') {
     return null;
   }
 
-  return { src, dest, render: rawRender ?? true };
+  return {
+    src,
+    dest,
+    render: rawRender ?? true,
+    class: rawClass ?? DEFAULT_ARTIFACT_CLASS,
+  };
 }
 
 function requiredString(
@@ -664,19 +747,26 @@ function requiredPath(
   return checked.path;
 }
 
-/** Лишнее поле называется вслух — см. код `unknown-field`. */
+/**
+ * Лишнее поле называется вслух — см. код `unknown-field`.
+ *
+ * @param kind к какому месту формы относится объект — по нему ищется названная
+ *   замена (`NAMED_ABSENCE`) для полей, которые человек пишет не по ошибке
+ */
 function namedUnknownFields(
   log: ProblemLog,
   value: Record<string, unknown>,
   known: ReadonlySet<string>,
   at: string,
+  kind?: string,
 ): void {
   for (const key of Object.keys(value).sort(byBytes)) {
     if (!known.has(key)) {
       log.add(
         'unknown-field',
         `${at}.${key}`,
-        `форма ${FORM_VERSION} такого поля не знает — опечатка либо надежда на поведение, которого нет`,
+        NAMED_ABSENCE[`${kind}.${key}`] ??
+          `форма ${FORM_VERSION} такого поля не знает — опечатка либо надежда на поведение, которого нет`,
       );
     }
   }

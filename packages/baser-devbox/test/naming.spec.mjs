@@ -35,6 +35,7 @@ import {
   installConsumer,
   LIVE,
   parseJsonc,
+  tuning,
 } from './packed.mjs';
 
 let consumer = null;
@@ -47,7 +48,8 @@ afterEach(() => {
 /** Раскладывает обвес и отдаёт разобранный артефакт. */
 async function materialize(options) {
   consumer = installConsumer({
-    config: consumerConfig({ presets: ['omnifield'] }),
+    config: consumerConfig(),
+    tuning: tuning({ presets: ['omnifield'] }),
     ...options,
   });
   const result = await run({ command: 'apply', cwd: consumer.root });
@@ -258,7 +260,10 @@ describe('ЛОВУШКА: манифест-заглушка ручной уст�
     const { json, result } = await materialize({
       repoName: 'goish',
       manifest: STUB,
+      // Ни `baser.json`, ни файла настроек: ровно та раскладка, которая
+      // существует в момент вызова двери из бандла.
       config: undefined,
+      tuning: undefined,
     });
 
     expect(json.name).toBe('goish-devbox');
@@ -271,6 +276,7 @@ describe('ЛОВУШКА: манифест-заглушка ручной уст�
       gitOrigin: 'https://github.com/omnifield/goish.git',
       manifest: STUB,
       config: undefined,
+      tuning: undefined,
     });
 
     expect(json.name).toBe('goish-devbox');
@@ -301,7 +307,8 @@ describe('запасной вариант: репозитория не видн�
     consumer = installConsumer({
       repoName: 'fresh',
       manifest: null,
-      config: consumerConfig({ presets: ['omnifield'] }),
+      config: consumerConfig(),
+      tuning: tuning({ presets: ['omnifield'] }),
     });
     // `git init` без remote — первый день нового репозитория.
     consumer.write('.git/config', '[core]\n\trepositoryformatversion = 0\n');
@@ -320,7 +327,8 @@ describe('запасной вариант: репозитория не видн�
     consumer = installConsumer({
       repoName: 'weber-feature',
       manifest: null,
-      config: consumerConfig({ presets: ['omnifield'] }),
+      config: consumerConfig(),
+      tuning: tuning({ presets: ['omnifield'] }),
     });
     consumer.write('.git', 'gitdir: /нет/такого/каталога/worktrees/wt\n');
 
@@ -336,7 +344,8 @@ describe('запасной вариант: репозитория не видн�
     consumer = installConsumer({
       repoName: 'fresh',
       manifest: null,
-      config: consumerConfig({ presets: ['omnifield'] }),
+      config: consumerConfig(),
+      tuning: tuning({ presets: ['omnifield'] }),
     });
     consumer.write('.git/config', ' [remote "origin"\n\turl =\n=?');
 
@@ -355,7 +364,8 @@ describe('ПЕРЕИМЕНОВАНИЕ при обновлении обвеса 
     consumer = installConsumer({
       repoName: 'weber-live',
       gitOrigin: 'https://github.com/omnifield/weber.git',
-      config: consumerConfig({ presets: ['omnifield'] }),
+      config: consumerConfig(),
+      tuning: tuning({ presets: ['omnifield'] }),
     });
     previousRelease(consumer);
     await run({ command: 'apply', cwd: consumer.root });
@@ -394,7 +404,7 @@ describe('ПЕРЕИМЕНОВАНИЕ при обновлении обвеса 
     const { json } = await materialize({
       repoName: 'weber-live',
       gitOrigin: 'https://github.com/omnifield/weber.git',
-      config: consumerConfig({
+      tuning: tuning({
         presets: ['omnifield'],
         settings: { name: 'мой-девбокс', networkAlias: 'weber-live' },
       }),

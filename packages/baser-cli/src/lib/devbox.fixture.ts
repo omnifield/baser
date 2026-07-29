@@ -40,6 +40,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Tree } from '@nx/devkit';
+import { stringify } from 'yaml';
+import {
+  sourceConfigPath,
+  SOURCE_CONFIG_KEY,
+} from '@omnifield/baser-contracts';
 import {
   MANIFEST_PATH,
   readManifest,
@@ -79,6 +84,17 @@ export interface Consumer {
   updateResolvers(source: string): void;
   /** Кладёт файл в каталог шаблонов обвеса. */
   writeTemplate(name: string, content: string): void;
+  /**
+   * Пишет файл настроек обвеса — ключ `baser` целиком.
+   *
+   * Настройки живут НЕ в `baser.json` (`tasker:BASER2-10` §3), и проба обязана
+   * ставить их туда же, куда их ставит человек: путь считается из личности
+   * обвеса, а не задаётся тестом, иначе проба зеленела бы на файле, которого
+   * дверь не читает.
+   */
+  tune(sourceId: string, block: unknown): void;
+  /** Читает файл настроек обвеса как текст — то, что увидит человек. */
+  readTuning(sourceId: string): string | null;
   /**
    * Ставит ЕЩЁ ОДИН обвес: пакет в `node_modules` и строка в `devDependencies`.
    *
@@ -132,6 +148,13 @@ export interface InstallOptions {
   readonly repoName?: string;
   /** Конфиг потребителя. Не передан — файла нет, и дверь его родит сама. */
   readonly config?: unknown;
+  /**
+   * Файлы настроек обвесов: личность обвеса → содержимое ключа `baser`.
+   *
+   * Не передан — файлов нет, и дверь родит их сама с закомментированными
+   * дефолтами. Это рабочее состояние, а не пробел: ноль вопросов пользователю.
+   */
+  readonly tuning?: Readonly<Record<string, unknown>>;
   /** Файлы, уже лежащие в репозитории до прогона. */
   readonly existing?: Readonly<Record<string, string>>;
   /** Объявлять ли обвес зависимостью в `package.json` потребителя. */
@@ -244,6 +267,15 @@ export function installDevbox(options: InstallOptions = {}): Consumer {
     writeTemplate(name, content) {
       writeFileSync(join(sourceRoot, 'template', name), content);
     },
+    tune(sourceId, block) {
+      consumer.write(
+        sourceConfigPath(sourceId),
+        stringify({ [SOURCE_CONFIG_KEY]: block }),
+      );
+    },
+    readTuning(sourceId) {
+      return consumer.read(sourceConfigPath(sourceId));
+    },
     installSource(spec) {
       return installExtraSource(
         options.hoisted === true ? box : root,
@@ -276,6 +308,9 @@ export function installDevbox(options: InstallOptions = {}): Consumer {
       `${JSON.stringify(options.config, null, 2)}\n`,
     );
   }
+  for (const [sourceId, block] of Object.entries(options.tuning ?? {})) {
+    consumer.tune(sourceId, block);
+  }
   for (const [path, content] of Object.entries(options.existing ?? {})) {
     consumer.write(path, content);
   }
@@ -307,7 +342,7 @@ function installExtraSource(
         name: spec.packageName,
         version: '0.1.0',
         baser: {
-          formVersion: 1,
+          formVersion: 2,
           source: {
             id: spec.id,
             title: spec.title ?? spec.id,

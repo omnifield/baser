@@ -1,0 +1,16 @@
+# harness.yaml — роль-модель продукта <%- product %> (agent-harness plugin).
+#
+# Доставлен обвесом как заготовка, дальше файлом ВЛАДЕЕТ продукт: класс
+# `placed-once` — станок кладёт его в объявленном месте и больше не трогает.
+# Правка руками расхождением не считается, флага не поднимает и затёрта не будет.
+apiVersion: omnifield.dev/v1
+kind: harness
+
+product: <%- product %>
+architects: <%- architects %>
+
+zones:
+<% for (const zone of zones) { -%>
+  <%- zone %>:
+    paths: [packages/<%- product %>-<%- zone %>]
+<% } -%>

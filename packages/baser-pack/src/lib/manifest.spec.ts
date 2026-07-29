@@ -28,7 +28,12 @@ const DECLARATION: SourceDeclaration = {
   settings: {},
   presets: {},
   layout: [
-    { src: 'x.ejs', dest: '.devcontainer/devcontainer.json', render: true },
+    {
+      src: 'x.ejs',
+      dest: '.devcontainer/devcontainer.json',
+      render: true,
+      class: 'regenerated',
+    },
   ],
 };
 

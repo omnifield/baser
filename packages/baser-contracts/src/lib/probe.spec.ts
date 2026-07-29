@@ -1,18 +1,25 @@
 /**
- * ПРОБА ФОРМЫ на живом обвесе.
+ * ПРОБА ФОРМЫ на живых обвесах.
  *
  * Приёмка формы — её выразительность: если реальный обвес ею не описывается,
- * плохая форма, а не пример. Поэтому проба берёт `.devcontainer` ЭТОГО
- * репозитория и описывает его объявлением обвеса во всех трёх слоях —
- * универсальное, настройки, пресет omnifield.
+ * плохая форма, а не пример. Поэтому проба берёт ДВА обвеса этого репозитория —
+ * `.devcontainer` (девбокс) и `.omnifield/harness.yaml` (плагин агент-харнесса) —
+ * и описывает их объявлениями во всех слоях: универсальное, настройки, пресет.
  *
- * Прогон идёт через РЕАЛИЗОВАННЫЕ валидаторы, а не глазами: то же объявление
- * проходит `readSourceDeclaration`, `parseConsumerConfig`, `resolveSettings` и
- * `checkSingleProvider`, что и настоящий обвес у двери.
+ * Два, а не один, намеренно: несколько инструментов в репозитории — норма по
+ * построению (`kb:BASER2-2` §2, `tasker:BASER2-48`), и форма обязана выражать это
+ * прогоном, а не обещанием. Заодно видно то, ради чего форма 2 и заводилась: у
+ * артефактов разный КЛАСС, а настройки каждого лежат в СВОЁМ файле, имя которого
+ * считается из личности.
  *
- * Подстановку значений здесь делает сам тест — это обязательство ДВЕРИ
- * (`tasker:BASER2-23`), а не контрактов: движок значений не получает вовсе.
- * Проба берёт тот же шаблонизатор, которым дверь будет пользоваться.
+ * Прогон идёт через РЕАЛИЗОВАННЫЕ валидаторы, а не глазами: те же объявления
+ * проходят `readSourceDeclaration`, `parseConsumerConfig`, `parseSourceConfig`,
+ * `resolveSettings` и `checkSingleProvider`, что и настоящий обвес у двери.
+ *
+ * Подстановку значений и разбор YAML здесь делает сам тест — это обязательства
+ * ДВЕРИ (`tasker:BASER2-23`, `tasker:BASER2-53`), а не контрактов: пакет ничего
+ * не читает и ничего не исполняет. Проба берёт те же инструменты, которыми дверь
+ * будет пользоваться.
  */
 
 import { createRequire } from 'node:module';
@@ -20,12 +27,17 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { parseConsumerConfig } from './config.js';
+import {
+  parseConsumerConfig,
+  parseSourceConfig,
+  sourceConfigPath,
+  type SourceConfig,
+} from './config.js';
 import {
   readSourceDeclaration,
   type SourceDeclaration,
 } from './declaration.js';
-import { declarationBlock } from './form.fixture.js';
+import { codesOf, declarationBlock } from './form.fixture.js';
 import { describeProblems } from './problems.js';
 import { checkSingleProvider } from './providers.js';
 import { resolveSettings, type ComputeDefault } from './settings.js';
@@ -35,32 +47,49 @@ import type { SettingValue } from './values.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
-const example = join(repoRoot, 'packages/baser-contracts/examples/devbox');
+const examples = join(repoRoot, 'packages/baser-contracts/examples');
+const consumer = join(examples, 'consumer');
 
-const manifest = readJson(join(example, 'declaration.json'));
-const config = readJson(join(example, 'consumer/baser.json'));
+/** Обвесы, поставленные в этот репозиторий: каталог примера → имя пакета. */
+const TOOLS = {
+  devbox: '@omnifield/baser-devbox',
+  harness: '@omnifield/brainer-agent-harness',
+} as const;
+type Tool = keyof typeof TOOLS;
 
 /** Резолверы обвеса — модуль его же пакета; загружает их дверь, не контракт. */
-let resolvers: Record<string, (ctx: unknown) => SettingValue>;
+const resolvers: Record<
+  string,
+  Record<string, (ctx: unknown) => SettingValue>
+> = {};
 let render: (template: string, values: Record<string, unknown>) => string;
+let parseYaml: (text: string) => unknown;
 
 beforeAll(async () => {
-  resolvers = (await import(
-    pathToFileURL(join(example, 'defaults.mjs')).href
-  )) as typeof resolvers;
+  for (const tool of Object.keys(TOOLS) as Tool[]) {
+    resolvers[tool] = (await import(
+      pathToFileURL(join(examples, tool, 'defaults.mjs')).href
+    )) as Record<string, (ctx: unknown) => SettingValue>;
+  }
 
-  const ejs = createRequire(import.meta.url)(findEjs()) as {
+  const require = createRequire(import.meta.url);
+  const ejs = require(fromStore('ejs')) as {
     render: (t: string, d: object, o?: object) => string;
   };
   // `<%-` вместо `<%=` в шаблоне и никакого HTML-экранирования на выходе:
   // артефакты — это JSON и shell, кавычка обязана остаться кавычкой.
   render = (template, values) => ejs.render(template, values, {});
+
+  const yaml = require(fromStore('yaml')) as {
+    parse: (text: string) => unknown;
+  };
+  parseYaml = (text) => yaml.parse(text);
 });
 
-function declaration(): SourceDeclaration {
+function declaration(tool: Tool): SourceDeclaration {
   const parsed = readSourceDeclaration(
-    manifest,
-    'examples/devbox/declaration.json',
+    readJson(join(examples, tool, 'declaration.json')),
+    `examples/${tool}/declaration.json`,
   );
   if (!parsed.ok) {
     throw new Error(
@@ -70,47 +99,82 @@ function declaration(): SourceDeclaration {
   return parsed.value;
 }
 
-function resolved(
-  patch: { presets?: string[]; settings?: Record<string, SettingValue> } = {},
-) {
-  const parsedConfig = parseConsumerConfig(config);
-  if (!parsedConfig.ok) {
-    throw new Error('конфиг потребителя непригоден');
+/** Установленный набор — то, что дверь получает из `baser.json`. */
+function installed() {
+  const parsed = parseConsumerConfig(readJson(join(consumer, 'baser.json')));
+  if (!parsed.ok) {
+    throw new Error(
+      `конфиг потребителя непригоден:\n${describeProblems(parsed.problems)}`,
+    );
   }
-  const entry = { ...parsedConfig.value.sources[0], ...patch };
+  return parsed.value;
+}
+
+/**
+ * Файл настроек обвеса у потребителя — по имени, считанному из его личности.
+ *
+ * Читает YAML дверь, а не форма: сюда приезжает уже разобранное значение.
+ */
+function tuning(tool: Tool): SourceConfig {
+  const path = sourceConfigPath(declaration(tool).source.id);
+  const parsed = parseSourceConfig(
+    parseYaml(readFileSync(join(consumer, path), 'utf-8')),
+    path,
+  );
+  if (!parsed.ok) {
+    throw new Error(
+      `файл настроек непригоден:\n${describeProblems(parsed.problems)}`,
+    );
+  }
+  return parsed.value;
+}
+
+function resolved(
+  tool: Tool,
+  patch: Partial<SourceConfig> = {},
+): Record<string, SettingValue> {
+  const decl = declaration(tool);
+  const config = { ...tuning(tool), ...patch };
 
   const computeDefault: ComputeDefault = (ref) => {
-    const fn = resolvers[ref.member];
+    const fn = resolvers[tool][ref.member];
     if (!fn) {
       throw new Error(`в ${ref.module} нет экспорта ${ref.member}`);
     }
     return fn({
       repo: { name: 'baser', root: repoRoot },
       source: {
-        id: 'omnifield/devbox',
-        packageName: '@omnifield/baser-devbox',
-        version: '0.1.0',
+        id: decl.source.id,
+        packageName: TOOLS[tool],
+        // Версия приходит из манифеста пакета — вторым полем объявления она не
+        // заводится (`tasker:BASER2-10` §1).
+        version: (
+          readJson(join(examples, tool, 'declaration.json')) as {
+            version: string;
+          }
+        ).version,
       },
     });
   };
 
-  const result = resolveSettings(declaration(), entry, { computeDefault });
+  const result = resolveSettings(decl, config, { computeDefault });
   if (!result.ok) {
     throw new Error(
       `значения не разрешились:\n${JSON.stringify(result.problems, null, 2)}`,
     );
   }
-  return result.value.values;
+  return result.value.values as Record<string, SettingValue>;
 }
 
 function materialize(
+  tool: Tool,
   values: Record<string, SettingValue>,
 ): Record<string, string> {
-  const decl = declaration();
+  const decl = declaration(tool);
   const out: Record<string, string> = {};
   for (const entry of decl.layout) {
     const template = readFileSync(
-      join(example, decl.source.contentRoot, entry.src),
+      join(examples, tool, decl.source.contentRoot, entry.src),
       'utf-8',
     );
     if (!entry.render) {
@@ -131,26 +195,75 @@ function materialize(
   return out;
 }
 
-describe('проба формы: живой .devcontainer этого репозитория', () => {
-  it('объявление обвеса и конфиг потребителя пригодны', () => {
-    const decl = declaration();
-    expect(decl.source.id).toBe('omnifield/devbox');
-    expect(decl.layout.map((entry) => entry.dest)).toEqual([
-      '.devcontainer/devcontainer.json',
-      '.devcontainer/devcontainer-lock.json',
+describe('проба формы: два обвеса этого репозитория сразу', () => {
+  it('оба объявления и перечень поставленного пригодны', () => {
+    expect(installed().sources.map((entry) => entry.use)).toEqual([
+      TOOLS.devbox,
+      TOOLS.harness,
     ]);
-    // Второй артефакт обязан лечь байт в байт — это пин toolchain по digest.
-    expect(decl.layout[1].render).toBe(false);
+    expect(declaration('devbox').source.id).toBe('omnifield/devbox');
+    expect(declaration('harness').source.id).toBe('omnifield/agent-harness');
+  });
 
-    const owners = checkSingleProvider([
-      { declaration: decl, packageName: '@omnifield/baser-devbox' },
-    ]);
+  it('НЕСКОЛЬКО ИНСТРУМЕНТОВ СРАЗУ: одна карта владения, разные классы', () => {
+    const owners = checkSingleProvider(
+      (Object.keys(TOOLS) as Tool[]).map((tool) => ({
+        declaration: declaration(tool),
+        packageName: TOOLS[tool],
+      })),
+    );
     expect(owners.ok).toBe(true);
+    if (!owners.ok) return;
+
+    expect(Object.keys(owners.value)).toEqual([
+      '.devcontainer/devcontainer-lock.json',
+      '.devcontainer/devcontainer.json',
+      '.omnifield/harness.yaml',
+    ]);
+    // Наш файл перегенерируется целиком; конфиг, которым дальше владеет продукт,
+    // кладётся один раз и больше не трогается.
+    expect(owners.value['.devcontainer/devcontainer.json'].class).toBe(
+      'regenerated',
+    );
+    expect(owners.value['.omnifield/harness.yaml'].class).toBe('placed-once');
+    // Второй артефакт девбокса обязан лечь байт в байт — это пин toolchain по digest.
+    expect(owners.value['.devcontainer/devcontainer-lock.json'].render).toBe(
+      false,
+    );
+  });
+
+  it('У КАЖДОГО ИНСТРУМЕНТА СВОЙ ФАЙЛ НАСТРОЕК, имя — из личности', () => {
+    expect(sourceConfigPath(declaration('devbox').source.id)).toBe(
+      '.omnifield/omnifield-devbox.yaml',
+    );
+    expect(sourceConfigPath(declaration('harness').source.id)).toBe(
+      '.omnifield/omnifield-agent-harness.yaml',
+    );
+    // Оба лежат в одной папке — человек ходит в одно место (`kb:BASER2-2` §4).
+    expect(tuning('devbox').presets).toEqual(['omnifield']);
+    expect(tuning('harness').settings['zones']).toEqual([
+      'contracts',
+      'materialize',
+      'cli',
+    ]);
+  });
+
+  it('ОДИН ФАЙЛ, ДВА ЧИТАТЕЛЯ: чужая половина двери не мешает', () => {
+    // В файле настроек харнесса рядом с ключом `baser` лежат адреса сервисов —
+    // это дело самого инструмента, и дверь о них молчит.
+    const raw = parseYaml(
+      readFileSync(
+        join(consumer, sourceConfigPath('omnifield/agent-harness')),
+        'utf-8',
+      ),
+    ) as Record<string, unknown>;
+    expect(raw['services']).toBeDefined();
+    expect(Object.keys(tuning('harness').settings)).toEqual(['zones']);
   });
 
   it('НОЛЬ ВОПРОСОВ ПОЛЬЗОВАТЕЛЮ: имя из имени репозитория, остальное — пресет', () => {
-    // Конфиг потребителя не содержит ни одного заполненного значения.
-    expect(resolved()).toEqual({
+    // В файле настроек девбокса не заполнено ни одного значения — только пресет.
+    expect(resolved('devbox')).toEqual({
       name: 'baser-devbox',
       networkAlias: 'baser',
       image: 'mcr.microsoft.com/devcontainers/typescript-node',
@@ -165,7 +278,7 @@ describe('проба формы: живой .devcontainer этого репоз�
   });
 
   it('слой «универсальное + настройки + пресет» сходится с файлом на диске', () => {
-    const produced = materialize(resolved());
+    const produced = materialize('devbox', resolved('devbox'));
 
     for (const [dest, text] of Object.entries(produced)) {
       const actual = readFileSync(join(repoRoot, dest), 'utf-8');
@@ -182,15 +295,38 @@ describe('проба формы: живой .devcontainer этого репоз�
     }
   });
 
+  it('placed-once: артефакт харнесса сходится с живым по существу', () => {
+    const text = materialize('harness', resolved('harness'))[
+      '.omnifield/harness.yaml'
+    ];
+    const produced = parseYaml(text) as Record<string, unknown>;
+    const live = parseYaml(
+      readFileSync(join(repoRoot, '.omnifield/harness.yaml'), 'utf-8'),
+    ) as Record<string, unknown>;
+
+    // Байт в байт с живым файлом он и НЕ ОБЯЗАН сходиться: класс placed-once
+    // означает, что дальше файлом владеет продукт, и правки в нём — не
+    // расхождение, а работа человека. Сверяем то, что кладёт обвес.
+    expect(produced['product']).toBe(live['product']);
+    expect(produced['kind']).toBe('harness');
+    expect(Object.keys(produced['zones'] as object)).toEqual([
+      'contracts',
+      'materialize',
+      'cli',
+    ]);
+  });
+
   it('рендер не экранирует под HTML — кавычка остаётся кавычкой', () => {
-    const text = materialize(resolved())['.devcontainer/devcontainer.json'];
+    const text = materialize('devbox', resolved('devbox'))[
+      '.devcontainer/devcontainer.json'
+    ];
     expect(text).not.toContain('&#34;');
     expect(text).toContain('"--network=omnifield-gateway"');
     expect(() => JSON.parse(stripComments(text))).not.toThrow();
   });
 
   it('слой «универсальное»: тот же обвес без пресета — валидный devcontainer', () => {
-    const text = materialize(resolved({ presets: [] }))[
+    const text = materialize('devbox', resolved('devbox', { presets: [] }))[
       '.devcontainer/devcontainer.json'
     ];
     const parsed = JSON.parse(stripComments(text)) as Record<string, unknown>;
@@ -206,7 +342,8 @@ describe('проба формы: живой .devcontainer этого репоз�
 
   it('слой «настройки»: заполненное значение бьёт пресет', () => {
     const text = materialize(
-      resolved({
+      'devbox',
+      resolved('devbox', {
         settings: { runtimeVersion: '24', installCommand: 'npm ci' },
       }),
     )['.devcontainer/devcontainer.json'];
@@ -226,7 +363,7 @@ describe('проба отказов: каждый случай называет�
     const надстройка = readSourceDeclaration({
       baser: declarationBlock({
         source: {
-          id: 'omnifield/devbox-plus',
+          id: 'omnifield/devbox-over',
           title: 'Надстройка',
           contentRoot: 'tpl',
         },
@@ -237,8 +374,8 @@ describe('проба отказов: каждый случай называет�
     if (!надстройка.ok) return;
 
     const result = checkSingleProvider([
-      { declaration: declaration(), packageName: '@omnifield/baser-devbox' },
-      { declaration: надстройка.value, packageName: '@чужой/devbox-plus' },
+      { declaration: declaration('devbox'), packageName: TOOLS.devbox },
+      { declaration: надстройка.value, packageName: '@чужой/devbox-over' },
     ]);
 
     expect(result.ok).toBe(false);
@@ -249,10 +386,10 @@ describe('проба отказов: каждый случай называет�
     );
   });
 
-  it('незнакомый ключ настройки в конфиге потребителя', () => {
-    expect(() => resolved({ settings: { runtimeVerison: '24' } })).toThrow(
-      /unknown-setting/,
-    );
+  it('незнакомый ключ настройки в файле настроек', () => {
+    expect(() =>
+      resolved('devbox', { settings: { runtimeVerison: '24' } }),
+    ).toThrow(/unknown-setting/);
   });
 
   it('обвес без дефолта у настройки', () => {
@@ -267,12 +404,45 @@ describe('проба отказов: каждый случай называет�
     expect(broken.problems[0].message).toContain('вопросов у двери не бывает');
   });
 
+  it('ОБВЕС ПЕРВОЙ ФОРМЫ: отказ целиком, а не разбор наполовину', () => {
+    // Живой обвес, у которого поднята только версия формы: настройки потребителя
+    // он всё ещё ждёт в baser.json, и разобрать его по правилам формы 2 значило бы
+    // молча потерять то, что человек настроил.
+    const manifest = readJson(join(examples, 'devbox/declaration.json')) as {
+      baser: Record<string, unknown>;
+    };
+    const старый = readSourceDeclaration({
+      ...manifest,
+      baser: { ...manifest.baser, formVersion: 1 },
+    });
+
+    expect(старый.ok).toBe(false);
+    if (старый.ok) return;
+    expect(codesOf(старый.problems)).toEqual(
+      ['package.json.baser.formVersion'].map(
+        (at) => `form-version-unsupported @ ${at}`,
+      ),
+    );
+    expect(старый.problems[0].message).toContain('обнови обвес');
+  });
+
+  it('НАСТРОЙКИ, ОСТАВЛЕННЫЕ В baser.json: сказано, куда они уехали', () => {
+    const первая = parseConsumerConfig({
+      formVersion: 2,
+      sources: [{ use: TOOLS.devbox, presets: ['omnifield'] }],
+    });
+    expect(первая.ok).toBe(false);
+    if (первая.ok) return;
+    expect(первая.problems[0].code).toBe('consumer-settings-moved');
+    expect(первая.problems[0].message).toContain('.omnifield/');
+  });
+
   it('ТОТ ЖЕ ОБВЕС, ШАБЛОН НА ЧУЖОМ ЯЗЫКЕ', () => {
     // Берём живой шаблон девбокса и переписываем подстановки на Handlebars.
     // EJS отрендерил бы такое сам в себя: артефакт лёг бы к потребителю с
     // неподставленным "{{ name }}" и ничем бы себя не выдал.
     const real = readFileSync(
-      join(example, 'template/devcontainer.json.ejs'),
+      join(examples, 'devbox/template/devcontainer.json.ejs'),
       'utf-8',
     );
     const foreign = real
@@ -288,7 +458,7 @@ describe('проба отказов: каждый случай называет�
 
   it('тот же обвес с экранирующей подстановкой', () => {
     const real = readFileSync(
-      join(example, 'template/devcontainer.json.ejs'),
+      join(examples, 'devbox/template/devcontainer.json.ejs'),
       'utf-8',
     );
     const escaping = real.replace('<%- name %>', '<%= name %>');
@@ -300,11 +470,7 @@ describe('проба отказов: каждый случай называет�
   });
 
   it('версию конфига проставила дверь, пользователь её не вводил', () => {
-    const parsed = parseConsumerConfig(config);
-    expect(parsed.ok).toBe(true);
-    if (parsed.ok) {
-      expect(parsed.value.formVersion).toBe(FORM_VERSION);
-    }
+    expect(installed().formVersion).toBe(FORM_VERSION);
   });
 });
 
@@ -323,15 +489,19 @@ function withoutLine(text: string, line: number): string {
 }
 
 /**
- * ejs приезжает транзитивно с `@nx/devkit` (движок по форме — генератор Nx), и
- * своей зависимости на него контракты НЕ заводят: подстановка значений — дело
- * двери, а не формы.
+ * Инструменты ДВЕРИ, а не формы: `ejs` приезжает транзитивно с `@nx/devkit`,
+ * `yaml` — с инструментарием сборки. Своих зависимостей на них контракты НЕ
+ * заводят: подстановка значений и чтение файла — дело двери (`tasker:BASER2-53`),
+ * а пакет формы не читает и не исполняет ничего.
  */
-function findEjs(): string {
+function fromStore(name: string): string {
   const store = join(repoRoot, 'node_modules/.pnpm');
-  const dir = readdirSync(store).find((name) => name.startsWith('ejs@'));
+  const dir = readdirSync(store)
+    .filter((entry) => entry.startsWith(`${name}@`))
+    .sort()
+    .at(-1);
   if (!dir) {
-    throw new Error('ejs не найден в pnpm-сторе — прогнать пробу нечем');
+    throw new Error(`${name} не найден в pnpm-сторе — прогнать пробу нечем`);
   }
-  return join(store, dir, 'node_modules/ejs');
+  return join(store, dir, 'node_modules', name);
 }

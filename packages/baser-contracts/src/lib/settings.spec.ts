@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { parseConsumerConfig, type ConsumerSourceEntry } from './config.js';
+import {
+  parseSourceConfig,
+  sourceConfigPath,
+  SOURCE_CONFIG_KEY,
+  type SourceConfig,
+} from './config.js';
 import {
   parseSourceDeclaration,
   type SourceDeclaration,
@@ -39,14 +44,17 @@ function declaration(): SourceDeclaration {
   return parsed.value;
 }
 
-function entry(patch: Record<string, unknown> = {}): ConsumerSourceEntry {
-  const parsed = parseConsumerConfig({
-    sources: [{ use: '@omnifield/baser-devbox', ...patch }],
-  });
+/** Адрес, который человек откроет, увидев отказ: его файл, а не объявление. */
+const CONFIG_AT = sourceConfigPath('omnifield/devbox');
+const MINE = `${CONFIG_AT}.${SOURCE_CONFIG_KEY}`;
+
+/** Как обвес настроен у потребителя — файл на инструмент, ключ `baser`. */
+function tuned(patch: Record<string, unknown> = {}): SourceConfig {
+  const parsed = parseSourceConfig({ [SOURCE_CONFIG_KEY]: patch }, CONFIG_AT);
   if (!parsed.ok) {
     throw new Error(`заготовка непригодна: ${JSON.stringify(parsed.problems)}`);
   }
-  return parsed.value.sources[0];
+  return parsed.value;
 }
 
 /** Дверь-заглушка: резолвер синхронный и знает только локальный контекст. */
@@ -57,7 +65,7 @@ function resolve(
   patch: Record<string, unknown> = {},
   compute = computeDefault,
 ) {
-  return resolveSettings(declaration(), entry(patch), {
+  return resolveSettings(declaration(), tuned(patch), {
     computeDefault: compute,
   });
 }
@@ -117,7 +125,7 @@ describe('разрешение значений', () => {
 
     const result = resolveSettings(
       twoPresets.value,
-      entry({ presets: ['first', 'second'] }),
+      tuned({ presets: ['first', 'second'] }),
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -132,7 +140,7 @@ describe('разрешение значений', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(codesOf(result.problems)).toEqual([
-      'unknown-setting @ omnifield/devbox.settings.runtimeVersion_',
+      `unknown-setting @ ${MINE}.settings.runtimeVersion_`,
     ]);
     expect(result.problems[0].message).toContain('никуда не поедет');
     expect(result.problems[0].message).toContain('runtimeVersion');
@@ -143,7 +151,7 @@ describe('разрешение значений', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(codesOf(result.problems)).toEqual([
-      'unknown-preset @ omnifield/devbox.presets[0]',
+      `unknown-preset @ ${MINE}.presets[0]`,
     ]);
     expect(result.problems[0].message).toContain('есть: omnifield');
   });
@@ -153,13 +161,13 @@ describe('разрешение значений', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(codesOf(result.problems)).toEqual([
-      'value-type-mismatch @ omnifield/devbox.settings.installAssistant',
+      `value-type-mismatch @ ${MINE}.settings.installAssistant`,
     ]);
   });
 
   describe('вычисляемый дефолт', () => {
     it('отказывает, если звать резолверы некому', () => {
-      const result = resolveSettings(declaration(), entry());
+      const result = resolveSettings(declaration(), tuned());
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(codesOf(result.problems)).toEqual([
