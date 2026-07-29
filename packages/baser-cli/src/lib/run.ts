@@ -257,6 +257,21 @@ async function runInRepo(
     });
   }
 
+  // «Чем шёл прогон» — первое, что спрашивают, когда у потребителя поехало:
+  // каким обвесом, какой ВЕРСИИ и сколько артефактов он держит не своими
+  // руками. Событие, а не спан: мерить здесь нечего, а врать нулевой
+  // длительностью хуже, чем не мерить.
+  trace.event('door.sources', {
+    sources: declared.map((item) => ({
+      id: item.declaration.source.id,
+      version: item.pkg.version,
+      artifacts: item.declaration.layout.length,
+      placedOnce: item.declaration.layout.filter(
+        (entry) => entry.class === 'placed-once',
+      ).length,
+    })),
+  });
+
   // ── 3. Карта владения над НАБОРОМ обвесов.
   //
   // Столкновение двух инструментов на один `dest` — свойство комбинации, а не
@@ -325,7 +340,7 @@ async function runInRepo(
     try {
       plan = computePlan({
         tree,
-        declaration: engineInput(item.declaration, item.location),
+        declaration: engineInput(item.declaration, item.location, item.pkg),
         source: createDoorSource(item.rendered, item.declaration, item.pkg),
         ...(options.confirm
           ? { confirm: confirmFor(draft.source.id, owners, options.confirm) }
@@ -616,17 +631,31 @@ function freeze(drafts: readonly DraftRun[]): readonly SourceRun[] {
 }
 
 /**
- * Вход движку.
+ * Вход движку — ВСЁ, что обвес сказал о себе, а не только пути.
  *
  * `contentRoot` подаётся ПРАВДОЙ, а не правдоподобием. Внутри дерева это
  * настоящий путь, и защита движка «не писать в собственный источник» работает в
  * полную силу. Вне дерева репо-относительного пути не существует, и дверь
  * говорит именно это: подделанный путь выглядел бы как защита, а защищал бы
  * пустоту (`installed.ts`, `README.md` § «Шов contentRoot»).
+ *
+ * ## Класс и версия — здесь стык, на котором терялось слово
+ *
+ * Движок класс ИСПОЛНЯЕТ (`tasker:BASER2-51`), паспорт укладки версию ХРАНИТ
+ * (`tasker:BASER2-52`), форма то и другое разбирает — но обе работы не доезжали
+ * до человека, пока эта функция собирала раскладку как `{src, dest}`:
+ * объявленный обвесом `placed-once` приезжал к движку как `regenerated` и файл,
+ * в котором человек месяц работал, перекладывался при первом же обновлении
+ * шаблона (`tasker:BASER2-68`).
+ *
+ * Дверь здесь ничего не решает и ничего не выводит: класс приходит из формы уже
+ * приведённым к явному значению, версия — из манифеста пакета. Дверь ПЕРЕНОСИТ,
+ * и в этом вся её работа на этом шве.
  */
 function engineInput(
   declaration: SourceDeclaration,
   location: SourceLocation,
+  pkg: InstalledPackage,
 ): Declaration {
   return {
     source: {
@@ -636,10 +665,18 @@ function engineInput(
       // защищает пустоту, а настоящий источник оставить незакрытым. Движок
       // называет этот случай сам (`SourceOutsideTreeError`).
       contentRoot: location.kind === 'in-tree' ? location.path : null,
+      // Версия — из манифеста пакета, второго места для неё нет (`kb:BASER2-2`).
+      // `null` едет как `null`: обвес версии не назвал, и паспорт скажет именно
+      // это, а не сочинённое за него число.
+      version: pkg.version,
     },
     layout: declaration.layout.map((item) => ({
       src: item.src,
       dest: item.dest,
+      // Слово обвеса переносится КАК ЕСТЬ. Умолчание уже проставлено разбором
+      // формы, и повторять его здесь значило бы завести второе умолчание,
+      // способное разойтись с первым.
+      class: item.class,
     })),
   };
 }

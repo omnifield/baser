@@ -113,6 +113,22 @@ function runOf(result: DoorResult, id: string): SourceRun {
   return found;
 }
 
+/**
+ * Извещения ОДНОГО вида у одного обвеса.
+ *
+ * Точный `toEqual` по всему списку сверял не своё утверждение, а весь набор
+ * извещений движка: любое новое — про версию обвеса, про удержанный
+ * `placed-once` — роняло эти пробы независимо от смысла, и падала бы зона
+ * `cli` за чужой заход (`tasker:BASER2-52`, замечание owner-materialize).
+ * Проба спрашивает про своё и остаётся точной: «ровно это извещение и никакого
+ * второго такого же» здесь по-прежнему проверяется.
+ */
+function noticesOf(result: DoorResult, id: string, kind: string) {
+  return (runOf(result, id).plan?.notices ?? []).filter(
+    (notice) => notice.kind === kind,
+  );
+}
+
 function door(outcome: CliOutcome): DoorResult {
   if (outcome.result?.kind !== 'door') {
     throw new Error('ответ прогона не пришёл');
@@ -438,7 +454,7 @@ describe('столкновение двух обвесов на один пут�
 
     // Перехват по подтверждению сделал бы владение функцией порядка прогонов.
     expect(result.status).toBe('blocked');
-    expect(runOf(result, AGENTS_ID).plan?.notices).toEqual([
+    expect(noticesOf(result, AGENTS_ID, 'confirmation-unused')).toEqual([
       expect.objectContaining({
         kind: 'confirmation-unused',
         dest: DEVCONTAINER,
@@ -470,7 +486,7 @@ describe('подтверждение адресуется своему обве�
     // Плагин агентов про `.devcontainer` не знает ничего — и молчит про него.
     // «В моей раскладке такого нет» было бы верно по его плану и неверно по
     // набору: артефакт объявлен, просто не им.
-    expect(runOf(result, AGENTS_ID).plan?.notices).toEqual([]);
+    expect(noticesOf(result, AGENTS_ID, 'confirmation-unused')).toEqual([]);
     // А у девбокса подтверждение сработало: чужой файл усыновляется.
     expect(
       runOf(result, DEVBOX_ID).plan?.steps.find(

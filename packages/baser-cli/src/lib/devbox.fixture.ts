@@ -114,10 +114,24 @@ export interface SourceSpec {
   /** Идентичность обвеса: то, чем подписаны его записи в паспорте укладки. */
   readonly id: string;
   readonly title?: string;
+  /**
+   * Версия ПАКЕТА обвеса — та, что дверь читает из манифеста и подаёт движку.
+   *
+   * `null` — версии в манифесте нет вовсе (ключ не написан). Случай не
+   * выдуманный: так выглядит приватный пакет, которому версию не проставляли, и
+   * ровно на нём проверяется, что дверь не сочиняет её за обвес
+   * (`tasker:BASER2-52`).
+   */
+  readonly version?: string | null;
   readonly layout: readonly {
     readonly src: string;
     readonly dest: string;
     readonly render?: boolean;
+    /**
+     * Чем станок держит этот артефакт (`tasker:BASER2-51`). Не назван — форма
+     * проставит `regenerated` сама, как и у настоящего обвеса.
+     */
+    readonly class?: 'regenerated' | 'placed-once';
   }[];
   /** Файлы каталога шаблонов: имя → содержимое. */
   readonly templates: Readonly<Record<string, string>>;
@@ -340,7 +354,10 @@ function installExtraSource(
     `${JSON.stringify(
       {
         name: spec.packageName,
-        version: '0.1.0',
+        // `null` — ключа нет вовсе: обвес версию не назвал. Пустой строки здесь
+        // не бывает, потому что её не бывает и в жизни: либо версия есть, либо
+        // поля нет.
+        ...(spec.version === null ? {} : { version: spec.version ?? '0.1.0' }),
         baser: {
           formVersion: 2,
           source: {
@@ -354,6 +371,7 @@ function installExtraSource(
             src: entry.src,
             dest: entry.dest,
             ...(entry.render === false ? { render: false } : {}),
+            ...(entry.class === undefined ? {} : { class: entry.class }),
           })),
         },
       },

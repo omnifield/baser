@@ -101,7 +101,14 @@ export interface SourceReport {
   readonly id: string;
   readonly title: string;
   readonly packageName: string;
-  readonly packageVersion: string;
+  /**
+   * Версия пакета обвеса; `null` — обвес её не назвал.
+   *
+   * Тот же факт уезжает в паспорт укладки (`ManifestRecord.version`), и место у
+   * него ОДНО — манифест пакета: дверь его читает, показывает человеку и подаёт
+   * движку. Второго поля в объявлении нет и не будет (`kb:BASER2-2`).
+   */
+  readonly packageVersion: string | null;
   /** Абсолютный корень распакованного пакета. */
   readonly packageRoot: string;
   /** Корень содержимого, как объявил обвес: путь ВНУТРИ его пакета. */
