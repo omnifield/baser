@@ -1,6 +1,6 @@
 {
   "name": "@omnifield/baser-devbox",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Обвес девбокса: .devcontainer как шаблон с пресетом omnifield",
   "license": "MIT",
   "type": "module",
@@ -31,9 +31,15 @@
       },
       "image": {
         "title": "Базовый образ",
-        "description": "Upstream-образ Dev Containers. Версия рантайма приезжает отдельной настройкой.",
+        "description": "Upstream-образ Dev Containers. Версия рантайма приезжает отдельной настройкой, пользователь образа — тоже (imageUser): от него считаются домашние пути, и образ с другим пользователем требует заполнить обе.",
         "type": "string",
         "default": "mcr.microsoft.com/devcontainers/typescript-node"
+      },
+      "imageUser": {
+        "title": "Пользователь в базовом образе",
+        "description": "Под ним работает девбокс, и от него же считается всё домашнее: цели томов с кредами и pnpm-store, containerEnv, права на тома, адрес npmrc в подсказке про реестр. Домашний каталог берётся по соглашению — /root у root, /home/<имя> у остальных; образ, кладущий пользователя иначе, этой настройкой НЕ покрыт. Группа считается одноимённой с пользователем. Дефолт node — пользователь образа devcontainers/typescript-node; у devcontainers/base и у большинства чужих сборок это vscode.",
+        "type": "string",
+        "default": "node"
       },
       "runtimeVersion": {
         "title": "Версия Node в образе",
