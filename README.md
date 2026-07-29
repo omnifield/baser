@@ -21,7 +21,23 @@ pnpm exec nx release --dry-run             # предпросмотр релиз
 ## Пакеты
 | Пакет | Назначение |
 |---|---|
+| `@omnifield/baser-contracts` | хвостовик: форма, которой обвес объявляет себя станку |
+| `@omnifield/baser-materialize` | движок: план, применение, владение паспортом укладки `baser.lock.json` |
+| `@omnifield/baser-cli` | дверь: читает конфиг, разрешает значения, рендерит, зовёт движок, пишет на диск |
+| `@omnifield/baser-check` | проверка посадки: подходит ли обвес, ответ данными |
+| `@omnifield/baser-pack` | выдача: проверенный обвес с манифестом |
+| `@omnifield/baser-devbox` | первый настоящий обвес: `.devcontainer` с пресетом `omnifield` |
 | `@omnifield/baser-release` | (каркас) release-капабилити на nx release |
+
+## Вклад
+
+**Заголовок PR обязан быть по Conventional Commits: `<тип>(<зона>): <что сделано>`.** Мы мержим сквошем, поэтому заголовок PR — это и есть коммит в `main`, а `nx release` выводит по нему версию и changelog. Заголовок без типа оставит изменение невидимым для выпуска, а ломающее (`!`) не поднимет мажор. Проверяется в CI.
+
+```
+feat(materialize): класс артефакта в паспорте укладки (BASER2-51)
+fix(cli): дверь не сочиняет версию, которой обвес не назвал
+feat(devbox)!: объявление на форму 2
+```
 
 ## Релиз
 `nx release` управляет версиями/changelog из Conventional Commits (`feat`→minor, `fix`→patch). Публикация — воркфлоу `release.yml` (`workflow_dispatch`, ручной), OIDC + provenance на публичный npm. Идемпотентно: уже изданная версия — skip, не fail.
