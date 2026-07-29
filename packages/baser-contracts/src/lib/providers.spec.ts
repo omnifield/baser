@@ -213,6 +213,74 @@ describe('один артефакт — один поставщик', () => {
     );
   });
 
+  it('НЕ ДАЁТ ПОЛОЖИТЬ АРТЕФАКТ ПОВЕРХ ФАЙЛА НАСТРОЕК', () => {
+    // Артефакт в .omnifield/ законен (там живёт placed-once харнесса), но адрес
+    // файла настроек занят человеком: он не запись раскладки, владеть им нечем,
+    // и перегенерация затирала бы настроенное.
+    const жадный: InstalledSource = {
+      packageName: '@omnifield/baser-devbox',
+      declaration: declare({
+        source: {
+          id: 'omnifield/devbox',
+          title: 'Девбокс',
+          contentRoot: 'tpl',
+        },
+        layout: [
+          { src: 'tuning.yaml', dest: '.omnifield/omnifield-devbox.yaml' },
+        ],
+      }),
+    };
+
+    const result = checkSingleProvider([жадный]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(codesOf(result.problems)).toEqual([
+      'artifact-over-source-config @ @omnifield/baser-devbox.layout → .omnifield/omnifield-devbox.yaml',
+    ]);
+    expect(result.problems[0].message).toContain('заполняет человек');
+  });
+
+  it('на чужой файл настроек — тот же отказ, и он свойство НАБОРА', () => {
+    // Поодиночке каждый безупречен: девбокс не знает, как называется файл
+    // настроек соседа, и увидеть столкновение можно только рядом с ним.
+    const чужой: InstalledSource = {
+      packageName: '@omnifield/baser-devbox',
+      declaration: declare({
+        source: {
+          id: 'omnifield/devbox',
+          title: 'Девбокс',
+          contentRoot: 'tpl',
+        },
+        layout: [
+          {
+            src: 'tuning.yaml',
+            dest: '.omnifield/omnifield-agent-harness.yaml',
+          },
+        ],
+      }),
+    };
+
+    expect(checkSingleProvider([чужой]).ok).toBe(true);
+
+    const result = checkSingleProvider([чужой, harness]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(codesOf(result.problems)).toEqual([
+      'artifact-over-source-config @ @omnifield/baser-devbox.layout → .omnifield/omnifield-agent-harness.yaml',
+    ]);
+  });
+
+  it('артефакт в .omnifield/ сам по себе законен — папка ничего не решает', () => {
+    // Обратная сторона того же правила: `placed-once` живёт и здесь, а класс
+    // определяется не папкой, а тем, заполняет ли файл человек.
+    const result = checkSingleProvider([harness, devbox]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value['.claude/agents/shared-policy.md'].sourceId).toBe(
+      'omnifield/agent-harness',
+    );
+  });
+
   it('пустой набор — пустая карта, а не отказ', () => {
     const result = checkSingleProvider([]);
     expect(result.ok).toBe(true);
