@@ -27,12 +27,47 @@
  *
  * **Применение целиком либо никак.** Конфликт владения — и на диск не уходит
  * ничего, включая конфиг, который дверь родила бы этим же прогоном.
+ *
+ * ## Обвесов много — прогон по каждому (`tasker:BASER2-55`)
+ *
+ * Несколько инструментов в одном репозитории есть норма по построению
+ * (`kb:BASER2-4`), а движок считает план ПО ОДНОЙ декларации. Значит дверь
+ * читает перечень и гоняет прогон по каждому обвесу, сводя результат в один
+ * ответ. Отказ `multiple-sources` снят вместе с причиной, а не подавлен: пока
+ * движок считал сиротами чужие записи, проход по всем обвесам снёс бы репозиторий
+ * вместо отказа — теперь он распоряжается только своими (`tasker:BASER2-7`).
+ *
+ * Порядок фаз при этом ЕДИНЫЙ на весь набор, а не «весь прогон по одному, потом
+ * весь по второму»:
+ *
+ * ```
+ * объявления всех обвесов → карта владения над НАБОРОМ → значения и содержимое
+ *   каждого → [план обвеса → применение к виртуальному дереву]* → один сброс
+ * ```
+ *
+ * **Карта владения спрашивается у набора, а не у обвеса.** Столкновение двух
+ * инструментов на один `dest` — свойство комбинации: каждый обвес поодиночке
+ * безупречен (`checkSingleProvider`, `kb:BASER2-6`). Проверка стоит ДО всякого
+ * прогона, поэтому её отказ не зависит от того, чей прогон случился первым.
+ *
+ * **Виртуальное дерево доводится до конца обеими командами.** План второго
+ * обвеса считается по дереву, в котором первый уже применён, — иначе он был бы
+ * планом по состоянию, которого не будет. `plan` от `apply` по-прежнему
+ * отличается ровно сбросом: на диск у него не уходит ничего, а отчёт применения
+ * он не выдаёт вовсе — работой в репозитории это не было.
+ *
+ * **Столкновение дверь ДОНОСИТ, а не проглатывает.** Отказ движка
+ * `cross-source-dest` (путь уже числится за соседом) уезжает в ответ как есть, и
+ * порядком прогонов дверь его не снимает: перехват сделал бы владение функцией
+ * очереди в конфиге.
  */
 
 import {
   checkSingleProvider,
   FORM_VERSION,
   readSourceDeclaration,
+  type ArtifactOwners,
+  type ConsumerSourceEntry,
   type SourceDeclaration,
 } from '@omnifield/baser-contracts';
 import {
@@ -66,13 +101,18 @@ import {
   serializeConsumerConfig,
   type Repo,
 } from './repo.js';
-import { createDoorSource, renderLayout } from './render.js';
+import {
+  createDoorSource,
+  renderLayout,
+  type RenderedLayout,
+} from './render.js';
 import { loadDefaults, resolveValues, type SettingMovement } from './values.js';
 import type {
   ConfigReport,
   DoorCommand,
   DoorResult,
   SourceReport,
+  SourceRun,
   WriteReport,
 } from './result.js';
 
@@ -103,6 +143,29 @@ interface Session {
   /** Спаны фаз двери. Движок мерит себя сам и своим трейсом. */
   readonly trace: TraceRecorder;
   config: ConfigReport;
+}
+
+/**
+ * Прогон одного обвеса, пока он собирается.
+ *
+ * Черновик мутабелен намеренно: отказ может случиться на любой фазе, а рассказ
+ * про обвесы, которые дверь успела разобрать, обязан доехать до ответа целиком.
+ * Наружу уезжает `SourceRun` — та же запись, но уже неизменяемая.
+ */
+interface DraftRun {
+  readonly source: SourceReport;
+  settings: readonly SettingMovement[];
+  plan: MaterializationPlan | null;
+  applied: ApplyReport | null;
+}
+
+/** Обвес, доведённый до входа в движок: объявление, содержимое, черновик. */
+interface Prepared {
+  readonly declaration: SourceDeclaration;
+  readonly pkg: InstalledPackage;
+  readonly location: SourceLocation;
+  readonly rendered: RenderedLayout;
+  readonly draft: DraftRun;
 }
 
 /** Прогон двери. Бросков наружу не делает: сбой — тоже ответ. */
@@ -158,130 +221,135 @@ async function runInRepo(
     return { ...shell(session), status: 'no-sources' };
   }
 
-  // ── 2. Обвес. Ровно один — см. `multiple-sources`.
-  if (config.sources.length > 1) {
-    log.add(
-      'multiple-sources',
-      `${session.config.path}.sources`,
-      `поставлено обвесов: ${config.sources.length} (${config.sources
-        .map((entry) => entry.use)
-        .join(
-          ' · ',
-        )}). Форма это допускает с первого дня, а движок сегодня — нет: ` +
-        'план строится по ОДНОЙ декларации, а сироты ищутся по всем записям манифеста, ' +
-        'поэтому второй прогон снял бы артефакты первого как потерявшие объявление. ' +
-        'Отказ вместо тихой порчи; много источников целиком — отдельная работа (A5)',
-    );
-    return refused(session, log.list());
-  }
-
-  const entry = config.sources[0];
-  const declared = trace.span('door.declaration', () => {
-    const installed = resolveInstalledPackage(entry.use, repo.root);
-    if (!installed.ok) {
-      log.add(
-        installed.failure.reason === 'not-found'
-          ? 'package-not-found'
-          : 'package-manifest-unreadable',
-        `${session.config.path}.sources[0].use`,
-        installed.failure.detail,
-      );
-      return null;
-    }
-
-    const parsed = readSourceDeclaration(
-      installed.value.manifest,
-      `${installed.value.packageName}/package.json`,
-    );
-    if (!parsed.ok) {
-      log.addAll(parsed.problems);
-      return null;
-    }
-
-    // Карта владения над всеми поставленными обвесами сразу. Сегодня обвес
-    // один, и проверка ловит столкновение ВНУТРИ него; список здесь не ради
-    // будущего, а потому что столкновение — свойство НАБОРА, и спрашивать про
-    // него надо там, где набор есть (`kb:BASER2-6`).
-    const owners = checkSingleProvider([
-      { declaration: parsed.value, packageName: installed.value.packageName },
-    ]);
-    if (!owners.ok) {
-      log.addAll(owners.problems);
-      return null;
-    }
-
-    return { declaration: parsed.value, pkg: installed.value };
-  });
-
+  // ── 2. Объявления ВСЕХ поставленных обвесов.
+  //
+  // Разбор идёт по всему перечню и не встаёт на первом непригодном: два
+  // ненайденных пакета — это два отказа, а не два прогона по штуке.
+  const drafts: DraftRun[] = [];
+  const declared = trace.span(
+    'door.declarations',
+    () => readDeclarations(config.sources, repo, session.config.path, log),
+    { sources: config.sources.length },
+  );
   if (declared === null) {
     return refused(session, log.list());
   }
-  const { declaration, pkg } = declared;
 
-  const location = locateContentRoot(
-    repo.root,
-    pkg.root,
-    declaration.source.contentRoot,
-  );
-  const source = describeSource(declaration, pkg, location);
-
-  // ── 3. Значения и движение дефолта.
-  //
-  // Загрузка модулей резолверов асинхронна, а спаны трейса — синхронны, и это
-  // не недосмотр: резолвер обязан быть синхронной чистой функцией, асинхронна
-  // только доставка его модуля. Она отмечается счётчиком, а не длительностью —
-  // мерить нечего, а врать нулевым спаном хуже, чем не мерить.
-  const defaults = await loadDefaults(declaration, pkg, repo);
-  trace.event('door.resolvers', {
-    settings: Object.keys(declaration.settings).length,
-  });
-
-  const values = trace.span('door.values', () =>
-    resolveValues(declaration, entry, defaults),
-  );
-  if (!values.ok) {
-    log.addAll(values.problems);
-    return refused(session, log.list(), source);
+  for (const item of declared) {
+    drafts.push({
+      source: describeSource(item.declaration, item.pkg, item.location),
+      settings: [],
+      plan: null,
+      applied: null,
+    });
   }
-  const { movements } = values.value;
 
-  // ── 4. Содержимое. Форма проверяется ДО подстановки, движок значений не видит.
-  const rendered = trace.span(
-    'door.render',
-    () => renderLayout(declaration, pkg, values.value.values),
-    { templates: declaration.layout.length },
+  // ── 3. Карта владения над НАБОРОМ обвесов.
+  //
+  // Столкновение двух инструментов на один `dest` — свойство комбинации, а не
+  // обвеса: каждый поодиночке безупречен, непригодны они вместе (`kb:BASER2-6`).
+  // Спрашивается это ДО всякого прогона — поэтому отказ не зависит от того, чей
+  // прогон случился первым, и порядком записей в конфиге не разрешается.
+  const owned = trace.span(
+    'door.owners',
+    () =>
+      checkSingleProvider(
+        declared.map((item) => ({
+          declaration: item.declaration,
+          packageName: item.pkg.packageName,
+        })),
+      ),
+    { sources: declared.length },
   );
-  if (rendered.problems.length > 0) {
-    log.addAll(rendered.problems);
-    return refused(session, log.list(), source, movements);
+  if (!owned.ok) {
+    log.addAll(owned.problems);
+    return refused(session, log.list(), drafts);
+  }
+  const owners = owned.value;
+
+  // ── 4. Значения и содержимое — по каждому обвесу.
+  const prepared: Prepared[] = [];
+  for (const [index, item] of declared.entries()) {
+    const ready = await prepare(item, config.sources[index], drafts[index], {
+      repo,
+      trace,
+      log,
+    });
+    if (ready !== null) {
+      prepared.push(ready);
+    }
+  }
+  if (!log.empty) {
+    return refused(session, log.list(), drafts);
   }
 
   // ── 5. Дерево. `plan` и `apply` строят одно и то же — расходятся на сбросе.
   const tree = createRepoTree(repo.root);
+
+  // Снимок ДО всякой записи: следующие прогоны положат в дерево служебную
+  // запись, и признак «записи здесь нет» перестал бы отличать первую установку
+  // от второго обвеса, который просто лёг раньше.
+  const hadManifest = tree.exists(MANIFEST_PATH);
+
   if (creates) {
     tree.write(session.config.path, serializeConsumerConfig(config));
   }
 
-  let plan: MaterializationPlan;
-  try {
-    plan = computePlan({
-      tree,
-      declaration: engineInput(declaration, location),
-      source: createDoorSource(rendered, declaration, pkg),
-      ...(options.confirm ? { confirm: options.confirm } : {}),
-    });
-  } catch (cause) {
-    log.add(...engineRefusal(cause, source));
-    return refused(session, log.list(), source, movements);
+  // ── 6. Прогон по каждому обвесу: план → применение к ВИРТУАЛЬНОМУ дереву.
+  //
+  // Применяется и под командой `plan`: план второго обвеса обязан считаться по
+  // дереву, в котором первый уже лёг, иначе это план по состоянию, которого не
+  // будет. На диск при этом не уходит ничего — сброса ниже у `plan` нет.
+  let blocked = false;
+  for (const item of prepared) {
+    const { draft } = item;
+    let plan: MaterializationPlan;
+    try {
+      plan = computePlan({
+        tree,
+        declaration: engineInput(item.declaration, item.location),
+        source: createDoorSource(item.rendered, item.declaration, item.pkg),
+        ...(options.confirm
+          ? { confirm: confirmFor(draft.source.id, owners, options.confirm) }
+          : {}),
+      });
+    } catch (cause) {
+      log.add(...engineRefusal(cause, draft.source));
+      return refused(session, log.list(), drafts);
+    }
+    draft.plan = plan;
+
+    // Заблокированный прогон к дереву не применяется, а разбор идёт дальше:
+    // соседний обвес целится в СВОИ пути (карта владения выше это доказала), и
+    // его отказ, если он есть, тоже обязан быть назван. Применения при этом не
+    // случится ни у кого — на диск не уйдёт ничего.
+    if (plan.status === 'blocked') {
+      blocked = true;
+      continue;
+    }
+
+    let applied: ApplyReport;
+    try {
+      applied = applyPlan(tree, plan);
+    } catch (cause) {
+      log.add(...engineRefusal(cause, draft.source));
+      return refused(session, log.list(), drafts);
+    }
+    // У `plan` отчёта применения нет вовсе: применяли виртуальное дерево, а не
+    // репозиторий, и назвать это «применено» значило бы отчитаться о работе,
+    // которой на диске не было.
+    if (options.command === 'apply') {
+      draft.applied = applied;
+    }
   }
 
-  const base = { ...shell(session), source, settings: movements, plan };
+  const base = { ...shell(session), runs: freeze(drafts) };
 
-  if (plan.status === 'blocked') {
+  if (blocked) {
     // Отказы движка остаются его отказами — дверь их не переписывает. Но у
     // пачки «файл уже существует» бывает одна общая причина, которую видно
     // только отсюда, и назвать её обязана дверь.
-    const why = diagnoseForeignDests(tree, plan, session.config);
+    const why = diagnoseForeignDests(hadManifest, drafts, session.config);
     if (why !== null) {
       log.addAll([why]);
     }
@@ -293,16 +361,17 @@ async function runInRepo(
     };
   }
 
-  // Есть ли работа — вопрос ко ВСЕМУ прогону, а не к одному плану. Конфиг,
-  // который дверь родит этим прогоном, движок своим шагом не считает и считать
-  // не может: он о нём не знает. Гейт, спросивший «сошлось?» и получивший «да»
-  // там, где `apply` ещё поменяет репозиторий, зеленел бы вхолостую.
-  const work = plan.steps.length > 0 || creates;
+  // Есть ли работа — вопрос ко ВСЕМУ прогону, а не к одному плану и не к одному
+  // обвесу. Конфиг, который дверь родит этим прогоном, движок своим шагом не
+  // считает и считать не может: он о нём не знает. Гейт, спросивший «сошлось?» и
+  // получивший «да» там, где `apply` ещё поменяет репозиторий, зеленел бы
+  // вхолостую.
+  const work = drafts.some((draft) => hasWork(draft)) || creates;
 
   if (options.command === 'plan') {
     // `plan` не пишет — значит и записей у него нет. Что ЛЯЖЕТ, читается из
-    // `plan.steps` и `config.creates`; дублировать это третьим списком значило
-    // бы завести две правды об одном.
+    // `runs[].plan.steps` и `config.creates`; дублировать это третьим списком
+    // значило бы завести две правды об одном.
     return {
       ...base,
       status: work ? 'pending' : 'converged',
@@ -310,21 +379,14 @@ async function runInRepo(
     };
   }
 
-  // ── 6. Применение и сброс на реальную ФС.
-  let applied: ApplyReport;
-  try {
-    applied = applyPlan(tree, plan);
-  } catch (cause) {
-    log.add(...engineRefusal(cause, source));
-    return refused(session, log.list(), source, movements, plan);
-  }
-
+  // ── 7. Сброс на реальную ФС — ОДИН на все обвесы.
+  //
   // Сходимость отделена от применения ровно так же, как у движка отделена от
   // пустоты: «применено» на дереве, где применять было нечего, — это отчёт о
   // работе, которой не было.
   const writes = changesOf(tree);
   if (writes.length === 0) {
-    return { ...base, status: 'converged', applied, trace: trace.snapshot() };
+    return { ...base, status: 'converged', trace: trace.snapshot() };
   }
 
   try {
@@ -338,16 +400,170 @@ async function runInRepo(
       `сброс дерева на диск сорвался: ${describe(cause)}. Движок откатить это ` +
         'не может — его журнал кончается на виртуальном дереве',
     );
-    return refused(session, log.list(), source, movements, plan);
+    return refused(session, log.list(), drafts);
   }
 
   return {
     ...base,
     status: 'applied',
-    applied,
     writes,
     trace: trace.snapshot(),
   };
+}
+
+/** Объявление обвеса плюс то, где физически лежит его содержимое. */
+interface DeclaredSource {
+  readonly declaration: SourceDeclaration;
+  readonly pkg: InstalledPackage;
+  readonly location: SourceLocation;
+}
+
+/**
+ * Читает объявления всех поставленных обвесов.
+ *
+ * `null` — хоть один непригоден, и прогона не будет: раскладывать половину
+ * набора нельзя, потому что применение проходит целиком либо никак. Отказы при
+ * этом собраны по ВСЕМУ перечню — адрес каждого несёт индекс записи конфига,
+ * иначе при двух одинаковых кодах непонятно, какую из них чинить.
+ */
+function readDeclarations(
+  entries: readonly ConsumerSourceEntry[],
+  repo: Repo,
+  configPath: string,
+  log: DoorProblemLog,
+): DeclaredSource[] | null {
+  const declared: DeclaredSource[] = [];
+
+  for (const [index, entry] of entries.entries()) {
+    const at = `${configPath}.sources[${index}].use`;
+    const installed = resolveInstalledPackage(entry.use, repo.root);
+    if (!installed.ok) {
+      log.add(
+        installed.failure.reason === 'not-found'
+          ? 'package-not-found'
+          : 'package-manifest-unreadable',
+        at,
+        installed.failure.detail,
+      );
+      continue;
+    }
+
+    const parsed = readSourceDeclaration(
+      installed.value.manifest,
+      `${installed.value.packageName}/package.json`,
+    );
+    if (!parsed.ok) {
+      log.addAll(parsed.problems);
+      continue;
+    }
+
+    declared.push({
+      declaration: parsed.value,
+      pkg: installed.value,
+      location: locateContentRoot(
+        repo.root,
+        installed.value.root,
+        parsed.value.source.contentRoot,
+      ),
+    });
+  }
+
+  return log.empty ? declared : null;
+}
+
+interface PrepareContext {
+  readonly repo: Repo;
+  readonly trace: TraceRecorder;
+  readonly log: DoorProblemLog;
+}
+
+/**
+ * Значения и готовое содержимое одного обвеса.
+ *
+ * Отказ здесь не уносит соседей: черновик обвеса всё равно доезжает до ответа с
+ * тем, что дверь про него успела узнать, а разбор идёт к следующему.
+ */
+async function prepare(
+  item: DeclaredSource,
+  entry: ConsumerSourceEntry,
+  draft: DraftRun,
+  context: PrepareContext,
+): Promise<Prepared | null> {
+  const { declaration, pkg } = item;
+  const { repo, trace, log } = context;
+  const source = draft.source.id;
+
+  // Загрузка модулей резолверов асинхронна, а спаны трейса — синхронны, и это
+  // не недосмотр: резолвер обязан быть синхронной чистой функцией, асинхронна
+  // только доставка его модуля. Она отмечается счётчиком, а не длительностью —
+  // мерить нечего, а врать нулевым спаном хуже, чем не мерить.
+  const defaults = await loadDefaults(declaration, pkg, repo);
+  trace.event('door.resolvers', {
+    source,
+    settings: Object.keys(declaration.settings).length,
+  });
+
+  const values = trace.span(
+    'door.values',
+    () => resolveValues(declaration, entry, defaults),
+    { source },
+  );
+  if (!values.ok) {
+    log.addAll(values.problems);
+    return null;
+  }
+  draft.settings = values.value.movements;
+
+  // Содержимое. Форма проверяется ДО подстановки, движок значений не видит.
+  const rendered = trace.span(
+    'door.render',
+    () => renderLayout(declaration, pkg, values.value.values),
+    { source, templates: declaration.layout.length },
+  );
+  if (rendered.problems.length > 0) {
+    log.addAll(rendered.problems);
+    return null;
+  }
+
+  return { ...item, rendered, draft };
+}
+
+/**
+ * Подтверждения, адресованные ИМЕННО этому обвесу.
+ *
+ * Подтверждение поимённо — правило движка, а он видит одну декларацию за прогон
+ * и про соседние `dest` знает только «в моей раскладке такого нет». Отдать ему
+ * весь список значило бы получить это извещение на артефакт, который сосед
+ * кладёт совершенно законно, — верное по одному плану и неверное по набору.
+ *
+ * Путь, которого не кладёт НИКТО, при этом отдаётся всем: опечатка в `--confirm`
+ * обязана быть названа, и называет её движок своим `confirmation-unused`, а не
+ * дверь вторым языком поверх (`tasker:BASER2-24`).
+ */
+function confirmFor(
+  sourceId: string,
+  owners: ArtifactOwners,
+  confirm: readonly string[],
+): readonly string[] {
+  return confirm.filter((dest) => {
+    const owner = owners[dest];
+    return owner === undefined || owner.sourceId === sourceId;
+  });
+}
+
+/** Породит ли этот прогон работу: шаги движка считаются по каждому обвесу. */
+function hasWork(draft: DraftRun): boolean {
+  return draft.plan !== null && draft.plan.steps.length > 0;
+}
+
+/** Черновики — наружу неизменяемыми: ответ двери данные, а не рабочее место. */
+function freeze(drafts: readonly DraftRun[]): readonly SourceRun[] {
+  return drafts.map((draft) => ({
+    source: draft.source,
+    settings: draft.settings,
+    plan: draft.plan,
+    applied: draft.applied,
+  }));
 }
 
 /**
@@ -441,18 +657,28 @@ function engineRefusal(
  * Условие узкое намеренно: записи нет И при этом есть отказы «файл уже
  * существует». В пустом репозитории таких отказов нет — и сообщения тоже, иначе
  * оно кричало бы каждому новому потребителю и через неделю перестало читаться.
+ *
+ * Считается по ВСЕМ обвесам сразу и говорится ОДИН раз: причина у пачки общая —
+ * записи нет на весь репозиторий, — и повторить её на каждый обвес значило бы
+ * сказать одно и то же столько раз, сколько инструментов поставлено.
+ *
+ * Существование записи берётся СНИМКОМ до прогонов, а не с дерева: соседний
+ * обвес, легший раньше, уже положил бы её в дерево, и признак начал бы
+ * молчать ровно там, где он и нужен.
  */
 function diagnoseForeignDests(
-  tree: RepoTree,
-  plan: MaterializationPlan,
+  hadManifest: boolean,
+  drafts: readonly DraftRun[],
   config: ConfigReport,
 ): DoorProblem | null {
-  if (tree.exists(MANIFEST_PATH)) {
+  if (hadManifest) {
     return null;
   }
 
-  const foreign = plan.conflicts.filter(
-    (conflict) => conflict.kind === 'foreign-dest',
+  const foreign = drafts.flatMap((draft) =>
+    (draft.plan?.conflicts ?? []).filter(
+      (conflict) => conflict.kind === 'foreign-dest',
+    ),
   );
   if (foreign.length === 0) {
     return null;
@@ -537,10 +763,7 @@ function shell(session: Session): Omit<DoorResult, 'status'> {
     command: session.command,
     repo: { root: session.repo.root, name: session.repo.name },
     config: session.config,
-    source: null,
-    settings: [],
-    plan: null,
-    applied: null,
+    runs: [],
     writes: [],
     trace: session.trace.snapshot(),
     problems: [],
@@ -557,16 +780,12 @@ function shell(session: Session): Omit<DoorResult, 'status'> {
 function refused(
   session: Session,
   problems: readonly DoorProblem[],
-  source: SourceReport | null = null,
-  settings: readonly SettingMovement[] = [],
-  plan: MaterializationPlan | null = null,
+  drafts: readonly DraftRun[] = [],
 ): DoorResult {
   return {
     ...shell(session),
     status: 'refused',
-    source,
-    settings,
-    plan,
+    runs: freeze(drafts),
     problems,
   };
 }

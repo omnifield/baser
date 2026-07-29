@@ -20,7 +20,7 @@ import { describePlan } from '@omnifield/baser-materialize';
 import type { CheckReport } from '@omnifield/baser-check';
 import type { PackReport } from '@omnifield/baser-pack';
 import type { BundleReport } from './bundle.js';
-import type { DoorResult } from './result.js';
+import type { DoorResult, SourceRun } from './result.js';
 import type { SettingLink, SettingMovement } from './values.js';
 
 const STATUS_LINE: Record<DoorResult['status'], string> = {
@@ -40,19 +40,6 @@ export function renderText(result: DoorResult): string {
 
   lines.push(`baser ${result.command} · ${result.repo.root}`);
 
-  if (result.source) {
-    const { source } = result;
-    lines.push(
-      `обвес: ${source.id} — ${source.title}`,
-      `  пакет ${source.packageName}@${source.packageVersion}`,
-      `  шаблоны ${
-        source.location.kind === 'in-tree'
-          ? source.location.path
-          : `${source.location.absolute} (вне этого репозитория)`
-      }`,
-    );
-  }
-
   if (result.config.creates) {
     lines.push(
       `конфиг: ${result.config.path} ${
@@ -61,12 +48,16 @@ export function renderText(result: DoorResult): string {
     );
   }
 
-  if (result.settings.length > 0) {
-    lines.push('', ...renderMovement(result.settings));
+  // Обвесов бывает много (`kb:BASER2-4`), и счётчик печатается ровно тогда,
+  // когда их больше одного: строка «обвесов: 1» ничего не сообщает, а строку
+  // «обвесов: 2» человек обязан увидеть до того, как начнёт читать два плана
+  // подряд и гадать, почему их два.
+  if (result.runs.length > 1) {
+    lines.push(`обвесов: ${result.runs.length}`);
   }
 
-  if (result.plan) {
-    lines.push('', describePlan(result.plan));
+  for (const run of result.runs) {
+    lines.push('', ...renderRun(run));
   }
 
   if (result.writes.length > 0) {
@@ -92,6 +83,37 @@ export function renderText(result: DoorResult): string {
 
   lines.push('', STATUS_LINE[result.status]);
   return lines.join('\n');
+}
+
+/**
+ * Прогон одного обвеса: кто он, что привёз, что сделает.
+ *
+ * Блок цельный и по обвесу, а не по разделам через весь вывод: два инструмента,
+ * чьи значения напечатаны в одном месте, а планы — в другом, читались бы как
+ * один общий план, и «эта версия ноды поднимется» относилось бы неизвестно к
+ * чему. Внутри блока порядок прежний — движение ВЫШЕ плана.
+ */
+function renderRun(run: SourceRun): string[] {
+  const { source } = run;
+  const lines = [
+    `обвес: ${source.id} — ${source.title}`,
+    `  пакет ${source.packageName}@${source.packageVersion}`,
+    `  шаблоны ${
+      source.location.kind === 'in-tree'
+        ? source.location.path
+        : `${source.location.absolute} (вне этого репозитория)`
+    }`,
+  ];
+
+  if (run.settings.length > 0) {
+    lines.push('', ...renderMovement(run.settings));
+  }
+
+  if (run.plan) {
+    lines.push('', describePlan(run.plan));
+  }
+
+  return lines;
 }
 
 /**

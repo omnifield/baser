@@ -14,6 +14,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   installDevbox,
+  soleRun,
   DEVBOX_PACKAGE,
   type Consumer,
 } from './devbox.fixture.js';
@@ -40,7 +41,9 @@ function install(entry: Record<string, unknown> = {}): Consumer {
 
 async function movements(box: Consumer): Promise<Map<string, SettingMovement>> {
   const result = await run({ command: 'plan', cwd: box.root });
-  return new Map(result.settings.map((setting) => [setting.key, setting]));
+  return new Map(
+    soleRun(result).settings.map((setting) => [setting.key, setting]),
+  );
 }
 
 /** Резолверы, поднявшие версию рантайма: обвес выпустился заново. */
@@ -155,7 +158,7 @@ describe('движение названо ДО применения, а не п�
     const result = await run({ command: 'plan', cwd: install().root });
     const text = renderText(result);
 
-    for (const setting of result.settings) {
+    for (const setting of soleRun(result).settings) {
       expect(text).toContain(setting.key);
       expect(text).toContain(JSON.stringify(setting.value));
     }

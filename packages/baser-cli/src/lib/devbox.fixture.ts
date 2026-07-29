@@ -1,5 +1,5 @@
 /**
- * ЧИСТОЕ ДЕРЕВО С ПОСТАВЛЕННЫМ ОБВЕСОМ.
+ * ЧИСТОЕ ДЕРЕВО С ПОСТАВЛЕННЫМИ ОБВЕСАМИ.
  *
  * Приёмка двери — не мок. Дверь берёт обвес с реальной ФС, грузит его резолверы
  * как настоящие модули и кладёт файлы на настоящий диск; фикстура, подменившая
@@ -15,6 +15,14 @@
  * Отсюда же и главный инструмент фикстуры — `updateSource`. Контракт проверяется
  * ПЕРЕХОДАМИ, а не устойчивыми состояниями (`packages/baser-materialize`,
  * `transitions.spec.ts`), а центральный переход у двери один: обвес обновился.
+ *
+ * **Второй обвес ставится тем же способом** (`installSource`, `tasker:BASER2-55`):
+ * пакет в `node_modules` плюс строка в `devDependencies` — ровно то, что делает
+ * npm, и ровно то, по чему дверь обвесы находит. Объявление у него собирается
+ * здесь, а не берётся из примера: живой пример зоны контрактов ровно один, а
+ * второй инструмент нужен именно как ВТОРОЙ — со своей идентичностью, своими
+ * путями и своими настройками (живой случай `tasker:BASER2-44` — девбокс плюс
+ * плагин агентов).
  *
  * Файл исключён из сборки пакета.
  */
@@ -37,6 +45,7 @@ import {
   readManifest,
   type ManifestRecord,
 } from '@omnifield/baser-materialize';
+import type { DoorResult, SourceRun } from './result.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -70,7 +79,46 @@ export interface Consumer {
   updateResolvers(source: string): void;
   /** Кладёт файл в каталог шаблонов обвеса. */
   writeTemplate(name: string, content: string): void;
+  /**
+   * Ставит ЕЩЁ ОДИН обвес: пакет в `node_modules` и строка в `devDependencies`.
+   *
+   * Возвращает то же, чем правят девбокс, — правка объявления второго обвеса
+   * нужна ровно так же (переход «обвес обновился» бывает у любого из них).
+   */
+  installSource(spec: SourceSpec): InstalledSource;
+  /** Снимает поставленный обвес целиком — и пакет, и запись о зависимости. */
+  removeSource(packageName: string): void;
   cleanup(): void;
+}
+
+/** Второй обвес: что он объявляет и что везёт. */
+export interface SourceSpec {
+  /** Имя пакета — то, что попадёт в `use` конфига потребителя. */
+  readonly packageName: string;
+  /** Идентичность обвеса: то, чем подписаны его записи в паспорте укладки. */
+  readonly id: string;
+  readonly title?: string;
+  readonly layout: readonly {
+    readonly src: string;
+    readonly dest: string;
+    readonly render?: boolean;
+  }[];
+  /** Файлы каталога шаблонов: имя → содержимое. */
+  readonly templates: Readonly<Record<string, string>>;
+  /** Настройки обвеса; по умолчанию их нет. */
+  readonly settings?: Readonly<Record<string, unknown>>;
+  readonly presets?: Readonly<Record<string, unknown>>;
+}
+
+/** Ручка к поставленному обвесу: правки его объявления и его шаблонов. */
+export interface InstalledSource {
+  readonly packageName: string;
+  readonly root: string;
+  updateSource(
+    patch: (block: DeclarationBlock) => void,
+    version?: string,
+  ): void;
+  writeTemplate(name: string, content: string): void;
 }
 
 /** Блок `baser` манифеста обвеса — как есть, без типизации формы. */
@@ -196,6 +244,27 @@ export function installDevbox(options: InstallOptions = {}): Consumer {
     writeTemplate(name, content) {
       writeFileSync(join(sourceRoot, 'template', name), content);
     },
+    installSource(spec) {
+      return installExtraSource(
+        options.hoisted === true ? box : root,
+        root,
+        spec,
+      );
+    },
+    removeSource(packageName) {
+      rmSync(
+        join(
+          options.hoisted === true ? box : root,
+          'node_modules',
+          packageName,
+        ),
+        {
+          force: true,
+          recursive: true,
+        },
+      );
+      dropDependency(root, packageName);
+    },
     cleanup() {
       rmSync(box, { force: true, recursive: true });
     },
@@ -215,6 +284,109 @@ export function installDevbox(options: InstallOptions = {}): Consumer {
 }
 
 /**
+ * Ставит обвес так же, как его поставил бы npm: пакет плюс зависимость.
+ *
+ * Половина установки уже стоила нам дефекта (`README.md`, «ручная доставка»):
+ * дверь ищет обвесы по ОБЪЯВЛЕННЫМ зависимостям, и каталог без строки в
+ * `devDependencies` для неё не поставлен вовсе. Фикстура, копирующая только
+ * файлы, проверяла бы дверь на состоянии, которого у пакетного менеджера не
+ * бывает.
+ */
+function installExtraSource(
+  modulesRoot: string,
+  repoRoot: string,
+  spec: SourceSpec,
+): InstalledSource {
+  const root = join(modulesRoot, 'node_modules', spec.packageName);
+  mkdirSync(join(root, 'template'), { recursive: true });
+
+  writeFileSync(
+    join(root, 'package.json'),
+    `${JSON.stringify(
+      {
+        name: spec.packageName,
+        version: '0.1.0',
+        baser: {
+          formVersion: 1,
+          source: {
+            id: spec.id,
+            title: spec.title ?? spec.id,
+            contentRoot: 'template',
+          },
+          settings: spec.settings ?? {},
+          presets: spec.presets ?? {},
+          layout: spec.layout.map((entry) => ({
+            src: entry.src,
+            dest: entry.dest,
+            ...(entry.render === false ? { render: false } : {}),
+          })),
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  for (const [name, content] of Object.entries(spec.templates)) {
+    writeFileSync(join(root, 'template', name), content);
+  }
+
+  addDependency(repoRoot, spec.packageName);
+
+  return {
+    packageName: spec.packageName,
+    root,
+    updateSource(patch, version) {
+      const manifestPath = join(root, 'package.json');
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as {
+        version: string;
+        baser: DeclarationBlock;
+      };
+      patch(manifest.baser);
+      if (version !== undefined) {
+        manifest.version = version;
+      }
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    },
+    writeTemplate(name, content) {
+      writeFileSync(join(root, 'template', name), content);
+    },
+  };
+}
+
+function addDependency(repoRoot: string, packageName: string): void {
+  patchManifest(repoRoot, (manifest) => {
+    const deps = (manifest['devDependencies'] ?? {}) as Record<string, string>;
+    deps[packageName] = '0.1.0';
+    manifest['devDependencies'] = deps;
+  });
+}
+
+function dropDependency(repoRoot: string, packageName: string): void {
+  patchManifest(repoRoot, (manifest) => {
+    const deps = manifest['devDependencies'] as
+      | Record<string, string>
+      | undefined;
+    if (deps) {
+      delete deps[packageName];
+    }
+  });
+}
+
+function patchManifest(
+  repoRoot: string,
+  patch: (manifest: Record<string, unknown>) => void,
+): void {
+  const path = join(repoRoot, 'package.json');
+  const manifest = JSON.parse(readFileSync(path, 'utf-8')) as Record<
+    string,
+    unknown
+  >;
+  patch(manifest);
+  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+/**
  * УДАЛЕНО: `makeArtifactOwnable` и `withoutMarker`.
  *
  * Оба были обходом одного блокера — служебной записи ВНУТРИ артефакта. Первый
@@ -226,6 +398,24 @@ export function installDevbox(options: InstallOptions = {}): Consumer {
  * `devcontainer.json`, а тело артефакта равно телу шаблона. Приёмка двери с
  * этого места идёт по НАСТОЯЩЕЙ раскладке обвеса, без обходов.
  */
+
+/**
+ * Прогон ЕДИНСТВЕННОГО обвеса из ответа двери.
+ *
+ * Обвесов в ответе столько же, сколько поставлено (`tasker:BASER2-55`), и пробы
+ * про один обвес спрашивают именно его. Хелпер бросает, если обвес не один:
+ * молчаливое `runs[0]` в такой пробе однажды начало бы проверять первый из двух
+ * и зеленеть на половине ответа.
+ */
+export function soleRun(result: DoorResult): SourceRun {
+  if (result.runs.length !== 1) {
+    throw new Error(
+      `ожидался ровно один прогон, а их ${result.runs.length}: ` +
+        result.runs.map((run) => run.source.id).join(' · '),
+    );
+  }
+  return result.runs[0];
+}
 
 /** Живой `.devcontainer` этого репозитория — эталон приёмки. */
 export function liveArtifact(dest: string): string {

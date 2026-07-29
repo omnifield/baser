@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { FORM_VERSION } from '@omnifield/baser-contracts';
 import {
   installDevbox,
+  soleRun,
   DEVBOX_PACKAGE,
   type Consumer,
   type InstallOptions,
@@ -26,6 +27,7 @@ import {
 import { cli, type CliOutcome } from './cli.js';
 import { run } from './run.js';
 import { renderText } from './report.js';
+import type { DoorResult } from './result.js';
 
 let consumer: Consumer | null = null;
 
@@ -85,7 +87,7 @@ describe('конфиг потребителя рождается один раз
 
     const plan = await run({ command: 'plan', cwd: box.root });
 
-    expect(plan.plan?.status).toBe('converged');
+    expect(soleRun(plan).plan?.status).toBe('converged');
     expect(plan.status).toBe('pending');
     expect(plan.config.creates).toBe(true);
     // И `plan` по-прежнему не пишет: список записей у него пуст по построению.
@@ -161,8 +163,10 @@ describe('отказ говорит чужим кодом, когда код е�
 
     expect(result.status).toBe('refused');
     expect(result.problems[0].code).toBe('template-not-ejs');
-    // Отказ до движка — значит и плана нет, и на диск не ушло ничего.
-    expect(result.plan).toBeNull();
+    // Отказ до движка — значит и плана нет, и на диск не ушло ничего. Рассказ
+    // про обвес при этом остаётся: отказ его не обнуляет.
+    expect(soleRun(result).plan).toBeNull();
+    expect(soleRun(result).source.id).toBe('omnifield/devbox');
     expect(box.exists('.devcontainer')).toBe(false);
   });
 
@@ -195,7 +199,9 @@ describe('отказ говорит чужим кодом, когда код е�
     expect(outcome.exitCode).toBe(2);
   });
 
-  it('обвесов больше одного — отказ с ПРИЧИНОЙ, а не «пока не поддерживается»', async () => {
+  it('отказ по ВТОРОМУ обвесу адресуется вторым, а не первым', async () => {
+    // Разбор идёт по всему перечню и не встаёт на первом: адрес отказа несёт
+    // индекс записи, иначе с двумя одинаковыми кодами непонятно, какую чинить.
     const box = install({
       config: {
         formVersion: 1,
@@ -207,12 +213,12 @@ describe('отказ говорит чужим кодом, когда код е�
 
     expect(result.status).toBe('refused');
     const [problem] = result.problems;
-    expect(problem.code).toBe('multiple-sources');
-    // Причина, а не следствие: план строится по одной декларации, а сироты
-    // ищутся по всем записям манифеста — второй прогон снял бы артефакты
-    // первого как потерявшие объявление.
-    expect(problem.message).toContain(
-      'сироты ищутся по всем записям манифеста',
+    expect(problem.code).toBe('package-not-found');
+    expect(problem.at).toBe('baser.json.sources[1].use');
+    // Кода `multiple-sources` больше нет: он снят вместе с причиной, а не
+    // подавлен (`tasker:BASER2-55`).
+    expect(result.problems.map((item) => item.code)).not.toContain(
+      'multiple-sources',
     );
   });
 });
@@ -225,7 +231,7 @@ describe('шов contentRoot: источник вне дерева', () => {
 
     // Пакет резолвится (Node идёт вверх), но репо-относительного пути к его
     // шаблонам не существует — и дверь говорит именно это.
-    expect(result.source?.location.kind).toBe('outside-tree');
+    expect(soleRun(result).source.location.kind).toBe('outside-tree');
     expect(result.status).toBe('refused');
     expect(result.problems[0].code).toBe('source-outside-tree');
   });
@@ -235,7 +241,7 @@ describe('шов contentRoot: источник вне дерева', () => {
 
     const result = await run({ command: 'plan', cwd: box.root });
 
-    expect(result.source?.location).toEqual({
+    expect(soleRun(result).source.location).toEqual({
       kind: 'in-tree',
       path: `node_modules/${DEVBOX_PACKAGE}/template`,
     });
@@ -251,7 +257,8 @@ describe('трейсы: свои фазы, чужие отдельно', () => {
 
     expect(door).toEqual([
       'door.config',
-      'door.declaration',
+      'door.declarations',
+      'door.owners',
       'door.resolvers',
       'door.values',
       'door.render',
@@ -260,7 +267,7 @@ describe('трейсы: свои фазы, чужие отдельно', () => {
     // Чтение служебной записи — работа движка, и мерит её он. Свести списки
     // означало бы, что медленный прогон не отличить: разбор манифеста или
     // чтение десятка шаблонов с диска.
-    expect(result.plan?.trace.map((span) => span.name)).toContain(
+    expect(soleRun(result).plan?.trace.map((span) => span.name)).toContain(
       'plan.manifest',
     );
     expect(door.some((name) => name.startsWith('plan.'))).toBe(false);
@@ -283,7 +290,9 @@ describe('коды возврата — производная от состоя
       '// чужой файл, движок его не клал\n{}\n',
     );
     const outcome = await cli(['plan', '--cwd', blocked.root], process.cwd());
-    expect(door(outcome)?.plan?.conflicts[0].kind).toBe('foreign-dest');
+    expect(soleRun(door(outcome) as DoorResult).plan?.conflicts[0].kind).toBe(
+      'foreign-dest',
+    );
     expect(outcome.exitCode).toBe(1);
     blocked.cleanup();
 
