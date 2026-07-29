@@ -54,6 +54,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { run } from '../../baser-cli/src/index.ts';
+// Обвесов в ответе двери столько же, сколько поставлено (`tasker:BASER2-55`), и
+// каждый прогон лежит под своим. Здесь обвес один — берём хелпер зоны `cli`, а
+// не `runs[0]`: он бросает, если обвес не один, и проба про один обвес не
+// начнёт молча проверять первый из двух.
+import { soleRun } from '../../baser-cli/src/lib/devbox.fixture.ts';
 import { MANIFEST_PATH } from '../../baser-materialize/src/index.ts';
 import {
   consumerConfig,
@@ -147,7 +152,7 @@ describe('ПРИЁМКА: поставил пакет → позвал двер�
     const again = await run({ command: 'apply', cwd: box.root });
 
     expect(again.status).toBe('converged');
-    expect(again.plan?.steps).toEqual([]);
+    expect(soleRun(again).plan?.steps).toEqual([]);
     expect(again.writes).toEqual([]);
     expect(box.read(LIVE)).toBe(landed);
   });
@@ -157,15 +162,16 @@ describe('ПРИЁМКА: поставил пакет → позвал двер�
 
     const result = await run({ command: 'plan', cwd: box.root });
 
-    expect(result.source.id).toBe('omnifield/devbox');
-    expect(result.source.packageName).toBe(DEVBOX_PACKAGE);
-    expect(result.source.packageVersion).toBe(packedManifest().version);
+    const { source } = soleRun(result);
+    expect(source.id).toBe('omnifield/devbox');
+    expect(source.packageName).toBe(DEVBOX_PACKAGE);
+    expect(source.packageVersion).toBe(packedManifest().version);
     // Корень пакета — внутри дерева потребителя: значит источник закрыт от
     // записи в себя, а не «где-то на машине».
-    expect(result.source.packageRoot).toBe(
+    expect(source.packageRoot).toBe(
       join(box.root, 'node_modules', DEVBOX_PACKAGE),
     );
-    expect(result.source.location.kind).toBe('in-tree');
+    expect(source.location.kind).toBe('in-tree');
     // Трейс прогона существует — мерить работу двери есть чем.
     expect(result.trace.length).toBeGreaterThan(0);
   });
@@ -177,7 +183,7 @@ describe('РАСХОЖДЕНИЕ, названное до user: дефолт в�
 
     const result = await run({ command: 'apply', cwd: box.root });
 
-    const runtime = result.settings.find(
+    const runtime = soleRun(result).settings.find(
       (setting) => setting.key === 'runtimeVersion',
     );
     // Значение НАШЕ: пользователь его не заполнял, поэтому оно едет за выпуском
@@ -309,11 +315,12 @@ describe('переход: обвес обновился под потребит�
     bumpPin(box, '26');
 
     const plan = await run({ command: 'plan', cwd: box.root });
-    const runtime = plan.settings.find(
+    const devbox = soleRun(plan);
+    const runtime = devbox.settings.find(
       (setting) => setting.key === 'runtimeVersion',
     );
     expect(runtime.value).toBe('26');
-    expect(plan.plan?.steps[0].reason).toBe('diverged');
+    expect(devbox.plan?.steps[0].reason).toBe('diverged');
     // Названо — и не применено: `plan` дерева не трогает.
     expect(box.read(LIVE)).toContain('typescript-node:24');
 

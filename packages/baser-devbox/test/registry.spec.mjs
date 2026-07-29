@@ -25,6 +25,9 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { run } from '../../baser-cli/src/index.ts';
+// Обвес здесь один — прогон под него берётся хелпером зоны `cli`, а не
+// `runs[0]`: он бросает, если обвес не один (`tasker:BASER2-55`).
+import { soleRun } from '../../baser-cli/src/lib/devbox.fixture.ts';
 import {
   consumerConfig,
   installConsumer,
@@ -317,7 +320,7 @@ describe('внешнему потребителю приватный реест�
     });
     const result = await run({ command: 'apply', cwd: consumer.root });
 
-    const scope = result.settings.find(
+    const scope = soleRun(result).settings.find(
       (setting) => setting.key === 'privateScope',
     );
     expect(scope.value).toBe(null);

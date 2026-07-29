@@ -24,6 +24,9 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../../baser-cli/src/index.ts';
+// Обвес здесь один — прогон под него берётся хелпером зоны `cli`, а не
+// `runs[0]`: он бросает, если обвес не один (`tasker:BASER2-55`).
+import { soleRun } from '../../baser-cli/src/lib/devbox.fixture.ts';
 import {
   consumerConfig,
   installConsumer,
@@ -125,7 +128,9 @@ describe('слой НАСТРОЙКИ: регулировка вместо пр�
 
     expect(json.name).toBe('weber-devbox');
     // Ни одного заполненного значения в конфиге — и ни одного вопроса.
-    expect(result.settings.every((setting) => setting.ours)).toBe(true);
+    expect(soleRun(result).settings.every((setting) => setting.ours)).toBe(
+      true,
+    );
   });
 
   it('образ, версия рантайма и команда установки — заполняемые', async () => {
@@ -283,7 +288,7 @@ describe('слой НАСТРОЙКИ: регулировка вместо пр�
     expect(json.runArgs).toContain('--network=omnifield-gateway');
     expect(json.postCreateCommand).toContain('/home/node/.secrets');
 
-    const runtime = result.settings.find(
+    const runtime = soleRun(result).settings.find(
       (setting) => setting.key === 'runtimeVersion',
     );
     expect(runtime.origin.kind).toBe('filled');
@@ -340,7 +345,8 @@ describe('слой ПРЕСЕТ omnifield: ходовое положение р�
   it('ПРЕСЕТ — НЕ ВТОРОЙ ОБВЕС: он двигает только объявленные значения', async () => {
     const { result } = await materialize({ presets: ['omnifield'] });
 
-    const fromPreset = result.settings
+    const { settings } = soleRun(result);
+    const fromPreset = settings
       .filter((setting) => setting.origin.kind === 'preset')
       .map((setting) => setting.key)
       .sort();
@@ -352,7 +358,7 @@ describe('слой ПРЕСЕТ omnifield: ходовое положение р�
       'pnpmStoreVolume',
       'secretsVolume',
     ]);
-    for (const setting of result.settings) {
+    for (const setting of settings) {
       if (setting.origin.kind === 'preset') {
         expect(setting.chain[0].kind).toMatch(/^(default|computed)$/);
         expect(setting.moved).toBe(true);
