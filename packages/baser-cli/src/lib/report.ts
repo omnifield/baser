@@ -57,7 +57,7 @@ export function renderText(result: DoorResult): string {
   }
 
   for (const run of result.runs) {
-    lines.push('', ...renderRun(run));
+    lines.push('', ...renderRun(run, result.command));
   }
 
   if (result.writes.length > 0) {
@@ -93,7 +93,7 @@ export function renderText(result: DoorResult): string {
  * один общий план, и «эта версия ноды поднимется» относилось бы неизвестно к
  * чему. Внутри блока порядок прежний — движение ВЫШЕ плана.
  */
-function renderRun(run: SourceRun): string[] {
+function renderRun(run: SourceRun, command: DoorResult['command']): string[] {
   const { source } = run;
   const lines = [
     `обвес: ${source.id} — ${source.title}`,
@@ -102,6 +102,16 @@ function renderRun(run: SourceRun): string[] {
       source.location.kind === 'in-tree'
         ? source.location.path
         : `${source.location.absolute} (вне этого репозитория)`
+    }`,
+    // Файл настроек печатается ВСЕГДА, а не только при рождении: человек,
+    // которому надо что-то подкрутить, обязан узнать адрес из вывода, а не из
+    // доки. Правило именования он на память не считает, да и не должен.
+    `  настройки ${run.config.path}${
+      run.config.creates
+        ? command === 'apply'
+          ? ' — создан с дефолтами в комментариях, значений в нём нет'
+          : ' — будет создан с дефолтами в комментариях, значений в нём нет'
+        : ''
     }`,
   ];
 

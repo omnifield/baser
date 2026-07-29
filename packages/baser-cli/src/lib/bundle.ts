@@ -41,6 +41,7 @@ import {
 import { builtinModules, createRequire } from 'node:module';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sourceConfigPath } from '@omnifield/baser-contracts';
 import {
   packPackage,
   PAYLOAD_DIR,
@@ -550,6 +551,8 @@ function installDoc(packed: PackReport, target: string): string {
   const name = manifest?.source.package.name ?? 'обвес';
   const version = manifest?.source.package.version;
   const artifacts = manifest?.artifacts ?? [];
+  /** Файл настроек этого обвеса — считается из его личности, а не из ссылки. */
+  const tuning = sourceConfigPath(manifest?.source.id ?? '<поставщик>/<обвес>');
   /** Как папка называется у человека в руках — так она и зовётся в командах. */
   const here = basename(target);
 
@@ -631,6 +634,18 @@ ${inContainer()}
 
 ${artifacts.map((item) => `- \`${item.dest}\``).join('\n')}
 
+## Где это настраивается
+
+Рядом появится \`${tuning}\` — твой файл настроек этого обвеса. Дверь создаёт
+его ОДИН РАЗ, если его нет, и кладёт туда все регулировки закомментированными,
+вместе с их описаниями и дефолтами. Значений она не пишет никогда: раскомментируй
+строку — и значение станет твоим, а незаполненное продолжит ездить за выпусками
+обвеса.
+
+Имя файла считается из личности обвеса, поэтому у каждого инструмента он свой, а
+ссылки на него в \`baser.json\` нет. Всё, что ты допишешь в этот файл ВНЕ ключа
+\`baser\`, — дело самого инструмента: дверь туда не смотрит.
+
 ## Если такой файл у тебя уже есть
 
 **Ничего не будет затёрто.** Дверь откажется трогать файл, которого она не
@@ -651,7 +666,8 @@ ${inContainer('--confirm', '.devcontainer/devcontainer.json')}
 | Путь | Куда |
 |---|---|
 | разложенные артефакты (см. список выше) | **в git** — это файлы твоего репозитория |
-| \`baser.json\` | **в git** — твои настройки обвеса |
+| \`baser.json\` | **в git** — перечень поставленных обвесов |
+| \`${tuning}\` | **в git** — твои настройки этого обвеса |
 | \`baser.lock.json\` | **в git, обязательно** |
 | \`node_modules/\` | в \`.gitignore\`, как обычно |
 | \`package.json\` | коммитить нечего: прогон вернул его как был |

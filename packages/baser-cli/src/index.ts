@@ -30,6 +30,7 @@ export type {
   DoorResult,
   DoorStatus,
   RepoReport,
+  SourceConfigReport,
   SourceReport,
   SourceRun,
   WriteReport,
@@ -75,6 +76,9 @@ export type {
   InstalledResult,
   SourceLocation,
 } from './lib/installed.js';
+
+export { readSourceConfig, renderSourceConfig } from './lib/settings.js';
+export type { SourceConfigState } from './lib/settings.js';
 
 export { loadDefaults, resolveValues } from './lib/values.js';
 export type {

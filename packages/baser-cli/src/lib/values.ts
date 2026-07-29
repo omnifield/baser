@@ -12,6 +12,11 @@
  * его может только тот, у кого есть файловая система и распакованный пакет.
  * Контракт этого не делает, а требует.
  *
+ * Заполненное и выбранное приезжают сюда из ФАЙЛА НА ИНСТРУМЕНТ (`settings.ts`),
+ * а не из `baser.json`: там теперь только перечень поставленного
+ * (`tasker:BASER2-10` §3). Порядок разрешения от переезда не изменился — он в
+ * самих шагах: дефолт обвеса → пресеты → заполненное.
+ *
  * **2. Движение дефолта, названное ДО применения** (`kb:BASER2-5`,
  * `tasker:BASER2-20`). Движок сказать этого не может — он значений не видит
  * вовсе (`tasker:BASER2-23`). `resolveSettings` отдаёт только КОНЕЧНОЕ
@@ -37,13 +42,13 @@ import {
   byBytes,
   resolveSettings,
   type ComputeDefault,
-  type ConsumerSourceEntry,
   type FormResult,
   type ResolverContext,
   type ResolverRef,
   type SettingOrigin,
   type SettingType,
   type SettingValue,
+  type SourceConfig,
   type SourceDeclaration,
 } from '@omnifield/baser-contracts';
 import type { InstalledPackage } from './installed.js';
@@ -182,10 +187,10 @@ export async function loadDefaults(
  */
 export function resolveValues(
   declaration: SourceDeclaration,
-  entry: ConsumerSourceEntry,
+  config: SourceConfig,
   defaults: DefaultsPort,
 ): FormResult<ResolvedValues> {
-  const resolved = resolveSettings(declaration, entry, {
+  const resolved = resolveSettings(declaration, config, {
     computeDefault: defaults.computeDefault,
   });
   if (!resolved.ok) {
@@ -195,7 +200,7 @@ export function resolveValues(
   const movements = Object.keys(declaration.settings)
     .sort(byBytes)
     .map((key) =>
-      movementOf(key, declaration, entry, defaults, resolved.value),
+      movementOf(key, declaration, config, defaults, resolved.value),
     );
 
   assertAgreesWithContracts(movements, resolved.value.values);
@@ -206,7 +211,7 @@ export function resolveValues(
 function movementOf(
   key: string,
   declaration: SourceDeclaration,
-  entry: ConsumerSourceEntry,
+  config: SourceConfig,
   defaults: DefaultsPort,
   resolved: {
     values: Readonly<Record<string, SettingValue>>;
@@ -228,7 +233,7 @@ function movementOf(
   }
 
   // ── 2. Пресеты, в порядке перечисления: следующий бьёт предыдущего.
-  for (const name of entry.presets) {
+  for (const name of config.presets) {
     const preset = declaration.presets[name];
     if (preset && key in preset.values) {
       chain.push({ kind: 'preset', value: preset.values[key], preset: name });
@@ -236,8 +241,8 @@ function movementOf(
   }
 
   // ── 3. Заполненное пользователем — бьёт всё и не поднимается никогда.
-  if (key in entry.settings) {
-    chain.push({ kind: 'filled', value: entry.settings[key] });
+  if (key in config.settings) {
+    chain.push({ kind: 'filled', value: config.settings[key] });
   }
 
   const origin = resolved.origins[key];

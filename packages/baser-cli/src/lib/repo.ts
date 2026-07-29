@@ -9,6 +9,12 @@
  * Конфиг потребителя дверь ЧИТАЕТ, а создаёт ровно один раз — когда его нет
  * вовсе. Дальше он пользовательский и авторитетный: движок в него не пишет и
  * ничего оттуда не чистит (`kb:BASER2-5`), и дверь ведёт себя так же.
+ *
+ * **Форма 2: здесь ТОЛЬКО перечень поставленного** (`tasker:BASER2-10` §3). Ни
+ * одного значения: настройки и пресеты уехали в файл на инструмент
+ * (`settings.ts`). Разделение не косметическое — конфиги человека лежат в одной
+ * папке (`kb:BASER2-2` §4), а `baser.json` заполняет не он, а пакетный менеджер
+ * через дверь.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -80,11 +86,10 @@ export function readConsumerConfig(
       // Версию формы проставляет дверь, а не пользователь: миграционный крючок
       // появляется, вводить его никто не вводит (`kb:BASER2-5`, §6 формы).
       formVersion: FORM_VERSION,
-      sources: discoverInstalledSources(repo).map((use) => ({
-        use,
-        presets: [],
-        settings: {},
-      })),
+      // Ни пресетов, ни значений: их место — файл на инструмент. Записать сюда
+      // пустые заготовки значило бы предъявить человеку два места под одно и
+      // то же и обещать, что работает любое.
+      sources: discoverInstalledSources(repo).map((use) => ({ use })),
     };
     return {
       ok: true,
@@ -118,18 +123,19 @@ export function readConsumerConfig(
   };
 }
 
-/** Сериализация конфига — ровно то, что дверь кладёт при его рождении. */
+/**
+ * Сериализация конфига — ровно то, что дверь кладёт при его рождении.
+ *
+ * Пишется поле в поле, а не `JSON.stringify` над разобранным объектом: форма
+ * `baser.json` — это `formVersion` и `sources: [{ use }]`, и перечислить их
+ * здесь значит сломаться заметно, если форма разъедется, вместо того чтобы тихо
+ * вынести наружу чужое поле.
+ */
 export function serializeConsumerConfig(config: ConsumerConfig): string {
   return `${JSON.stringify(
     {
       formVersion: config.formVersion,
-      sources: config.sources.map((entry) => ({
-        use: entry.use,
-        ...(entry.presets.length > 0 ? { presets: entry.presets } : {}),
-        ...(Object.keys(entry.settings).length > 0
-          ? { settings: entry.settings }
-          : {}),
-      })),
+      sources: config.sources.map((entry) => ({ use: entry.use })),
     },
     null,
     2,

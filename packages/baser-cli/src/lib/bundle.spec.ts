@@ -29,6 +29,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sourceConfigPath } from '@omnifield/baser-contracts';
 import { bundle } from './bundle.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -173,6 +174,19 @@ describe('INSTALL.md написан про КОНКРЕТНЫЙ обвес', () 
     for (const artifact of report.pack.manifest?.artifacts ?? []) {
       expect(doc).toContain(artifact.dest);
     }
+
+    // Файл настроек назван по НАСТОЯЩЕМУ имени этого обвеса, а не плейсхолдером:
+    // человек, открывший бандл, читает про то, что у него в руках. И сказано,
+    // что коммитить его надо, — иначе настройки уедут только у него одного.
+    const tuning = sourceConfigPath(report.pack.manifest?.source.id ?? '');
+    expect(doc).toContain(tuning);
+    expect(
+      doc.split('\n').find((line) => line.startsWith(`| \`${tuning}\``)),
+    ).toContain('в git');
+    // И про то, что дверь пишет в него ровно один раз: обещание, названное в
+    // доке, — такой же контракт, как код.
+    expect(doc).toContain('ОДИН РАЗ');
+    expect(doc).toContain('Значений она не пишет никогда');
     // Служебная запись обязана коммититься, и это сказано человеку, а не
     // оставлено в комментарии к константе.
     expect(doc).toContain('baser.lock.json');

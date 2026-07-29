@@ -42,10 +42,13 @@ const LOCK = '.devcontainer/devcontainer-lock.json';
 /** Живой артефакт девбокса — он же настоящий `dest` обвеса, без подмен. */
 const LIVE = '.devcontainer/devcontainer.json';
 
-const CONFIG = {
-  formVersion: 1,
-  sources: [{ use: DEVBOX_PACKAGE, presets: ['omnifield'] }],
-};
+const DEVBOX_ID = 'omnifield/devbox';
+
+/** `baser.json` формы 2 — ТОЛЬКО перечень поставленного. */
+const CONFIG = { formVersion: 2, sources: [{ use: DEVBOX_PACKAGE }] };
+
+/** Выбор пресета живёт в файле на инструмент (`tasker:BASER2-10` §3). */
+const TUNED = { [DEVBOX_ID]: { presets: ['omnifield'] } };
 
 let consumer: Consumer | null = null;
 
@@ -56,7 +59,7 @@ afterEach(() => {
 
 /** Чистое дерево с поставленным обвесом девбокса. */
 function clean(options: { existing?: Record<string, string> } = {}): Consumer {
-  consumer = installDevbox({ config: CONFIG, ...options });
+  consumer = installDevbox({ config: CONFIG, tuning: TUNED, ...options });
   return consumer;
 }
 
@@ -151,20 +154,14 @@ describe('переход: тот же прогон второй раз', () => {
   });
 });
 
-describe('переход: пресет убран из конфига', () => {
+describe('переход: пресет убран из файла настроек', () => {
   it('значение возвращается к дефолту обвеса, и артефакт догоняет', async () => {
     const box = clean();
     await run({ command: 'apply', cwd: box.root });
     expect(box.read(LIVE)).toContain('--network=omnifield-gateway');
 
-    box.write(
-      'baser.json',
-      `${JSON.stringify(
-        { formVersion: 1, sources: [{ use: DEVBOX_PACKAGE }] },
-        null,
-        2,
-      )}\n`,
-    );
+    // Пресет убирается ТАМ, где человек его и выбирал, — в файле на инструмент.
+    box.tune(DEVBOX_ID, { presets: [] });
 
     const plan = await run({ command: 'plan', cwd: box.root });
     const network = soleRun(plan).settings.find(
@@ -212,15 +209,12 @@ export function latestStableNode() { return '24'; }
 
   it('заполненное пользователем переживает обновление обвеса', async () => {
     consumer = installDevbox({
-      config: {
-        formVersion: 1,
-        sources: [
-          {
-            use: DEVBOX_PACKAGE,
-            presets: ['omnifield'],
-            settings: { runtimeVersion: '20' },
-          },
-        ],
+      config: CONFIG,
+      tuning: {
+        [DEVBOX_ID]: {
+          presets: ['omnifield'],
+          settings: { runtimeVersion: '20' },
+        },
       },
     });
     await run({ command: 'apply', cwd: consumer.root });
@@ -453,6 +447,7 @@ describe('переход: служебная запись потеряна ил�
     // прямо в сообщении, и он обязан работать так же буквально, как первый.
     consumer = installDevbox({
       config: CONFIG,
+      tuning: TUNED,
       existing: { [LIVE]: '{\n  "name": "свой, руками"\n}\n' },
     });
 

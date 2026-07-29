@@ -66,8 +66,10 @@ import {
   checkSingleProvider,
   FORM_VERSION,
   readSourceDeclaration,
+  sourceConfigPath,
   type ArtifactOwners,
   type ConsumerSourceEntry,
+  type SourceConfig,
   type SourceDeclaration,
 } from '@omnifield/baser-contracts';
 import {
@@ -106,11 +108,13 @@ import {
   renderLayout,
   type RenderedLayout,
 } from './render.js';
+import { readSourceConfig, renderSourceConfig } from './settings.js';
 import { loadDefaults, resolveValues, type SettingMovement } from './values.js';
 import type {
   ConfigReport,
   DoorCommand,
   DoorResult,
+  SourceConfigReport,
   SourceReport,
   SourceRun,
   WriteReport,
@@ -154,6 +158,7 @@ interface Session {
  */
 interface DraftRun {
   readonly source: SourceReport;
+  config: SourceConfigReport;
   settings: readonly SettingMovement[];
   plan: MaterializationPlan | null;
   applied: ApplyReport | null;
@@ -165,6 +170,13 @@ interface Prepared {
   readonly pkg: InstalledPackage;
   readonly location: SourceLocation;
   readonly rendered: RenderedLayout;
+  /**
+   * Текст новорождённого файла настроек; `null` — файл уже есть.
+   *
+   * Считается на подготовке, а кладётся в дерево вместе с остальным: дверь
+   * рождает файл ОДИН РАЗ и больше в него не пишет никогда (`settings.ts`).
+   */
+  readonly born: string | null;
   readonly draft: DraftRun;
 }
 
@@ -238,6 +250,7 @@ async function runInRepo(
   for (const item of declared) {
     drafts.push({
       source: describeSource(item.declaration, item.pkg, item.location),
+      config: blankSourceConfig(item.declaration.source.id),
       settings: [],
       plan: null,
       applied: null,
@@ -270,11 +283,7 @@ async function runInRepo(
   // ── 4. Значения и содержимое — по каждому обвесу.
   const prepared: Prepared[] = [];
   for (const [index, item] of declared.entries()) {
-    const ready = await prepare(item, config.sources[index], drafts[index], {
-      repo,
-      trace,
-      log,
-    });
+    const ready = await prepare(item, drafts[index], { repo, trace, log });
     if (ready !== null) {
       prepared.push(ready);
     }
@@ -293,6 +302,15 @@ async function runInRepo(
 
   if (creates) {
     tree.write(session.config.path, serializeConsumerConfig(config));
+  }
+
+  // Новорождённые файлы настроек — ДО планов и вместе с ними одним сбросом.
+  // Движок о них не знает и знать не должен: файл настроек не запись раскладки,
+  // в паспорте укладки не числится и сиротой не бывает (`tasker:BASER2-10` §3).
+  for (const item of prepared) {
+    if (item.born !== null) {
+      tree.write(item.draft.config.path, item.born);
+    }
   }
 
   // ── 6. Прогон по каждому обвесу: план → применение к ВИРТУАЛЬНОМУ дереву.
@@ -366,7 +384,8 @@ async function runInRepo(
   // считает и считать не может: он о нём не знает. Гейт, спросивший «сошлось?» и
   // получивший «да» там, где `apply` ещё поменяет репозиторий, зеленел бы
   // вхолостую.
-  const work = drafts.some((draft) => hasWork(draft)) || creates;
+  const work =
+    drafts.some((draft) => hasWork(draft) || draft.config.creates) || creates;
 
   if (options.command === 'plan') {
     // `plan` не пишет — значит и записей у него нет. Что ЛЯЖЕТ, читается из
@@ -485,13 +504,31 @@ interface PrepareContext {
  */
 async function prepare(
   item: DeclaredSource,
-  entry: ConsumerSourceEntry,
   draft: DraftRun,
   context: PrepareContext,
 ): Promise<Prepared | null> {
   const { declaration, pkg } = item;
   const { repo, trace, log } = context;
   const source = draft.source.id;
+
+  // ── Файл настроек. Его нет — это не пробел, а «ничего не выбрано»: работают
+  // дефолты обвеса, вопросов у двери не бывает (`tasker:BASER2-18`).
+  const state = trace.span(
+    'door.settings',
+    () => readSourceConfig(repo, declaration, log),
+    { source },
+  );
+  draft.config = {
+    path: state.path,
+    existed: state.existed,
+    // Рождение — ровно один раз, когда файла нет. Существующий не трогается
+    // никогда, поэтому «creates» и «existed» здесь взаимоисключающи по
+    // построению, а не по дисциплине вызывающего.
+    creates: !state.existed,
+  };
+  if (state.config === null) {
+    return null;
+  }
 
   // Загрузка модулей резолверов асинхронна, а спаны трейса — синхронны, и это
   // не недосмотр: резолвер обязан быть синхронной чистой функцией, асинхронна
@@ -505,7 +542,7 @@ async function prepare(
 
   const values = trace.span(
     'door.values',
-    () => resolveValues(declaration, entry, defaults),
+    () => resolveValues(declaration, state.config as SourceConfig, defaults),
     { source },
   );
   if (!values.ok) {
@@ -525,7 +562,18 @@ async function prepare(
     return null;
   }
 
-  return { ...item, rendered, draft };
+  // Текст новорождённого файла считается ЗДЕСЬ, потому что здесь есть движение
+  // значений: дефолты в нём — те же, что дверь назвала в ответе, а не вторая их
+  // копия, посчитанная отдельно и способная разойтись.
+  const born = draft.config.creates
+    ? trace.span(
+        'door.born',
+        () => renderSourceConfig(declaration, values.value.movements),
+        { source, path: draft.config.path },
+      )
+    : null;
+
+  return { ...item, rendered, born, draft };
 }
 
 /**
@@ -560,6 +608,7 @@ function hasWork(draft: DraftRun): boolean {
 function freeze(drafts: readonly DraftRun[]): readonly SourceRun[] {
   return drafts.map((draft) => ({
     source: draft.source,
+    config: draft.config,
     settings: draft.settings,
     plan: draft.plan,
     applied: draft.applied,
@@ -788,6 +837,17 @@ function refused(
     runs: freeze(drafts),
     problems,
   };
+}
+
+/**
+ * Файл настроек до того, как дверь до него дошла.
+ *
+ * Путь известен всегда — он считается из личности обвеса, а не берётся из
+ * ссылки. Поэтому отказ на подготовке всё равно называет человеку файл, в
+ * который идти, вместо пустого места в ответе.
+ */
+function blankSourceConfig(sourceId: string): SourceConfigReport {
+  return { path: sourceConfigPath(sourceId), existed: false, creates: false };
 }
 
 function blankConfig(): ConfigReport {
