@@ -9,6 +9,7 @@ import * as api from '../index.js';
 import {
   CONTENT_ROOT,
   SOURCE_ID,
+  SOURCE_VERSION,
   createWorkspace,
   manifestOf,
   redeclare,
@@ -318,7 +319,7 @@ describe('движок принимает готовую структуру', ()
  * умеет соврать так, как врала наклейка внутри файла.
  */
 describe('владение выводится из манифеста, а не из содержимого', () => {
-  it('запись несёт путь, шаблон, обвес и хеш положенного', () => {
+  it('запись несёт путь, шаблон, обвес, версию, класс и хеш положенного', () => {
     const { tree, declaration } = createWorkspace({
       layout: [exactEntry],
       sources: SOURCES,
@@ -331,6 +332,8 @@ describe('владение выводится из манифеста, а не �
         dest: WORKFLOW,
         src: 'ci/build.yml',
         source: SOURCE_ID,
+        version: SOURCE_VERSION,
+        class: 'regenerated',
         hash: hashContent(SOURCES['ci/build.yml']),
       },
     ]);
@@ -506,6 +509,8 @@ describe('запись обязана утверждать объявленно�
         dest: WORKFLOW,
         src: 'ci/build-2.yml',
         source: SOURCE_ID,
+        version: SOURCE_VERSION,
+        class: 'regenerated',
         hash: hashContent(SOURCES['ci/build.yml']),
       },
     ]);
@@ -540,6 +545,8 @@ describe('запись обязана утверждать объявленно�
           dest: WORKFLOW,
           src: 'ci/build.yml',
           source: SOURCE_ID,
+          version: SOURCE_VERSION,
+          class: 'regenerated',
           hash: hashContent('вообще не то'),
         },
       ],
@@ -932,6 +939,8 @@ describe('причина шага обязана быть правдой', () =>
         dest: '.gitignore',
         src: 'repo/gitignore',
         source: SOURCE_ID,
+        version: SOURCE_VERSION,
+        class: 'regenerated',
         hash: hashContent(SOURCES['repo/gitignore']),
       },
     ]);
@@ -1017,13 +1026,14 @@ describe('вывод машинночитаем в первую очередь',
 
   it('версия схемы вывода поднята: форма несовместима с прежней', () => {
     // 2 — снятие мерджа, 3 — словарь контракта, 4 — служебная запись уехала
-    // из артефактов в манифест сбоку.
+    // из артефактов в манифест сбоку, 5 — класс артефакта и версия обвеса в
+    // паспорте укладки, из-за чего `hash` стал необязательным.
     const { tree, declaration } = createWorkspace({
       layout: [exactEntry],
       sources: SOURCES,
     });
 
-    expect(computePlan({ tree, declaration }).schemaVersion).toBe(4);
+    expect(computePlan({ tree, declaration }).schemaVersion).toBe(5);
   });
 
   it('трейсы — именованные спаны с длительностью и атрибутами', () => {
@@ -1042,7 +1052,12 @@ describe('вывод машинночитаем в первую очередь',
     // распоряжается только своей долей, и это обязано быть видно в телеметрии.
     expect(
       plan.trace.find((span) => span.name === 'plan.owned')?.detail,
-    ).toEqual({ source: SOURCE_ID, records: 0, own: 0 });
+    ).toEqual({
+      source: SOURCE_ID,
+      version: SOURCE_VERSION,
+      records: 0,
+      own: 0,
+    });
   });
 });
 
@@ -1462,6 +1477,6 @@ describe('трейсы', () => {
     ]);
     expect(
       plan.trace.find((span) => span.name === 'plan.layout')?.detail,
-    ).toEqual({ entries: 1 });
+    ).toEqual({ entries: 1, placedOnce: 0 });
   });
 });

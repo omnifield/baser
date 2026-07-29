@@ -22,6 +22,7 @@ import {
 import { hashContent } from './manifest.js';
 import {
   SOURCE_ID,
+  SOURCE_VERSION,
   createWorkspace,
   manifestOf,
   redeclare,
@@ -60,6 +61,8 @@ describe('переход: запись появилась в layout', () => {
         dest: CFG,
         src: 'cfg.yml',
         source: SOURCE_ID,
+        version: SOURCE_VERSION,
+        class: 'regenerated',
         hash: hashContent(SOURCES['cfg.yml']),
       },
     ]);

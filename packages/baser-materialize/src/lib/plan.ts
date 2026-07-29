@@ -41,9 +41,32 @@
  *   — `dest`, уже числящийся за другим обвесом, — отказ `cross-source-dest`:
  *     столкновение двух инструментов на один путь НАЗЫВАЕТСЯ вслух и не
  *     разрешается ни порядком записей, ни порядком прогонов (`kb:BASER2-6`).
+ *
+ * ЧТО ДЕЛАТЬ С ФАЙЛОМ, РЕШАЕТ ОБВЕС — КЛАССОМ АРТЕФАКТА (`tasker:BASER2-51`,
+ * `classes.ts`). Движок класс ИСПОЛНЯЕТ и не выводит: станку незачем разбираться
+ * в семантике чужих файлов (`kb:BASER2-2`, «Станок даёт инструменту руки, а не
+ * решения»). Инварианты §1–§5 выше от этого не меняются — меняется то, ЧТО
+ * считается расхождением:
+ *   — `regenerated` — как было: содержимое сверяется с шаблоном, разошлось —
+ *     перекладываем целиком, потеряло объявление — снимаем;
+ *   — `placed-once` — содержимое не сверяется ВОВСЕ и хеш не пишется вовсе;
+ *     правка человека расхождением не считается; запись, потерявшая объявление,
+ *     не уходит сиротой молча, а называется извещением и снимается только
+ *     поимённым подтверждением; пропал сам артефакт — кладём заново.
+ *
+ * ПАСПОРТ УКЛАДКИ НЕСЁТ ВЕРСИЮ ОБВЕСА (`tasker:BASER2-52`). Движок её не
+ * интерпретирует и по semver не сравнивает — он её хранит и следит, чтобы запись
+ * утверждала СЕГОДНЯШНЮЮ (§2): подъём версии при том же содержимом даёт шаг
+ * `record`, а не молчание.
  */
 
 import type { Tree } from '@nx/devkit';
+import type { ArtifactClass } from './classes.js';
+import {
+  ARTIFACT_CLASSES,
+  DEFAULT_ARTIFACT_CLASS,
+  isArtifactClass,
+} from './classes.js';
 import type { Declaration, LayoutEntry } from './declaration.js';
 import type { CanonSource } from './source.js';
 import { createTreeSource } from './source.js';
@@ -83,12 +106,22 @@ export type PlanReason =
   /** Существовавший артефакт без записи впервые берётся во владение. */
   | 'adopted'
   /**
-   * Запись не утверждает объявленное сейчас: другой `src`, другой обвес, другой
-   * хеш положенного, либо записи нет вовсе.
+   * Запись не утверждает объявленное сейчас: другой `src`, другой хеш
+   * положенного, другой класс артефакта, другая версия обвеса — либо записи нет
+   * вовсе. Что именно разъехалось, шаг называет в `restated`.
    */
   | 'reclaimed'
   /** Запись потеряла объявление в `layout`. */
   | 'orphan';
+
+/**
+ * Поле служебной записи — единица расхождения записи с объявленным.
+ *
+ * Названо перечислением, а не строкой: по нему ветвятся панель и гейт («подняли
+ * версию» это не то же событие, что «сменился шаблон»), а строка позволила бы
+ * молча разъехаться с формой записи.
+ */
+export type RecordField = 'src' | 'hash' | 'class' | 'version';
 
 /** Один шаг плана. */
 export interface PlanStep {
@@ -96,6 +129,15 @@ export interface PlanStep {
   readonly dest: string;
   readonly reason: PlanReason;
   readonly src?: string;
+  /**
+   * Поля записи, которые шаг приводит к объявленному, — только у `reclaimed`.
+   *
+   * План обязан НАЗЫВАТЬ, а не только делать: «запись разошлась» без указания,
+   * чем именно, оставляет потребителю ровно то гадание, ради отмены которого
+   * план вообще существует. У шага, где прежней записи не было (`missing`,
+   * `adopted`), приводить нечего, и поля здесь нет.
+   */
+  readonly restated?: readonly RecordField[];
   /**
    * Целевое содержимое артефакта: `null` у `delete` (снимаем) и у `record`
    * (содержимое не трогаем вовсе).
@@ -137,6 +179,17 @@ export type ConflictKind =
   | 'dest-is-manifest'
   /** Источник `src` не найден. */
   | 'missing-source'
+  /**
+   * Запись раскладки объявлена классом, которого движок не знает.
+   *
+   * Умолчанием НЕ подменяется: класс говорит, чем станок держит артефакт, и
+   * принять незнакомое слово за `regenerated` значило бы перегенерировать поверх
+   * файла, который обвес объявил человеческим, — молча и ровно один раз, потому
+   * что второго такого файла у человека не будет. Это же и страховка словаря:
+   * приедет третий класс (`kb:WEBER-4`) — движок скажет об этом на первом
+   * прогоне, а не сделает вид, что понял.
+   */
+  | 'unknown-artifact-class'
   /**
    * Путь записи раскладки непригоден: пуст, абсолютен или выходит за корень
    * дерева. Границу дерева движок держит сам — он тот, кто пишет.
@@ -188,6 +241,13 @@ export interface ConflictDetail {
   readonly path?: string;
   /** `invalid-path`: чем именно путь непригоден. */
   readonly pathProblem?: RepoPathProblem;
+  /**
+   * `unknown-artifact-class`: класс, как он пришёл во входной структуре.
+   *
+   * Строка, а не `ArtifactClass`: сюда попадает ровно то, чего движок НЕ знает,
+   * и типизировать его известным перечислением значило бы соврать про причину.
+   */
+  readonly artifactClass?: string;
 }
 
 export interface PlanConflict {
@@ -206,7 +266,22 @@ export type PlanNoticeKind =
    * (или он вовсе не объявлен). Названо, чтобы «подтвердил, а ничего не
    * изменилось» не выглядело как молчание движка.
    */
-  'confirmation-unused';
+  | 'confirmation-unused'
+  /**
+   * Запись класса `placed-once` потеряла объявление, и артефакт ОСТАВЛЕН
+   * (`tasker:BASER2-51`).
+   *
+   * Не шаг, потому что движок ничего не делает; не отказ, потому что решать
+   * нечего и прогон применим. Но и не молчание: выпиленная строка шаблона иначе
+   * молча уносила бы файл, в котором человек месяц работал. Извещение стоит
+   * ровно там, где `regenerated` уходит сиротой, и повторяется каждый прогон —
+   * это не шум, а стоящее утверждение о состоянии репозитория.
+   *
+   * Снимается поимённым подтверждением того же `dest` — тем же адресным
+   * согласием, что и перезапись чужого файла: явная команда, которая не
+   * масштабируется сама.
+   */
+  | 'placed-once-retained';
 
 /**
  * Извещение: состояние, которое обязано быть НАЗВАНО, но не является ни шагом,
@@ -232,6 +307,17 @@ export interface NoticeDetail {
    * заблокирован, было бы прямой неправдой.
    */
   readonly confirmation?: 'not-required' | 'not-declared' | 'not-applicable';
+  /** `placed-once-retained`: класс, из-за которого артефакт оставлен. */
+  readonly artifactClass?: ArtifactClass;
+  /**
+   * Чем состояние снимается. У `placed-once-retained` — `confirm`, тем же
+   * поимённым согласием, что и перезапись чужого файла.
+   *
+   * Слово то же, что в `ConflictDetail.resolution`, и это не совпадение: панель,
+   * показавшая один рычаг для отказа и другой для извещения, отправила бы
+   * человека искать несуществующую команду.
+   */
+  readonly resolution?: 'confirm';
 }
 
 /**
@@ -346,6 +432,28 @@ function requireUsableDeclaration(declaration: Declaration): void {
         'собственных шаблонов. Нужен путь к каталогу шаблонов внутри пакета',
     );
   }
+
+  // Версия — необязательна, но НЕ бывает пустой. `null` и отсутствие означают
+  // «источник версии не назвал», и движок это называет вслух извещением; пустая
+  // же строка притворилась бы названной версией и легла бы в паспорт укладки
+  // молчаливой пустотой — ровно тем, чего быть не должно (`tasker:BASER2-52`).
+  const { version } = declaration.source;
+  if (version !== undefined && version !== null) {
+    if (typeof version !== 'string') {
+      shape(
+        'source.version — ожидалась строка с версией обвеса либо null, если ' +
+          'источник её не назвал',
+      );
+    }
+    if (version.trim() === '') {
+      throw new DeclarationError(
+        `версия обвеса "${declaration.source.id}" подана пустой строкой. ` +
+          'Паспорт укладки записал бы молчаливую пустоту, выдающую себя за ' +
+          'версию: не назвал версию — подавай null, это состояние движок ' +
+          'называет вслух',
+      );
+    }
+  }
 }
 
 /** Вычисляет план материализации. Дерево при этом НЕ меняется. */
@@ -355,6 +463,10 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
 
   const contentRoot = declaration.source.contentRoot as string;
   const sourceId = declaration.source.id;
+  // Отсутствие версии приводится к `null` ЗДЕСЬ, один раз: дальше по движку
+  // «версии нет» имеет ровно одно написание, и в паспорт укладки не может
+  // просочиться `undefined`, которое сериализовалось бы пропуском ключа.
+  const sourceVersion = declaration.source.version ?? null;
   const trace = options.trace ?? createTrace();
   const source = options.source ?? createTreeSource(tree, contentRoot);
   const manifestPath = options.manifestPath ?? MANIFEST_PATH;
@@ -383,8 +495,12 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
   const ours = [...manifest.values()].filter(
     (record) => record.source === sourceId,
   );
+  // Версия прогона — в телеметрии, а не только в файле: «этот прогон шёл
+  // обвесом такой-то версии» это первое, что спрашивают, когда у потребителя
+  // что-то поехало. `null` здесь такой же ответ, как строка.
   trace.event('plan.owned', {
     source: sourceId,
+    version: sourceVersion,
     records: manifest.size,
     own: ours.length,
   });
@@ -399,7 +515,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
   );
 
   /**
-   * Записи ЭТОГО обвеса, потерявшие объявление, — сироты.
+   * Записи ЭТОГО обвеса, потерявшие объявление.
    *
    * Ищутся ПО МАНИФЕСТУ, а не сканом дерева: у поиска по записям нет слепых
    * зон по построению, и пропуск каталогов ради скорости больше ничего не
@@ -412,11 +528,40 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
    * бы записью без объявления, то есть сиротой, и прогон снимал бы чужие
    * файлы — поставил второй, снёсся первый.
    */
+  const lost = ours.filter((record) => !declaredDests.has(record.dest));
+
+  /**
+   * Что из потерявшего объявление СНИМАЕТСЯ, а что остаётся у человека.
+   *
+   * `regenerated` уходит сиротой молча — он наш и всегда был наш. `placed-once`
+   * НЕ уходит: снятие у него не автоматическое, а по явной команде, и команда
+   * эта — поимённое подтверждение (`tasker:BASER2-51`). Иначе выпиленная строка
+   * шаблона молча уносила бы файл, в котором человек месяц работал, — а второго
+   * такого файла у него не будет.
+   *
+   * Класс берётся ИЗ ЗАПИСИ, а не из объявления, и другого источника тут быть
+   * не может: объявления этой записи больше нет — ровно поэтому она и сирота.
+   * Отсюда же требование хранить класс в паспорте укладки.
+   */
   const removed = new Set(
-    ours
-      .filter((record) => !declaredDests.has(record.dest))
+    lost
+      .filter(
+        (record) =>
+          record.class !== 'placed-once' || confirm.has(record.dest),
+      )
       .map((record) => record.dest),
   );
+  const retained = lost.filter((record) => !removed.has(record.dest));
+
+  // Подтверждение, снявшее `placed-once`, пригодилось — иначе прогон отчитался
+  // бы «подтверждение не понадобилось» ровно о том согласии, которым и снял
+  // артефакт. У `regenerated`-сироты подтверждение и правда лишнее: она
+  // снимается без него, и это состояние остаётся названным как прежде.
+  for (const record of lost) {
+    if (record.class === 'placed-once' && confirm.has(record.dest)) {
+      consumed.add(record.dest);
+    }
+  }
 
   trace.span(
     'plan.layout',
@@ -428,6 +573,16 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
         const entry = repoPathsOf(declared);
         if (entry === null) {
           conflicts.push(invalidPath(declared));
+          continue;
+        }
+
+        // Класс, которого движок не знает, умолчанием НЕ подменяется: принять
+        // незнакомое слово за `regenerated` значило бы перегенерировать поверх
+        // файла, который обвес объявил человеческим. Отказ адресный — соседние
+        // записи планируются как обычно.
+        const declaredClass = declared.class;
+        if (declaredClass !== undefined && !isArtifactClass(declaredClass)) {
+          conflicts.push(unknownClass(entry, declaredClass));
           continue;
         }
 
@@ -481,6 +636,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
             tree,
             source,
             sourceId,
+            sourceVersion,
             manifest,
             confirmed: confirm.has(entry.dest),
           });
@@ -499,7 +655,16 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
         }
       }
     },
-    { entries: declaration.layout.length },
+    {
+      entries: declaration.layout.length,
+      // Сколько записей обвес объявил человеческими. Видно должно быть в
+      // телеметрии, а не выводиться на глаз: `placed-once` это ровно те файлы,
+      // которых прогон НЕ касается, и «почему станок ничего не сделал»
+      // отвечается этим числом.
+      placedOnce: declaration.layout.filter(
+        (item) => item?.class === 'placed-once',
+      ).length,
+    },
   );
 
   for (const dest of confirm) {
@@ -549,8 +714,23 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
           conflicts.push(entryFailed(dest, manifest.get(dest)?.src, cause));
         }
       }
+
+      // Оставленный артефакт — не шаг и не отказ, но и не молчание.
+      for (const record of retained) {
+        notices.push({
+          kind: 'placed-once-retained',
+          dest: record.dest,
+          src: record.src,
+          detail: { artifactClass: record.class, resolution: 'confirm' },
+          message:
+            `"${record.dest}" положен однажды, а объявления в раскладке больше ` +
+            'нет: артефакт и запись о нём остаются — снятие у класса ' +
+            '"placed-once" не автоматическое. Снять — подтверди этот dest ' +
+            'поимённо; молча выпиленная строка шаблона файл не уносит',
+        });
+      }
     },
-    { orphans: removed.size },
+    { orphans: removed.size, retained: retained.length },
   );
 
   // Порядок вывода БАЙТОВЫЙ, а не локале-зависимый: схема вывода — контракт с
@@ -603,7 +783,38 @@ function nextManifest(
 function repoPathsOf(entry: LayoutEntry): LayoutEntry | null {
   const src = toRepoPath(entry?.src as string);
   const dest = toRepoPath(entry?.dest as string);
-  return src.ok && dest.ok ? { src: src.path, dest: dest.path } : null;
+  return src.ok && dest.ok
+    ? { src: src.path, dest: dest.path, ...classOf(entry) }
+    : null;
+}
+
+/**
+ * Класс записи как поле объекта: `{}`, когда он не назван.
+ *
+ * Именно `{}`, а не `{ class: DEFAULT_ARTIFACT_CLASS }`: умолчание проставляет
+ * `planEntry` в одном месте — там, где оно попадает в запись паспорта укладки.
+ * Проставить его ещё и здесь значило бы держать два места, где «класс не назван»
+ * превращается в `regenerated`.
+ */
+function classOf(entry: LayoutEntry): { class?: ArtifactClass } {
+  return entry?.class === undefined ? {} : { class: entry.class };
+}
+
+/** Отказ по записи, объявленной классом, которого движок не знает. */
+function unknownClass(entry: LayoutEntry, declared: unknown): PlanConflict {
+  return {
+    kind: 'unknown-artifact-class',
+    dest: entry.dest,
+    src: entry.src,
+    detail: { artifactClass: String(declared) },
+    message:
+      `запись раскладки "${entry.dest}" объявлена классом ` +
+      `${JSON.stringify(declared)}, которого движок не знает — известны ` +
+      `${ARTIFACT_CLASSES.join(' · ')}. Класс говорит, чем станок держит ` +
+      'артефакт, и угадывать его движок не станет: принять незнакомое слово за ' +
+      '"regenerated" значило бы перегенерировать поверх файла, который обвес ' +
+      'мог объявить человеческим',
+  };
 }
 
 /**
@@ -837,6 +1048,8 @@ interface EntryContext {
   readonly source: CanonSource;
   /** Идентичность обвеса, от имени которого кладём. */
   readonly sourceId: string;
+  /** Версия этого обвеса; `null` — источник её не назвал. */
+  readonly sourceVersion: string | null;
   readonly manifest: Manifest;
   /** Подтверждена ли перезапись чужого файла именно по ЭТОМУ `dest`. */
   readonly confirmed: boolean;
@@ -856,10 +1069,18 @@ interface EntryOutcome {
  * Содержимое движок НЕ ТРОГАЕТ: что дал источник, то и ляжет — байт в байт.
  * Решается здесь ровно два вопроса: можно ли трогать существующий файл и
  * требуется ли шаг (по содержимому или по служебной записи).
+ *
+ * Класс артефакта меняет ответ на второй вопрос и только на него: у
+ * `placed-once` содержимое не сверяется вовсе, поэтому «разошлось» для него не
+ * существует как событие. Право трогать чужой файл от класса не зависит —
+ * владение это владение.
  */
 function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
-  const { tree, source, sourceId, manifest, confirmed } = context;
+  const { tree, source, sourceId, sourceVersion, manifest, confirmed } = context;
 
+  // Умолчание проставляется ЗДЕСЬ, в одном месте: дальше класс участвует в
+  // записи паспорта укладки, и «не назван» ниже по коду уже не встречается.
+  const artifactClass = entry.class ?? DEFAULT_ARTIFACT_CLASS;
   const known = manifest.get(entry.dest) ?? null;
 
   // Артефакт числится за ДРУГИМ обвесом — столкновение двух инструментов на
@@ -901,13 +1122,21 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
     dest: entry.dest,
     src: entry.src,
     source: sourceId,
-    hash: hashContent(content),
+    version: sourceVersion,
+    class: artifactClass,
+    // Хеш `placed-once` НЕ ПИШЕТСЯ ВОВСЕ: сверять его этот класс не будет
+    // никогда, а записанный и никогда не сравниваемый хеш — половина имитации.
+    ...(artifactClass === 'placed-once' ? {} : { hash: hashContent(content) }),
   };
 
   const actual = tree.exists(entry.dest) ? tree.read(entry.dest, 'utf-8') : null;
 
   // Артефакта нет — кладём впервые. Запись при этом могла остаться от прошлого
   // прогона (файл снесли руками): она приводится тем же шагом.
+  //
+  // Для `placed-once` это тот самый случай «пропал сам артефакт — кладём
+  // заново»: объявленное место пустое, а не «человек удалил, уважим». Развилки
+  // по классу тут поэтому нет — и не должно быть.
   if (actual === null) {
     return {
       step: {
@@ -923,7 +1152,9 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
   }
 
   // Файл есть, а записи о нём нет — он не наш. Отказ вместо тихой перезаписи;
-  // снимается только поимённым подтверждением.
+  // снимается только поимённым подтверждением. Класс здесь ничего не меняет:
+  // владение чужим файлом не становится нашим оттого, что мы объявили файл
+  // человеческим.
   if (known === null) {
     if (!confirmed) {
       return {
@@ -939,17 +1170,32 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
         },
       };
     }
+    // Взятие во владение `placed-once` содержимого НЕ ТРОГАЕТ: объявленное
+    // место занято, а класс говорит «положено однажды и дальше не трогаем».
+    // Перезаписать здесь значило бы затереть человеческий файл ровно тем
+    // согласием, которое давалось на владение, а не на потерю.
     return {
       confirmationUsed: true,
-      step: {
-        kind: 'update',
-        dest: entry.dest,
-        reason: 'adopted',
-        src: entry.src,
-        content,
-        previous: actual,
-        record,
-      },
+      step:
+        artifactClass === 'placed-once'
+          ? {
+              kind: 'record',
+              dest: entry.dest,
+              reason: 'adopted',
+              src: entry.src,
+              content: null,
+              previous: actual,
+              record,
+            }
+          : {
+              kind: 'update',
+              dest: entry.dest,
+              reason: 'adopted',
+              src: entry.src,
+              content,
+              previous: actual,
+              record,
+            },
     };
   }
 
@@ -957,7 +1203,11 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
   // разошлось (правили руками либо уехал шаблон), потребитель отличает
   // ДАННЫМИ: хеш в прошлой записи против `previous` в шаге. Действие от этого
   // не меняется, поэтому причина одна и она не врёт.
-  if (actual !== content) {
+  //
+  // У `placed-once` этой ветки нет вовсе — не «есть, но выключена». Правка
+  // человека в таком файле флага не поднимает, план его расходящимся не
+  // называет, и содержимое движок с шаблоном не сверяет.
+  if (artifactClass !== 'placed-once' && actual !== content) {
     return {
       step: {
         kind: 'update',
@@ -975,7 +1225,8 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
   // запись утверждает не то, что объявлено СЕЙЧАС, — приведение обязательно и
   // обязано быть шагом. Совпадение содержимого не повод молчать: устаревшая
   // запись переживает смену объявления и всплывает потом снятием не того файла.
-  if (!claimMatches(known, record)) {
+  const restated = restatedFields(known, record);
+  if (restated.length > 0) {
     return {
       step: {
         kind: 'record',
@@ -985,6 +1236,7 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
         content: null,
         previous: actual,
         record,
+        restated,
       },
     };
   }
@@ -993,25 +1245,51 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
 }
 
 /**
- * Утверждает ли запись ровно то, что объявлено сейчас.
+ * Чем запись расходится с объявленным сейчас — поимённо.
  *
- * Обвес здесь не сверяется: до этого места доходят только записи ЭТОГО обвеса —
- * чужая отсекается отказом `cross-source-dest` раньше и шагом не становится
- * никогда. Сверять его тут значило бы держать вторую, более слабую копию того
- * же правила: она молча превращала бы перехват чужого артефакта в приведение
+ * Пустой список означает «утверждает ровно то», и это единственный путь к
+ * молчанию: план, который что-то приводит, обязан сказать ЧТО. Подъём версии
+ * обвеса при том же содержимом виден здесь и только здесь — иначе он прошёл бы
+ * тихо, и паспорт укладки продолжал бы называть вчерашнюю версию.
+ *
+ * Обвес не сверяется: до этого места доходят только записи ЭТОГО обвеса — чужая
+ * отсекается отказом `cross-source-dest` раньше и шагом не становится никогда.
+ * Сверять его тут значило бы держать вторую, более слабую копию того же
+ * правила: она молча превращала бы перехват чужого артефакта в приведение
  * записи ровно тогда, когда первая сломается.
  */
-function claimMatches(known: ManifestRecord, now: ManifestRecord): boolean {
-  return known.src === now.src && known.hash === now.hash;
+function restatedFields(
+  known: ManifestRecord,
+  now: ManifestRecord,
+): readonly RecordField[] {
+  const drifted: RecordField[] = [];
+  if (known.src !== now.src) {
+    drifted.push('src');
+  }
+  // Сравниваются и отсутствия: у `placed-once` хеша нет с обеих сторон, и
+  // `undefined === undefined` здесь означает согласие, а не пропуск проверки.
+  if (known.hash !== now.hash) {
+    drifted.push('hash');
+  }
+  if (known.class !== now.class) {
+    drifted.push('class');
+  }
+  if (known.version !== now.version) {
+    drifted.push('version');
+  }
+  return drifted;
 }
 
 /**
  * Запись ЭТОГО обвеса потеряла объявление — артефакт снимается целиком.
  *
- * Развилки по классу владения нет: всё, что записано за этим обвесом, положил
- * он, он же и убирает. Файл, который должен пережить снятие записи, — это
- * форкнутый источник, а форк живёт снаружи движка. Записи соседних обвесов сюда
- * не доходят: их отсеял отбор сирот по `record.source`.
+ * Сюда доходит не всё потерявшее объявление: `placed-once` без поимённого
+ * подтверждения отсеян раньше и остался у человека извещением. Записи соседних
+ * обвесов не доходят тем более — их отсеял отбор сирот по `record.source`.
+ *
+ * Всё, что дошло, снимается одинаково: файл, который должен пережить снятие
+ * записи не по классу, а по решению человека, — это форкнутый источник, а форк
+ * живёт снаружи движка.
  */
 function planOrphan(
   tree: Tree,
@@ -1045,7 +1323,15 @@ export function describePlan(plan: MaterializationPlan): string {
   } else {
     lines.push(`шагов: ${plan.steps.length}`);
     for (const step of plan.steps) {
-      lines.push(`  ${step.kind.padEnd(7)} ${step.dest}  (${step.reason})`);
+      // Что именно приводится, названо и человеку: «запись разошлась» без
+      // указания поля отправляет его сличать манифест руками.
+      const restated =
+        step.restated === undefined || step.restated.length === 0
+          ? ''
+          : `: ${step.restated.join(', ')}`;
+      lines.push(
+        `  ${step.kind.padEnd(7)} ${step.dest}  (${step.reason}${restated})`,
+      );
     }
   }
 

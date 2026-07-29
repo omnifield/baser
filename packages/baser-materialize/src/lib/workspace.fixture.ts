@@ -22,6 +22,14 @@ export interface WorkspaceFixtureOptions {
   readonly contentRoot?: string;
   /** Идентичность обвеса; по умолчанию — типовая. */
   readonly sourceId?: string;
+  /**
+   * Версия обвеса; по умолчанию — типовая.
+   *
+   * Умолчание НЕ `undefined`: тест без явной версии проверял бы заодно и ветку
+   * «источник версии не назвал», и её извещение всплывало бы в каждом соседнем
+   * тесте. Отсутствие версии — отдельный сценарий, и подаётся оно явным `null`.
+   */
+  readonly sourceVersion?: string | null;
   /** Файлы шаблонов: путь относительно `contentRoot` → содержимое. */
   readonly sources?: Readonly<Record<string, string>>;
   /** Файлы, уже лежащие в репозитории потребителя. */
@@ -37,6 +45,8 @@ export interface WorkspaceFixture {
 
 export const CONTENT_ROOT = 'node_modules/@omnifield/canon-kit/content';
 export const SOURCE_ID = 'omnifield/canon-kit';
+/** Версия обвеса по умолчанию — та, что ляжет в `record.version`. */
+export const SOURCE_VERSION = '1.0.0';
 
 export function createWorkspace(
   options: WorkspaceFixtureOptions,
@@ -62,7 +72,14 @@ export function createWorkspace(
   return {
     tree,
     declaration: {
-      source: { id: options.sourceId ?? SOURCE_ID, contentRoot },
+      source: {
+        id: options.sourceId ?? SOURCE_ID,
+        contentRoot,
+        version:
+          options.sourceVersion === undefined
+            ? SOURCE_VERSION
+            : options.sourceVersion,
+      },
       layout: options.layout,
     },
   };
@@ -73,6 +90,8 @@ export interface SourceFixtureOptions {
   readonly id: string;
   /** Корень шаблонов этого обвеса; у каждого он свой. */
   readonly contentRoot: string;
+  /** Версия обвеса — та же, что ляжет в `record.version`. */
+  readonly version?: string | null;
   readonly layout: readonly LayoutEntry[];
   /** Файлы шаблонов: путь относительно `contentRoot` → содержимое. */
   readonly sources?: Readonly<Record<string, string>>;
@@ -96,9 +115,26 @@ export function addSource(
   }
 
   return {
-    source: { id: options.id, contentRoot: options.contentRoot },
+    source: {
+      id: options.id,
+      contentRoot: options.contentRoot,
+      version: options.version === undefined ? SOURCE_VERSION : options.version,
+    },
     layout: options.layout,
   };
+}
+
+/**
+ * Тот же обвес, но версией выше — переход «подняли версию обвеса».
+ *
+ * Отдельной операцией, а не правкой объекта в тесте: подъём версии это ПЕРЕХОД,
+ * и он такой же первоклассный инструмент фикстуры, как смена раскладки.
+ */
+export function reversion(
+  declaration: Declaration,
+  version: string | null,
+): Declaration {
+  return { ...declaration, source: { ...declaration.source, version } };
 }
 
 /**
