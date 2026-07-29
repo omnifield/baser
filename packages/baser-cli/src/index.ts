@@ -23,7 +23,7 @@ export type {
   ProblemCode,
 } from './lib/problems.js';
 
-export { exitCodeOf } from './lib/result.js';
+export { exitCodeOf, soleRun } from './lib/result.js';
 export type {
   ConfigReport,
   DoorCommand,

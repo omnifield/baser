@@ -79,11 +79,14 @@ package.json — иначе дверь его не найдёт. После пр
 interface Args {
   readonly plan: boolean;
   readonly cwd: string;
+  /** Просят ДАННЫЕ — значит проза не имеет права идти в тот же поток. */
+  readonly json: boolean;
   readonly rest: readonly string[];
 }
 
 function parse(argv: readonly string[]): Args | string {
   let plan = false;
+  let json = false;
   let cwd = process.cwd();
   const rest: string[] = [];
 
@@ -94,6 +97,13 @@ function parse(argv: readonly string[]): Args | string {
     }
     if (flag === '--plan') {
       plan = true;
+      continue;
+    }
+    if (flag === '--json') {
+      // Флаг уезжает дальше в дверь (`rest`) — решает она, а установщик только
+      // узнаёт, что поток занят данными.
+      json = true;
+      rest.push(flag);
       continue;
     }
     if (flag === '--cwd') {
@@ -108,7 +118,7 @@ function parse(argv: readonly string[]): Args | string {
     rest.push(flag);
   }
 
-  return { plan, cwd: resolve(cwd), rest };
+  return { plan, cwd: resolve(cwd), json, rest };
 }
 
 const parsed = parse(process.argv.slice(2));
@@ -119,10 +129,36 @@ if (typeof parsed === 'string') {
   process.exitCode = await install(parsed);
 }
 
+/**
+ * Рассказ установщика — человеку, но не в поток данных.
+ *
+ * `--json` обещает «отдать ответ данными», и обещание не выполнялось с рождения
+ * флага (`tasker:BASER2-36`): своя проза шла в тот же `stdout`, что и JSON
+ * двери, — сверху строка про положенный обвес, снизу отчёт уборки. Вывод не
+ * разбирался ничем, то есть флаг существовал ради того, кто зовёт нас из
+ * скрипта, и ровно ему не работал.
+ *
+ * Выбран `stderr`, а не молчание: уборка чужого манифеста — это факт, который
+ * человек обязан узнать, и убрать его совсем значило бы починить разбор за счёт
+ * человека. Вносить прозу ВНУТРЬ ответа тоже нельзя: форма ответа принадлежит
+ * двери, а установщик — временный файл ручной доставки, и лепить в чужую форму
+ * поле ради него значит менять шов ради костыля.
+ *
+ * Без `--json` ничего не меняется: оба потока идут человеку в терминал.
+ */
+function say(args: Args, text: string): void {
+  if (args.json) {
+    process.stderr.write(text);
+    return;
+  }
+  process.stdout.write(text);
+}
+
 async function install(args: Args): Promise<number> {
   const manifestPath = join(bundle, 'payload.json');
   if (!existsSync(manifestPath)) {
-    process.stdout.write(
+    say(
+      args,
       `бандл повреждён: рядом с установщиком нет "payload.json" (${bundle})\n`,
     );
     return 2;
@@ -133,7 +169,7 @@ async function install(args: Args): Promise<number> {
   };
   const name = manifest.source?.package?.name;
   if (typeof name !== 'string' || name === '') {
-    process.stdout.write('опись бандла не называет пакет обвеса\n');
+    say(args, 'опись бандла не называет пакет обвеса\n');
     return 2;
   }
 
@@ -162,7 +198,8 @@ async function install(args: Args): Promise<number> {
     manifest.source?.package?.version ?? null,
   );
 
-  process.stdout.write(
+  say(
+    args,
     `обвес ${name}${
       manifest.source?.package?.version === null ||
       manifest.source?.package?.version === undefined
@@ -179,7 +216,8 @@ async function install(args: Args): Promise<number> {
     process.stdout.write(outcome.stdout);
     return outcome.exitCode;
   } finally {
-    process.stdout.write(
+    say(
+      args,
       `\n${restore(before, written, name, relative(args.cwd, target))}`,
     );
   }

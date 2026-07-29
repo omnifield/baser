@@ -50,7 +50,6 @@ import {
   readManifest,
   type ManifestRecord,
 } from '@omnifield/baser-materialize';
-import type { DoorResult, SourceRun } from './result.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -453,22 +452,20 @@ function patchManifest(
  */
 
 /**
- * Прогон ЕДИНСТВЕННОГО обвеса из ответа двери.
+ * УЕХАЛ В `result.ts` и отдан через публичный вход пакета.
  *
- * Обвесов в ответе столько же, сколько поставлено (`tasker:BASER2-55`), и пробы
- * про один обвес спрашивают именно его. Хелпер бросает, если обвес не один:
- * молчаливое `runs[0]` в такой пробе однажды начало бы проверять первый из двух
- * и зеленеть на половине ответа.
+ * Приёмка девбокса держалась за него глубоким путём в наш `src/lib`
+ * (`tasker:BASER2-59`): единственный способ взять хелпер, которого нет в
+ * индексе. Цена — приёмка чужой зоны прибита к нашим внутренностям, и сигнала
+ * об этой зависимости у нас нет: перекладываем свои тестовые файлы — краснеет
+ * сосед. Значит либо отдавать наружу, либо не быть точкой опоры; выбрано первое,
+ * потому что «обвес один — дай его прогон» это утверждение о ФОРМЕ ОТВЕТА, а не
+ * о тесте.
+ *
+ * Реэкспорт оставлен, чтобы правка импортов у соседа была его заходом, а не
+ * поломкой, приехавшей из нашего.
  */
-export function soleRun(result: DoorResult): SourceRun {
-  if (result.runs.length !== 1) {
-    throw new Error(
-      `ожидался ровно один прогон, а их ${result.runs.length}: ` +
-        result.runs.map((run) => run.source.id).join(' · '),
-    );
-  }
-  return result.runs[0];
-}
+export { soleRun } from './result.js';
 
 /** Живой `.devcontainer` этого репозитория — эталон приёмки. */
 export function liveArtifact(dest: string): string {

@@ -16,10 +16,10 @@
  * команды, а двумя командами, потому что читаемость плана ДО применения —
  * инвариант, а не удобство (рынок подтвердил дважды: `nx migrate` и схематики).
  *
- * **Подготовка детали** — `check`, `pack`, `bundle` (`kb:BASER2-9`). Механики
- * живут в соседних зонах; дверь их зовёт и отдаёт ответ данными плюс текст
- * поверх. Своей семантики поверх чужой она не изобретает: коды приходят снизу,
- * и вторая правда о чужом событии нам уже дважды выходила боком.
+ * **Подготовка обвеса к выдаче** — `check`, `pack`, `bundle` (`kb:BASER2-9`).
+ * Механики живут в соседних зонах; дверь их зовёт и отдаёт ответ данными плюс
+ * текст поверх. Своей семантики поверх чужой она не изобретает: коды приходят
+ * снизу, и вторая правда о чужом событии нам уже дважды выходила боком.
  *
  * `bundle` — ОТДЕЛЬНАЯ команда, а не флаг у `pack`. Подготовка ≠ доставка
  * (`tasker:BASER2-31`): собрать нагрузку — всегда одно и то же, а бандл это
@@ -42,14 +42,14 @@ export const USAGE = `baser — дверь материализации и по�
   baser plan    показать план, ничего не применяя
   baser apply   применить план и записать на диск
 
-  baser check  <каталог обвеса>                 деталь подходит патрону?
+  baser check  <каталог обвеса>                 обвес подходит посадочному месту?
   baser pack   <каталог обвеса> --into <куда>   собрать нагрузку к выдаче
   baser bundle <каталог обвеса> --into <куда>   собрать запускаемый бандл
 
-  --json            отдать ответ данными (то же, поверх чего рендерится текст)
-  --cwd <path>      корень репозитория потребителя (по умолчанию — текущий каталог)
-  --confirm <dest>  подтвердить перезапись ЭТОГО чужого артефакта, поимённо
-  --into <path>     каталог выдачи для pack и bundle
+  --json            отдать ответ данными (любая команда)
+  --cwd <path>      корень репозитория потребителя — plan, apply
+  --confirm <dest>  подтвердить перезапись чужого артефакта, поимённо — plan, apply
+  --into <path>     каталог выдачи — pack, bundle
   --version         версии схем: двери, формы, вывода движка, бандла
   --help            это сообщение
 
@@ -146,6 +146,31 @@ type Command = 'plan' | 'apply' | 'check' | 'pack' | 'bundle';
 const NEEDS_TARGET: readonly Command[] = ['check', 'pack', 'bundle'];
 const NEEDS_INTO: readonly Command[] = ['pack', 'bundle'];
 
+/**
+ * Какой флаг какой команде принадлежит.
+ *
+ * Флаг, знакомый ДРУГОЙ команде, для этой ничем не лучше опечатки: `baser check
+ * <обвес> --confirm a` проходил с кодом 0 и не делал ничего, а человек был
+ * уверен, что подтвердил. Это ровно то молчание, от которого файл отгораживается
+ * абзацем ниже, — и оно жило прямо под ним (`tasker:BASER2-71`).
+ *
+ * `--json` не перечисляется: он есть у всех и означает у всех одно.
+ */
+const FLAGS_BY_COMMAND: Readonly<Record<Command, readonly string[]>> = {
+  plan: ['--cwd', '--confirm'],
+  apply: ['--cwd', '--confirm'],
+  check: [],
+  pack: ['--into'],
+  bundle: ['--into'],
+};
+
+/** Кому флаг всё-таки принадлежит — чтобы отказ показывал верную команду. */
+function ownersOf(flag: string): readonly Command[] {
+  return (Object.keys(FLAGS_BY_COMMAND) as Command[]).filter((command) =>
+    FLAGS_BY_COMMAND[command].includes(flag),
+  );
+}
+
 type ParsedArgv =
   | {
       readonly ok: true;
@@ -216,6 +241,19 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
     }
 
     if (flag === '--cwd' || flag === '--confirm' || flag === '--into') {
+      if (!FLAGS_BY_COMMAND[command].includes(flag)) {
+        const owners = ownersOf(flag);
+        return {
+          ok: false,
+          stdout:
+            `флаг "${flag}" команде "${command}" не принадлежит — ` +
+            `он у ${owners.join(' и ')}. Молча пропустить его значило бы ` +
+            'сделать вид, что он сработал.\n\n' +
+            `${USAGE}\n`,
+          exitCode: 2,
+        };
+      }
+
       const argument = rest[index + 1];
       if (argument === undefined || argument.startsWith('--')) {
         return {

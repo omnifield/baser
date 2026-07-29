@@ -14,7 +14,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
@@ -31,6 +31,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sourceConfigPath } from '@omnifield/baser-contracts';
 import { bundle } from './bundle.js';
+import { DOOR_SCHEMA_VERSION } from './schema.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, '../../../..');
@@ -228,6 +229,83 @@ describe('УНЕСЛИ И ЗАРАБОТАЛО', () => {
       return String((cause as { stdout?: string }).stdout ?? cause);
     }
   }
+
+  /**
+   * `--json` глазами того, ради кого флаг существует: скрипта.
+   *
+   * Он не читает — он разбирает. Поэтому проба и разбирает, а не сверяет
+   * подстроки: «похоже на JSON» и «является JSON» — разные утверждения, и
+   * второе флаг обещает с рождения (`tasker:BASER2-36`).
+   */
+  function installJson(
+    far: string,
+    repo: string,
+    ...args: string[]
+  ): { parsed: unknown; raw: string } {
+    let raw: string;
+    try {
+      raw = execFileSync(
+        process.execPath,
+        [join(far, 'install.mjs'), '--cwd', repo, '--json', ...args],
+        { encoding: 'utf-8', cwd: repo, stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+    } catch (cause) {
+      raw = String((cause as { stdout?: string }).stdout ?? cause);
+    }
+    return { parsed: JSON.parse(raw), raw };
+  }
+
+  it('--json: сухой прогон отдаёт РАЗБИРАЕМЫЕ данные', () => {
+    const { far, repo } = carried();
+
+    const { parsed } = installJson(far, repo, '--plan');
+
+    // Проза установщика (строка про положенный обвес сверху и отчёт уборки
+    // снизу) ломала разбор с рождения флага: JSON был валиден, вывод — нет.
+    expect((parsed as { command?: string }).command).toBe('plan');
+    expect((parsed as { doorSchemaVersion?: number }).doorSchemaVersion).toBe(
+      DOOR_SCHEMA_VERSION,
+    );
+  });
+
+  it('--json: установка отдаёт РАЗБИРАЕМЫЕ данные', () => {
+    const { far, repo } = carried();
+
+    const { parsed } = installJson(far, repo);
+
+    expect((parsed as { status?: string }).status).toBe('applied');
+  });
+
+  it('--json: отказ двери тоже разбирается', () => {
+    const { far, repo } = carried();
+    mkdirSync(join(repo, '.devcontainer'), { recursive: true });
+    writeFileSync(
+      join(repo, '.devcontainer/devcontainer.json'),
+      '{ "name": "мой, руками" }\n',
+    );
+
+    // Отказ — тот путь, на котором проза уборки печатается ровно так же, а
+    // код возврата ненулевой: разбор обязан пережить и это.
+    const { parsed } = installJson(far, repo);
+
+    expect((parsed as { status?: string }).status).toBe('blocked');
+  });
+
+  it('--json: человек не остаётся без рассказа — он уходит в stderr', () => {
+    const { far, repo } = carried();
+
+    const streams = spawnSync(
+      process.execPath,
+      [join(far, 'install.mjs'), '--cwd', repo, '--plan', '--json'],
+      { encoding: 'utf-8', cwd: repo },
+    );
+
+    // Уводить прозу в никуда было бы починкой за счёт человека: он по-прежнему
+    // обязан узнать, что запись в его манифесте снята.
+    JSON.parse(streams.stdout);
+    expect(streams.stderr).toContain('package.json');
+    expect(streams.stderr).toMatch(/сн(ял|ято)|как был/);
+  });
 
   it('чистый чужой репозиторий: одна команда — и обвес разложен', () => {
     const { far, repo } = carried();
