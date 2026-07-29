@@ -30,6 +30,17 @@
  *      `conflicts`, а не в `steps`, и делает план неприменимым;
  *   §5 показать расхождение — каждый шаг несёт `previous`, чтобы раннер мог
  *      показать разницу, а план — НАЗВАТЬ ПОТЕРИ до применения.
+ *
+ * ВЛАДЕНИЕ ВЕДЁТСЯ ПО КАЖДОМУ ОБВЕСУ ОТДЕЛЬНО (`tasker:BASER2-7`). Прогон идёт
+ * по ОДНОЙ декларации, а манифест — общий на репозиторий: несколько обвесов
+ * одновременно есть норма по построению (`kb:BASER2-4`), и второй инструмент не
+ * имеет права снимать файлы первого. Поэтому декларация ограничивает не только
+ * то, что кладётся, но и то, что вообще рассматривается:
+ *   — сироты ищутся среди записей ЭТОГО обвеса (`record.source`); чужая запись
+ *     без объявления — не сирота, а чужое хозяйство;
+ *   — `dest`, уже числящийся за другим обвесом, — отказ `cross-source-dest`:
+ *     столкновение двух инструментов на один путь НАЗЫВАЕТСЯ вслух и не
+ *     разрешается ни порядком записей, ни порядком прогонов (`kb:BASER2-6`).
  */
 
 import type { Tree } from '@nx/devkit';
@@ -99,6 +110,16 @@ export interface PlanStep {
 export type ConflictKind =
   /** Две записи `layout` претендуют на один `dest`. */
   | 'duplicate-dest'
+  /**
+   * `dest` уже числится за ДРУГИМ обвесом: два инструмента столкнулись на один
+   * путь. От `duplicate-dest` отличается стороной столкновения — там две записи
+   * одной декларации, здесь два обвеса, каждый из которых прогоняется своей.
+   *
+   * Подтверждением НЕ снимается: перехват сделал бы владение функцией порядка
+   * прогонов — обвесы отбирали бы файл друг у друга по кругу, и каждый прогон
+   * рапортовал бы работу на сошедшемся дереве (`kb:BASER2-6`).
+   */
+  | 'cross-source-dest'
   /** `dest` существует, а записи о нём нет — артефакт не наш. */
   | 'foreign-dest'
   /**
@@ -137,13 +158,18 @@ export type ConflictKind =
 export interface ConflictDetail {
   /** `duplicate-dest`: `src` записи, уже claim'нувшей этот `dest`. */
   readonly claimedBy?: string;
+  /** `cross-source-dest`: идентичность обвеса, за которым числится артефакт. */
+  readonly ownedBy?: string;
   /** `missing-source`: полный адрес источника, которого нет. */
   readonly sourcePath?: string;
   /**
-   * `foreign-dest`: чем отказ снимается.
+   * Чем отказ снимается: `foreign-dest` — подтверждением, `cross-source-dest` —
+   * только снятием записи из раскладки одного из обвесов.
+   *
    * Код совпадает с именем механизма в API (`PlanOptions.confirm`): панель,
    * показавшая одно имя, и вызов, требующий другого, — расхождение, которое
-   * всплывёт у потребителя.
+   * всплывёт у потребителя. Значение, отличное от `confirm`, — машинный признак
+   * того, что подтверждение по этому `dest` бесполезно.
    */
   readonly resolution?: 'confirm' | 'drop-layout-entry';
   /** `unreachable-dest`: путь, который занят файлом и перекрывает `dest`. */
@@ -196,8 +222,16 @@ export interface PlanNotice {
 }
 
 export interface NoticeDetail {
-  /** `confirmation-unused`: почему подтверждение не пригодилось. */
-  readonly confirmation?: 'not-required' | 'not-declared';
+  /**
+   * `confirmation-unused`: почему подтверждение не пригодилось.
+   *
+   * `not-required` — отказа по этому `dest` нет; `not-declared` — такой записи
+   * нет в раскладке; `not-applicable` — отказ есть, но подтверждением он не
+   * снимается (например, `cross-source-dest`). Третье значение отделено от
+   * первого намеренно: «подтверждение не понадобилось» на артефакте, который
+   * заблокирован, было бы прямой неправдой.
+   */
+  readonly confirmation?: 'not-required' | 'not-declared' | 'not-applicable';
 }
 
 /**
@@ -320,6 +354,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
   requireUsableDeclaration(declaration);
 
   const contentRoot = declaration.source.contentRoot as string;
+  const sourceId = declaration.source.id;
   const trace = options.trace ?? createTrace();
   const source = options.source ?? createTreeSource(tree, contentRoot);
   const manifestPath = options.manifestPath ?? MANIFEST_PATH;
@@ -341,7 +376,18 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
   const manifest = trace.span('plan.manifest', () =>
     readManifest(tree, manifestPath),
   );
-  trace.event('plan.owned', { records: manifest.size });
+
+  // Записи ЭТОГО обвеса — то, чем прогон вправе распоряжаться. Остальное в
+  // манифесте принадлежит другим инструментам того же репозитория и в этом
+  // прогоне не рассматривается вовсе.
+  const ours = [...manifest.values()].filter(
+    (record) => record.source === sourceId,
+  );
+  trace.event('plan.owned', {
+    source: sourceId,
+    records: manifest.size,
+    own: ours.length,
+  });
 
   // Объявленные цели — в каноничной форме и без непригодных: по ним же
   // считаются сироты, поэтому написание должно быть одно.
@@ -353,15 +399,23 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
   );
 
   /**
-   * Записи, потерявшие объявление, — сироты.
+   * Записи ЭТОГО обвеса, потерявшие объявление, — сироты.
    *
    * Ищутся ПО МАНИФЕСТУ, а не сканом дерева: у поиска по записям нет слепых
    * зон по построению, и пропуск каталогов ради скорости больше ничего не
    * прячет. Заодно исчезает целый класс дефектов прошлой модели — снятие
    * чужого файла, случайно похожего на наш.
+   *
+   * Отбор по `record.source` — не оптимизация, а само владение
+   * (`tasker:BASER2-7`): декларация одного обвеса ничего не утверждает про
+   * артефакты соседнего. Без этого отбора запись второго инструмента выглядела
+   * бы записью без объявления, то есть сиротой, и прогон снимал бы чужие
+   * файлы — поставил второй, снёсся первый.
    */
   const removed = new Set(
-    [...manifest.keys()].filter((dest) => !declaredDests.has(dest)),
+    ours
+      .filter((record) => !declaredDests.has(record.dest))
+      .map((record) => record.dest),
   );
 
   trace.span(
@@ -426,7 +480,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
           const outcome = planEntry(entry, {
             tree,
             source,
-            sourceId: declaration.source.id,
+            sourceId,
             manifest,
             confirmed: confirm.has(entry.dest),
           });
@@ -452,6 +506,26 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
     if (consumed.has(dest)) {
       continue;
     }
+
+    // Отказ, который подтверждением не снимается, обязан быть назван именно
+    // так. Сказать «не понадобилось» про заблокированный артефакт значило бы
+    // рапортовать согласие там, где движок всё равно ничего не сделает.
+    const unyielding = conflicts.find(
+      (conflict) =>
+        conflict.dest === dest && conflict.detail.resolution !== 'confirm',
+    );
+    if (unyielding !== undefined) {
+      notices.push({
+        kind: 'confirmation-unused',
+        dest,
+        detail: { confirmation: 'not-applicable' },
+        message:
+          `подтверждение по "${dest}" этот отказ не снимает (${unyielding.kind}): ` +
+          'согласие покрывает перезапись чужого файла, а не всякое препятствие',
+      });
+      continue;
+    }
+
     const declared = declaredDests.has(dest);
     notices.push({
       kind: 'confirmation-unused',
@@ -463,15 +537,21 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
     });
   }
 
-  trace.span('plan.orphans', () => {
-    for (const dest of removed) {
-      try {
-        steps.push(planOrphan(tree, dest, manifest.get(dest) as ManifestRecord));
-      } catch (cause) {
-        conflicts.push(entryFailed(dest, manifest.get(dest)?.src, cause));
+  trace.span(
+    'plan.orphans',
+    () => {
+      for (const dest of removed) {
+        try {
+          steps.push(
+            planOrphan(tree, dest, manifest.get(dest) as ManifestRecord),
+          );
+        } catch (cause) {
+          conflicts.push(entryFailed(dest, manifest.get(dest)?.src, cause));
+        }
       }
-    }
-  });
+    },
+    { orphans: removed.size },
+  );
 
   // Порядок вывода БАЙТОВЫЙ, а не локале-зависимый: схема вывода — контракт с
   // пультом, и порядок в нём не имеет права плавать по ICU и локали процесса.
@@ -594,7 +674,12 @@ interface ReachabilityContext {
   readonly manifestPath: string;
   readonly claimed: ReadonlyMap<string, LayoutEntry>;
   readonly claimedDirs: ReadonlyMap<string, string>;
-  /** Наши артефакты, которые этот же план снимает. */
+  /**
+   * Артефакты ЭТОГО обвеса, которые этот же план снимает.
+   *
+   * Файл соседнего обвеса сюда не попадает и путь перекрывает законно: этот
+   * прогон его не снимает, значит на диске он и останется.
+   */
   readonly removed: ReadonlySet<string>;
 }
 
@@ -775,6 +860,30 @@ interface EntryOutcome {
 function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
   const { tree, source, sourceId, manifest, confirmed } = context;
 
+  const known = manifest.get(entry.dest) ?? null;
+
+  // Артефакт числится за ДРУГИМ обвесом — столкновение двух инструментов на
+  // один путь. Проверка стоит ПЕРВОЙ и до чтения шаблона: чужое владение не
+  // зависит ни от того, лежит ли файл на диске (его могли снести руками), ни от
+  // того, читается ли наш шаблон. Пропусти её — и прогон перехватил бы запись
+  // соседа, а следующий прогон соседа перехватил бы её обратно (`kb:BASER2-6`).
+  if (known !== null && known.source !== sourceId) {
+    return {
+      conflict: {
+        kind: 'cross-source-dest',
+        dest: entry.dest,
+        src: entry.src,
+        detail: { ownedBy: known.source, resolution: 'drop-layout-entry' },
+        message:
+          `конфликт владения: "${entry.dest}" уже числится за обвесом ` +
+          `"${known.source}", а объявлен обвесом "${sourceId}" — у артефакта ` +
+          'может быть только один поставщик. Убери запись из раскладки одного ' +
+          'из двух; подтверждением это не снимается — перехват сделал бы ' +
+          'владение функцией порядка прогонов',
+      },
+    };
+  }
+
   const content = source.read(entry.src);
   if (content === null) {
     return {
@@ -795,7 +904,6 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
     hash: hashContent(content),
   };
 
-  const known = manifest.get(entry.dest) ?? null;
   const actual = tree.exists(entry.dest) ? tree.read(entry.dest, 'utf-8') : null;
 
   // Артефакта нет — кладём впервые. Запись при этом могла остаться от прошлого
@@ -884,21 +992,26 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
   return {};
 }
 
-/** Утверждает ли запись ровно то, что объявлено сейчас. */
+/**
+ * Утверждает ли запись ровно то, что объявлено сейчас.
+ *
+ * Обвес здесь не сверяется: до этого места доходят только записи ЭТОГО обвеса —
+ * чужая отсекается отказом `cross-source-dest` раньше и шагом не становится
+ * никогда. Сверять его тут значило бы держать вторую, более слабую копию того
+ * же правила: она молча превращала бы перехват чужого артефакта в приведение
+ * записи ровно тогда, когда первая сломается.
+ */
 function claimMatches(known: ManifestRecord, now: ManifestRecord): boolean {
-  return (
-    known.src === now.src &&
-    known.source === now.source &&
-    known.hash === now.hash
-  );
+  return known.src === now.src && known.hash === now.hash;
 }
 
 /**
- * Запись потеряла объявление — артефакт снимается целиком.
+ * Запись ЭТОГО обвеса потеряла объявление — артефакт снимается целиком.
  *
- * Развилки по классу владения нет: всё, что записано манифестом, положил движок
- * и он же убирает. Файл, который должен пережить снятие записи, — это форкнутый
- * источник, а форк живёт снаружи движка.
+ * Развилки по классу владения нет: всё, что записано за этим обвесом, положил
+ * он, он же и убирает. Файл, который должен пережить снятие записи, — это
+ * форкнутый источник, а форк живёт снаружи движка. Записи соседних обвесов сюда
+ * не доходят: их отсеял отбор сирот по `record.source`.
  */
 function planOrphan(
   tree: Tree,
