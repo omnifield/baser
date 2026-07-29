@@ -68,6 +68,39 @@ export function createWorkspace(
   };
 }
 
+export interface SourceFixtureOptions {
+  /** Идентичность обвеса — та же, что ляжет в `record.source`. */
+  readonly id: string;
+  /** Корень шаблонов этого обвеса; у каждого он свой. */
+  readonly contentRoot: string;
+  readonly layout: readonly LayoutEntry[];
+  /** Файлы шаблонов: путь относительно `contentRoot` → содержимое. */
+  readonly sources?: Readonly<Record<string, string>>;
+}
+
+/**
+ * ЕЩЁ ОДИН обвес в ТОМ ЖЕ дереве.
+ *
+ * Несколько инструментов в одном репозитории — норма по построению
+ * (`kb:BASER2-4`), а прогон идёт по одной декларации на обвес. Значит фикстуре
+ * нужна операция «досадить инструмент в уже оснащённое дерево», а не второе
+ * дерево: манифест у репозитория один, и вся суть проверки в том, как две
+ * декларации делят его между собой.
+ */
+export function addSource(
+  tree: Tree,
+  options: SourceFixtureOptions,
+): Declaration {
+  for (const [path, content] of Object.entries(options.sources ?? {})) {
+    tree.write(`${options.contentRoot}/${path}`, content);
+  }
+
+  return {
+    source: { id: options.id, contentRoot: options.contentRoot },
+    layout: options.layout,
+  };
+}
+
 /**
  * Новая декларация с другой раскладкой — переход объявления.
  *

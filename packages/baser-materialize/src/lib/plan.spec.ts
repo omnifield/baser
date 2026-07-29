@@ -455,51 +455,36 @@ describe('владение выводится из манифеста, а не �
  * претензия доживала до снятия не того файла.
  */
 describe('запись обязана утверждать объявленное сейчас', () => {
-  const cases: ReadonlyArray<readonly [string, (d: Declaration) => Declaration]> =
-    [
-      [
-        'сменился объявленный шаблон',
-        (declaration) =>
-          redeclare(declaration, [
-            { src: 'ci/build-2.yml', dest: WORKFLOW },
-          ]),
-      ],
-      [
-        'сменился обвес',
-        (declaration) => ({
-          ...declaration,
-          source: { ...declaration.source, id: 'someone/else' },
-        }),
-      ],
-    ];
+  // Смена ОБВЕСА сюда не входит: артефакт, числящийся за другим поставщиком, —
+  // это столкновение двух инструментов, а не устаревшая запись. Его исход —
+  // отказ `cross-source-dest` (`kb:BASER2-6`), и он проверяется в разделе про
+  // владение по каждому обвесу отдельно.
+  it('сменился объявленный шаблон при том же содержимом → шаг record, файл не тронут', () => {
+    const { tree, declaration } = createWorkspace({
+      layout: [exactEntry],
+      sources: { ...SOURCES, 'ci/build-2.yml': SOURCES['ci/build.yml'] },
+    });
+    applyPlan(tree, computePlan({ tree, declaration }));
+    const landed = tree.read(WORKFLOW, 'utf-8');
 
-  it.each(cases)(
-    '%s при том же содержимом → шаг record, файл не тронут',
-    (_case, change) => {
-      const { tree, declaration } = createWorkspace({
-        layout: [exactEntry],
-        sources: { ...SOURCES, 'ci/build-2.yml': SOURCES['ci/build.yml'] },
-      });
-      applyPlan(tree, computePlan({ tree, declaration }));
-      const landed = tree.read(WORKFLOW, 'utf-8');
+    const next = redeclare(declaration, [
+      { src: 'ci/build-2.yml', dest: WORKFLOW },
+    ]);
+    const plan = computePlan({ tree, declaration: next });
 
-      const next = change(declaration);
-      const plan = computePlan({ tree, declaration: next });
+    expect(plan.status).toBe('pending');
+    expect(plan.steps[0]).toMatchObject({
+      kind: 'record',
+      dest: WORKFLOW,
+      reason: 'reclaimed',
+      content: null,
+    });
 
-      expect(plan.status).toBe('pending');
-      expect(plan.steps[0]).toMatchObject({
-        kind: 'record',
-        dest: WORKFLOW,
-        reason: 'reclaimed',
-        content: null,
-      });
-
-      applyPlan(tree, plan);
-      // Содержимое артефакта не тронуто — менялась только запись.
-      expect(tree.read(WORKFLOW, 'utf-8')).toBe(landed);
-      expect(computePlan({ tree, declaration: next }).status).toBe('converged');
-    },
-  );
+    applyPlan(tree, plan);
+    // Содержимое артефакта не тронуто — менялась только запись.
+    expect(tree.read(WORKFLOW, 'utf-8')).toBe(landed);
+    expect(computePlan({ tree, declaration: next }).status).toBe('converged');
+  });
 
   it('устаревшая запись не доживает до снятия не того файла', () => {
     // Сценарий, на котором прошлая модель теряла файл: объявление сменилось,
@@ -1053,9 +1038,11 @@ describe('вывод машинночитаем в первую очередь',
       expect(typeof span.name).toBe('string');
       expect(typeof span.ms).toBe('number');
     }
+    // Событие владения называет и весь манифест, и долю ЭТОГО обвеса: прогон
+    // распоряжается только своей долей, и это обязано быть видно в телеметрии.
     expect(
       plan.trace.find((span) => span.name === 'plan.owned')?.detail,
-    ).toEqual({ records: 0 });
+    ).toEqual({ source: SOURCE_ID, records: 0, own: 0 });
   });
 });
 
