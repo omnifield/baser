@@ -19,7 +19,18 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 /** Распакованный пакет обвеса на диске. */
 export interface InstalledPackage {
   readonly packageName: string;
-  readonly version: string;
+  /**
+   * Версия из манифеста пакета — единственное место, где версия обвеса живёт
+   * (`kb:BASER2-2`, «Версия обвеса — в манифесте пакета»).
+   *
+   * `null` — **обвес версию не назвал**, и это НАЗВАННОЕ отсутствие, а не
+   * пробел. Прежде здесь стояла подстановка `0.0.0`: пока версия никуда не
+   * уезжала, она была безобидной косметикой строки вывода, но теперь она
+   * доезжает до паспорта укладки — и сочинённая версия стала бы утверждением,
+   * которого обвес не делал. На нём же потом строилось бы «между твоей версией
+   * и новой было ломающее изменение» (`tasker:BASER2-52`).
+   */
+  readonly version: string | null;
   /** Абсолютный корень пакета — каталог, где лежит его `package.json`. */
   readonly root: string;
   /** Разобранный `package.json`; блок `baser` из него достают контракты. */
@@ -90,7 +101,13 @@ export function resolveInstalledPackage(
     ok: true,
     value: {
       packageName,
-      version: typeof head.version === 'string' ? head.version : '0.0.0',
+      // Пустая строка сюда тоже не проходит: она притворялась бы версией, а
+      // движок такой вход отвергает отказом. «Версии нет» и «версия пустая» —
+      // одно состояние, и называется оно одним значением.
+      version:
+        typeof head.version === 'string' && head.version.trim() !== ''
+          ? head.version
+          : null,
       root: dirname(manifestPath),
       manifest,
     },

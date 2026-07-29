@@ -97,7 +97,15 @@ function renderRun(run: SourceRun, command: DoorResult['command']): string[] {
   const { source } = run;
   const lines = [
     `обвес: ${source.id} — ${source.title}`,
-    `  пакет ${source.packageName}@${source.packageVersion}`,
+    // Версия названа ровно так, как она есть. Обвес её не назвал — так и
+    // сказано, и сказана ЦЕНА: та же неизвестность уедет в паспорт укладки и
+    // останется там навсегда для этих файлов. `@undefined` в этой строке
+    // отправлял бы человека искать поломку двери там, где её нет, а сочинённое
+    // `@0.0.0` было бы утверждением, которого обвес не делал (`tasker:BASER2-52`).
+    source.packageVersion === null
+      ? `  пакет ${source.packageName} — версия не названа обвесом: ` +
+        'в паспорт укладки ляжет "null"'
+      : `  пакет ${source.packageName}@${source.packageVersion}`,
     `  шаблоны ${
       source.location.kind === 'in-tree'
         ? source.location.path
