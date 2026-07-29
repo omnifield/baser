@@ -22,6 +22,13 @@ export type {
 } from './lib/declaration.js';
 
 export {
+  ARTIFACT_CLASSES,
+  DEFAULT_ARTIFACT_CLASS,
+  isArtifactClass,
+} from './lib/classes.js';
+export type { ArtifactClass } from './lib/classes.js';
+
+export {
   BaserMaterializeError,
   DeclarationError,
   SourceOutsideTreeError,
@@ -59,6 +66,7 @@ export type {
   PlanStatus,
   PlanStep,
   PlanStepKind,
+  RecordField,
 } from './lib/plan.js';
 
 export { OUTPUT_SCHEMA_VERSION } from './lib/schema.js';

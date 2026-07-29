@@ -20,7 +20,12 @@ import type { Declaration } from './declaration.js';
 import { computePlan } from './plan.js';
 import { MaterializationConflictError, applyPlan } from './apply.js';
 import { MANIFEST_PATH } from './manifest.js';
-import { addSource, createWorkspace, manifestOf } from './workspace.fixture.js';
+import {
+  SOURCE_VERSION,
+  addSource,
+  createWorkspace,
+  manifestOf,
+} from './workspace.fixture.js';
 
 const DEVBOX = 'omnifield/devbox';
 const AGENTS = 'omnifield/agent-harness';
@@ -329,9 +334,9 @@ describe('трейс называет долю обвеса в общем пас
 
     expect(
       plan.trace.find((span) => span.name === 'plan.owned')?.detail,
-    ).toEqual({ source: AGENTS, records: 1, own: 0 });
+    ).toEqual({ source: AGENTS, version: SOURCE_VERSION, records: 1, own: 0 });
     expect(
       plan.trace.find((span) => span.name === 'plan.orphans')?.detail,
-    ).toEqual({ orphans: 0 });
+    ).toEqual({ orphans: 0, retained: 0 });
   });
 });
