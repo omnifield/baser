@@ -12,8 +12,14 @@
  *
  * Разложить обвес на «базовый + надстройку» двумя источниками поэтому нельзя:
  * уровни выражаются ПРЕСЕТОМ внутри одного обвеса.
+ *
+ * Здесь же — второе свойство набора: у двух обвесов не бывает одного файла
+ * настроек. Причина та же — совладения не бывает ни у артефакта, ни у файла, в
+ * который человек пишет.
  */
 
+import type { ArtifactClass } from './classes.js';
+import { sourceConfigPath } from './config.js';
 import type { SourceDeclaration } from './declaration.js';
 import { byBytes } from './paths.js';
 import { ProblemLog, type FormResult } from './problems.js';
@@ -29,9 +35,15 @@ export interface InstalledSource {
 export interface ArtifactOwner {
   readonly sourceId: string;
   readonly packageName: string;
-  /** Шаблон, из которого артефакт перегенерируется целиком. */
+  /** Шаблон, из которого артефакт берётся. */
   readonly src: string;
   readonly render: boolean;
+  /**
+   * Чем станок держит артефакт (`classes.ts`). Едет вместе с владением, потому
+   * что читатель у них один: план строится по карте владения, а класс — то, что
+   * план обязан про артефакт сказать (`tasker:BASER2-51`).
+   */
+  readonly class: ArtifactClass;
 }
 
 /** Путь артефакта → его единственный владелец. */
@@ -50,6 +62,7 @@ export function checkSingleProvider(
   const log = new ProblemLog();
   const owners: Record<string, ArtifactOwner> = {};
   const byId = new Map<string, InstalledSource>();
+  const byConfigFile = new Map<string, string>();
 
   for (const installed of sources) {
     const { declaration, packageName } = installed;
@@ -69,6 +82,25 @@ export function checkSingleProvider(
     }
     byId.set(id, installed);
 
+    // Имя файла настроек считается из личности, поэтому у двух РАЗНЫХ обвесов
+    // оно почти всегда разное — но не гарантированно: слеш становится дефисом, а
+    // дефис в сегменте личности законен, и "a-b/c" сходится с "a/b-c". Один файл
+    // на двоих означал бы, что каждый называет чужие ключи опечатками, — молча
+    // такое не оставляем.
+    const configPath = sourceConfigPath(id);
+    const sharing = byConfigFile.get(configPath);
+    if (sharing) {
+      log.add(
+        'source-config-shared',
+        `${packageName}.source.id`,
+        `личности "${sharing}" и "${id}" дают один файл настроек "${configPath}" — ` +
+          'человеку негде настроить их порознь, а каждый из двоих назвал бы чужие ключи ' +
+          'незнакомыми. Личности обязаны различаться и после того, как слеш стал дефисом',
+      );
+      continue;
+    }
+    byConfigFile.set(configPath, id);
+
     for (const entry of declaration.layout) {
       const held = owners[entry.dest];
       if (held) {
@@ -87,6 +119,7 @@ export function checkSingleProvider(
         packageName,
         src: entry.src,
         render: entry.render,
+        class: entry.class,
       };
     }
   }

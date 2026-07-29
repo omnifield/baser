@@ -2,7 +2,7 @@
   "name": "@omnifield/baser-devbox",
   "version": "0.1.0",
   "baser": {
-    "formVersion": 1,
+    "formVersion": 2,
 
     "source": {
       "id": "omnifield/devbox",

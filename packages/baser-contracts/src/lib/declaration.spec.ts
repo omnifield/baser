@@ -5,7 +5,7 @@ import {
   readSourceDeclaration,
 } from './declaration.js';
 import { codesOf, declarationBlock } from './form.fixture.js';
-import { FORM_VERSION } from './version.js';
+import { FORM_VERSION, MIN_FORM_VERSION } from './version.js';
 
 /** Разбор, который обязан пройти, — чтобы отказы ниже читались как отличие. */
 function parse(patch: Record<string, unknown> = {}) {
@@ -79,6 +79,29 @@ describe('объявление обвеса', () => {
       expect(problems[0].message).toContain('обнови baser');
     });
 
+    it('ОБЪЯВЛЕНИЕ ПЕРВОЙ ФОРМЫ ОТВЕРГАЕТСЯ ЦЕЛИКОМ И НАЗВАННО', () => {
+      // Форма 1 держала настройки потребителя в baser.json, а раскладку — без
+      // класса. Разобрать её по правилам формы 2 значит молча потерять то, что
+      // человек настроил: разбор обязан остановиться на версии, а не идти дальше.
+      const problems = refusals({
+        formVersion: 1,
+        layout: [{ src: 'a.json', dest: 'a.json', mode: 'merge' }],
+      });
+
+      expect(codesOf(problems)).toEqual([
+        'form-version-unsupported @ baser.formVersion',
+      ]);
+      expect(problems[0].message).toContain('обнови обвес');
+      // Названо, ЧЕМ форма старая: автор обвеса читает отказ, а не changelog.
+      expect(problems[0].message).toContain('.omnifield/');
+      expect(problems[0].message).toContain('class');
+    });
+
+    it('первая форма — уже не самая старая разбираемая', () => {
+      expect(MIN_FORM_VERSION).toBe(FORM_VERSION);
+      expect(MIN_FORM_VERSION).toBeGreaterThan(1);
+    });
+
     it('не принимает версию строкой или дробью', () => {
       expect(codesOf(refusals({ formVersion: '1' }))).toEqual([
         'form-version-invalid @ baser.formVersion',
@@ -86,6 +109,24 @@ describe('объявление обвеса', () => {
       expect(codesOf(refusals({ formVersion: 1.5 }))).toEqual([
         'form-version-invalid @ baser.formVersion',
       ]);
+    });
+  });
+
+  describe('версия обвеса', () => {
+    it('ВТОРЫМ ПОЛЕМ НЕ ЗАВОДИТСЯ — она в манифесте пакета', () => {
+      // Два места для одного факта разъедутся; на этом краснела приёмка pack.
+      const problems = refusals({
+        source: {
+          id: 'omnifield/devbox',
+          title: 'Девбокс',
+          contentRoot: 'template',
+          version: '0.1.0',
+        },
+      });
+      expect(codesOf(problems)).toEqual([
+        'unknown-field @ baser.source.version',
+      ]);
+      expect(problems[0].message).toContain('манифеста пакета');
     });
   });
 
@@ -280,6 +321,49 @@ describe('объявление обвеса', () => {
       if (result.ok) {
         expect(result.value.layout.map((e) => e.render)).toEqual([true, false]);
       }
+    });
+
+    it('КЛАСС АРТЕФАКТА: умолчание regenerated, placed-once объявляется', () => {
+      const result = parse({
+        layout: [
+          { src: 'a.json.ejs', dest: 'a.json' },
+          {
+            src: 'harness.yaml.ejs',
+            dest: '.omnifield/harness.yaml',
+            class: 'placed-once',
+          },
+        ],
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      // Умолчание проставлено при разборе — как у render, чтобы жить в одном
+      // месте, а не в каждом читателе формы.
+      expect(result.value.layout.map((entry) => entry.class)).toEqual([
+        'regenerated',
+        'placed-once',
+      ]);
+    });
+
+    it('называет класс, которого форма не знает', () => {
+      const problems = refusals({
+        layout: [{ src: 'a.json', dest: 'a.json', class: 'seed' }],
+      });
+      expect(codesOf(problems)).toEqual([
+        'unknown-artifact-class @ baser.layout[0].class',
+      ]);
+      expect(problems[0].message).toContain('placed-once');
+    });
+
+    it('КЛАСС — ПЕРЕЧИСЛЕНИЕ, А НЕ ФЛАГ: once:true отправляют к class', () => {
+      // Третий класс уже описан у соседей (kb:WEBER-4); флаг пришлось бы ломать
+      // при его приезде, а перечисление примет новое слово молча.
+      const problems = refusals({
+        layout: [{ src: 'a.json', dest: 'a.json', once: true }],
+      });
+      expect(codesOf(problems)).toEqual([
+        'unknown-field @ baser.layout[0].once',
+      ]);
+      expect(problems[0].message).toContain('"class": "placed-once"');
     });
 
     it('нормализует путь, потому что dest — ключ владения', () => {

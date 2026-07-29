@@ -1,0 +1,41 @@
+{
+  "name": "@omnifield/brainer-agent-harness",
+  "version": "0.4.0",
+  "baser": {
+    "formVersion": 2,
+
+    "source": {
+      "id": "omnifield/agent-harness",
+      "title": "Плагин агент-харнесса: роли, зоны, гейты",
+      "contentRoot": "template"
+    },
+
+    "settings": {
+      "product": {
+        "title": "Имя продукта",
+        "description": "Идёт в identity-баннер каждой сессии. По умолчанию — имя репозитория.",
+        "type": "string",
+        "defaultFrom": "./defaults.mjs#repoName"
+      },
+      "architects": {
+        "title": "Сколько архитекторов (main-сессий)",
+        "type": "number",
+        "default": 1
+      },
+      "zones": {
+        "title": "Зоны продукта",
+        "description": "Под каждую поднимается своя owner-сессия; пакет зоны — packages/<продукт>-<зона>.",
+        "type": "list",
+        "default": []
+      }
+    },
+
+    "layout": [
+      {
+        "src": "harness.yaml.ejs",
+        "dest": ".omnifield/harness.yaml",
+        "class": "placed-once"
+      }
+    ]
+  }
+}
