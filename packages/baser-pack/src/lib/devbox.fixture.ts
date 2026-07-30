@@ -115,6 +115,11 @@ export interface Manifest {
     source: { id: string; title: string; contentRoot: string };
     settings: Record<string, Record<string, unknown>>;
     presets: Record<string, unknown>;
-    layout: { src: string; dest: string; render?: boolean }[];
+    layout: {
+      src: string;
+      dest: string;
+      render?: boolean;
+      class?: string;
+    }[];
   };
 }
