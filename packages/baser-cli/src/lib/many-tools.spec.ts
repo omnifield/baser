@@ -72,6 +72,24 @@ const AGENTS: SourceSpec = {
   },
 };
 
+const SUCCESSOR_PACKAGE = '@omnifield/brain-harness-next';
+const SUCCESSOR_ID = 'omnifield/agent-harness-next';
+
+/**
+ * ПРЕЕМНИК: инструмент, которому сосед ОТДАЁТ артефакт.
+ *
+ * Не спор: отдающий из своей раскладки этот путь уже выпилил, принимающий его
+ * объявил. Форма такой набор пропускает — и правильно делает, столкновения тут
+ * нет.
+ */
+const SUCCESSOR: SourceSpec = {
+  packageName: SUCCESSOR_PACKAGE,
+  id: SUCCESSOR_ID,
+  title: 'Плагин агент-харнесса, следующее поколение',
+  layout: [{ src: 'shared-policy.md', dest: POLICY, render: false }],
+  templates: { 'shared-policy.md': '# shared-policy — рамка ролей (v2)\n' },
+};
+
 /** Тот же плагин, но целящийся в артефакт девбокса, — спор на один путь. */
 const RIVAL: SourceSpec = {
   packageName: AGENTS_PACKAGE,
@@ -462,6 +480,138 @@ describe('столкновение двух обвесов на один пут�
       }),
     ]);
     expect(box.read(DEVCONTAINER)).toContain('baser-devbox');
+  });
+});
+
+describe('ПЕРЕДАЧА АРТЕФАКТА от обвеса к обвесу за один прогон', () => {
+  /**
+   * Сосед выпустился и перестал класть файл, а второй начал его класть.
+   *
+   * До `tasker:BASER2-58` исход зависел от ОЧЕРЕДИ ЗАПИСЕЙ В КОНФИГЕ: отдающий
+   * раньше — всё сходилось; отдающий позже — принимающий видел в паспорте чужую
+   * запись и упирался в `cross-source-dest`, и повторный прогон это не
+   * расшивал. Отказ был безопасен, тихой потери не было — но результат одного и
+   * того же репозитория зависел от порядка строк в файле.
+   */
+  /** Раскладывает исходное состояние и переводит артефакт «в дороге». */
+  async function inTransit(order: readonly string[]): Promise<Consumer> {
+    const box = twoTools([DEVBOX_PACKAGE, AGENTS_PACKAGE]);
+    await run({ command: 'apply', cwd: box.root });
+
+    // Отдающий выпустился без этого артефакта, принимающий — с ним.
+    box.installSource({
+      ...AGENTS,
+      layout: AGENTS.layout.filter((entry) => entry.dest !== POLICY),
+    });
+    box.installSource(SUCCESSOR);
+    box.write('baser.json', `${JSON.stringify(configOf(order), null, 2)}\n`);
+    return box;
+  }
+
+  const FORWARD = [DEVBOX_PACKAGE, AGENTS_PACKAGE, SUCCESSOR_PACKAGE];
+  const BACKWARD = [DEVBOX_PACKAGE, SUCCESSOR_PACKAGE, AGENTS_PACKAGE];
+
+  it('ОТДАЮЩИЙ ПОЗЖЕ В КОНФИГЕ: передача всё равно проходит', async () => {
+    // Ровно тот порядок, на котором дверь упиралась. Освобождение обязано
+    // считаться раньше захвата — при любой записи в конфиге.
+    consumer = await inTransit(BACKWARD);
+
+    const result = await run({ command: 'apply', cwd: consumer.root });
+
+    expect(result.status).toBe('applied');
+    expect(consumer.read(POLICY)).toBe('# shared-policy — рамка ролей (v2)\n');
+    expect(
+      manifestOf(consumer).find((record) => record.dest === POLICY)?.source,
+    ).toBe(SUCCESSOR_ID);
+    // И сходится со второго прогона, а не колеблется вечно.
+    expect((await run({ command: 'apply', cwd: consumer.root })).status).toBe(
+      'converged',
+    );
+  });
+
+  it('исход ОДИНАКОВ в обе стороны — порядок записей больше ничего не решает', async () => {
+    const forward = await inTransit(FORWARD);
+    await run({ command: 'apply', cwd: forward.root });
+    const expected = {
+      policy: forward.read(POLICY),
+      manifest: manifestOf(forward)
+        .map((record) => [record.dest, record.source])
+        .sort(),
+    };
+    forward.cleanup();
+
+    consumer = await inTransit(BACKWARD);
+    const result = await run({ command: 'apply', cwd: consumer.root });
+
+    expect(result.status).toBe('applied');
+    expect(consumer.read(POLICY)).toBe(expected.policy);
+    expect(
+      manifestOf(consumer)
+        .map((record) => [record.dest, record.source])
+        .sort(),
+    ).toEqual(expected.manifest);
+  });
+
+  it('порядок ПРОГОНОВ назван в ответе: отдающий идёт первым', async () => {
+    // Не косметика: по этому списку читается, ПОЧЕМУ прогон прошёл. Владение
+    // при этом никому не достаётся «за то, что прогнался первым» — очередь
+    // считается из объявлений и паспорта укладки, а не из удачи.
+    consumer = await inTransit(BACKWARD);
+
+    const result = await run({ command: 'plan', cwd: consumer.root });
+
+    const order = result.runs.map((item) => item.source.id);
+    expect(order.indexOf(AGENTS_ID)).toBeLessThan(order.indexOf(SUCCESSOR_ID));
+  });
+
+  it('НИЧЕГО НЕ ПЕРЕДАЁТСЯ — порядок остаётся тем, что в конфиге', async () => {
+    // Перестановка не должна случаться сама по себе: рассказ о прогонах читает
+    // человек, и менять его порядок без причины значит путать без причины.
+    const box = twoTools([AGENTS_PACKAGE, DEVBOX_PACKAGE]);
+
+    const result = await run({ command: 'plan', cwd: box.root });
+
+    expect(result.runs.map((item) => item.source.id)).toEqual([
+      AGENTS_ID,
+      DEVBOX_ID,
+    ]);
+  });
+
+  it('ВЗАИМНАЯ передача: отказ — но ОДИНАКОВЫЙ в обе стороны', async () => {
+    // Два обвеса меняются артефактами. Очередью это не разрешается вовсе: кто
+    // бы ни пошёл первым, он захватывает путь, ещё числящийся за соседом.
+    // Дверь на этом останавливается — и останавливается ОДИНАКОВО, а это и был
+    // предмет задачи: исход перестал зависеть от порядка записей.
+    async function swapped(order: readonly string[]): Promise<Consumer> {
+      const box = installDevbox({ config: configOf(order) });
+      box.installSource({ ...AGENTS, layout: [AGENTS.layout[1]] });
+      box.installSource({
+        ...SUCCESSOR,
+        layout: [{ src: 'harness.yaml', dest: HARNESS, render: false }],
+        templates: { 'harness.yaml': 'product: baser\n' },
+      });
+      await run({ command: 'apply', cwd: box.root });
+
+      // Обмен: каждый объявил то, что лежит за соседом.
+      box.installSource({
+        ...AGENTS,
+        layout: [{ src: 'harness.yaml.ejs', dest: HARNESS }],
+      });
+      box.installSource(SUCCESSOR);
+      return box;
+    }
+
+    const first = await swapped([AGENTS_PACKAGE, SUCCESSOR_PACKAGE]);
+    const forward = await run({ command: 'apply', cwd: first.root });
+    first.cleanup();
+
+    consumer = await swapped([SUCCESSOR_PACKAGE, AGENTS_PACKAGE]);
+    const backward = await run({ command: 'apply', cwd: consumer.root });
+
+    expect(forward.status).toBe('blocked');
+    expect(backward.status).toBe('blocked');
+    // На диск не ушло ничего — отказ безопасен, как и был.
+    expect(consumer.read(POLICY)).toBe(POLICY_BODY);
   });
 });
 
