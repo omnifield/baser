@@ -17,7 +17,7 @@ import {
 
 const WORKFLOW = '.github/workflows/build.yml';
 
-const exactEntry: LayoutEntry = { src: 'ci/build.yml', dest: WORKFLOW };
+const ciEntry: LayoutEntry = { src: 'ci/build.yml', dest: WORKFLOW };
 const jsonEntry: LayoutEntry = { src: 'ts/tsconfig.json', dest: 'tsconfig.json' };
 const ignoreEntry: LayoutEntry = { src: 'repo/gitignore', dest: '.gitignore' };
 const docEntry: LayoutEntry = {
@@ -35,7 +35,7 @@ const SOURCES = {
 describe('computePlan — чего не хватает', () => {
   it('объявленный, но отсутствующий артефакт даёт шаг создания', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
 
@@ -54,7 +54,7 @@ describe('computePlan — чего не хватает', () => {
 
   it('план не трогает дерево — он данные, а не побочка', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
 
@@ -65,7 +65,7 @@ describe('computePlan — чего не хватает', () => {
 
   it('план читается человеком до применения', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
 
@@ -79,7 +79,7 @@ describe('computePlan — чего не хватает', () => {
 describe('computePlan — что разошлось', () => {
   it('правка в нашем артефакте даёт шаг обновления с прежним содержимым', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
     applyPlan(tree, computePlan({ tree, declaration }));
@@ -101,7 +101,7 @@ describe('computePlan — что разошлось', () => {
   it('план НАЗЫВАЕТ потери: правка видна в previous до применения', () => {
     // «Затирание само по себе не дефект. Дефектом было молчание» (`kb:BASER2-2`).
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
     applyPlan(tree, computePlan({ tree, declaration }));
@@ -199,7 +199,7 @@ describe('сведения версий не происходит ни при к
       sources: SOURCES,
     });
     const without = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
 
@@ -209,13 +209,14 @@ describe('сведения версий не происходит ни при к
 
 /**
  * И1.5 (`tasker:BASER2-23`). Движок ничего не читает сам: настоящая декларация
- * размазана по объявлению обвеса и конфигу потребителя, и склеивает их дверь.
- * Движку подают готовую структуру — а он за это отвечает своей границей.
+ * размазана по трём файлам — объявление обвеса, перечень поставленного, настройки
+ * инструмента (`declaration.ts`), — и склеивает их дверь. Движку подают готовую
+ * структуру, а он за это отвечает своей границей.
  */
 describe('движок принимает готовую структуру', () => {
   it('планирует и применяет без единого файла-манифеста в дереве', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry, ignoreEntry],
+      layout: [ciEntry, ignoreEntry],
       sources: SOURCES,
     });
     // ни манифеста обвеса, ни конфига потребителя в дереве нет
@@ -266,7 +267,7 @@ describe('движок принимает готовую структуру', ()
     // Форму записей проверяет дверь, но одна кривая запись не имеет права
     // уносить прогон: соседние планируются как обычно (тот же класс, что Д14).
     const { tree, declaration } = createWorkspace({
-      layout: [{} as never, exactEntry],
+      layout: [{} as never, ciEntry],
       sources: SOURCES,
     });
 
@@ -301,7 +302,7 @@ describe('движок принимает готовую структуру', ()
 
   it('файловой системы движок не касается: работа идёт только с деревом', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
 
@@ -321,7 +322,7 @@ describe('движок принимает готовую структуру', ()
 describe('владение выводится из манифеста, а не из содержимого', () => {
   it('запись несёт путь, шаблон, обвес, версию, класс и хеш положенного', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
 
@@ -341,7 +342,7 @@ describe('владение выводится из манифеста, а не �
 
   it('манифест лежит СБОКУ: в артефакте нет ни байта служебного', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
 
@@ -353,7 +354,7 @@ describe('владение выводится из манифеста, а не �
 
   it('план называет манифест данными — до применения', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
 
@@ -390,7 +391,7 @@ describe('владение выводится из манифеста, а не �
     // артефакты чужими: прогон превратился бы в отказ по каждому dest либо, под
     // подтверждением, в перезапись поверх непонятного состояния.
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
     applyPlan(tree, computePlan({ tree, declaration }));
@@ -404,7 +405,7 @@ describe('владение выводится из манифеста, а не �
 
   it('манифест чужой версии — отказ, а не догадка о форме', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
     tree.write(
@@ -417,7 +418,7 @@ describe('владение выводится из манифеста, а не �
 
   it('манифест пустеет — файл снимается, а не остаётся огрызком', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
     applyPlan(tree, computePlan({ tree, declaration }));
@@ -464,7 +465,7 @@ describe('запись обязана утверждать объявленно�
   // владение по каждому обвесу отдельно.
   it('сменился объявленный шаблон при том же содержимом → шаг record, файл не тронут', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: { ...SOURCES, 'ci/build-2.yml': SOURCES['ci/build.yml'] },
     });
     applyPlan(tree, computePlan({ tree, declaration }));
@@ -494,7 +495,7 @@ describe('запись обязана утверждать объявленно�
     // содержимое совпало, шага не было — и следующее снятие записи уносило
     // артефакт по устаревшей претензии.
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: { ...SOURCES, 'ci/build-2.yml': SOURCES['ci/build.yml'] },
     });
     applyPlan(tree, computePlan({ tree, declaration }));
@@ -520,7 +521,7 @@ describe('запись обязана утверждать объявленно�
     // Хеш записи устарел, а содержимое уже целевое. Без приведения записи
     // каждый следующий прогон видел бы расхождение и писал бы одно и то же.
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
     applyPlan(tree, computePlan({ tree, declaration }));
@@ -538,7 +539,7 @@ describe('запись обязана утверждать объявленно�
 
   it('подделанный хеш в манифесте приводится к правде', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
       manifest: [
         {
@@ -571,7 +572,7 @@ describe('запись обязана утверждать объявленно�
 describe('источник вне дерева назван, а не вырожден', () => {
   it('contentRoot: null — отказ с машинным кодом', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
     const outside: Declaration = {
@@ -591,6 +592,20 @@ describe('источник вне дерева назван, а не вырож�
       // Адрес события — обвес: чинится это установкой обвеса в репозиторий.
       expect((error as Error).message).toContain(SOURCE_ID);
     }
+  });
+
+  it('этот отказ НЕ наследник DeclarationError — ловится кодом или общим предком', () => {
+    // Дока зоны год называла здесь `DeclarationError`, и читатель, поймавший его
+    // в расчёте на «всё, что не так со входом», пропускал бы ровно живой путь:
+    // обвес, установленный вне дерева. Родство теперь держит приёмка, а не память.
+    const error = new api.SourceOutsideTreeError('источник вне дерева');
+
+    expect(error).toBeInstanceOf(api.BaserMaterializeError);
+    expect(error).not.toBeInstanceOf(api.DeclarationError);
+    // А вот битый паспорт `DeclarationError`-ом ловится — иерархия не плоская.
+    expect(new api.ManifestError('паспорт не читается')).toBeInstanceOf(
+      api.DeclarationError,
+    );
   });
 
   it('источник внутри дерева — защита работает в полную силу, как раньше', () => {
@@ -625,7 +640,7 @@ describe('источник вне дерева назван, а не вырож�
 describe('идемпотентность (§1 контракта)', () => {
   it('прогон на выходе предыдущего прогона даёт ПУСТОЙ план', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry, jsonEntry, ignoreEntry, docEntry],
+      layout: [ciEntry, jsonEntry, ignoreEntry, docEntry],
       sources: SOURCES,
     });
 
@@ -641,7 +656,7 @@ describe('идемпотентность (§1 контракта)', () => {
 
   it('третий прогон тоже пуст — сходимость устойчива', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry, jsonEntry, ignoreEntry, docEntry],
+      layout: [ciEntry, jsonEntry, ignoreEntry, docEntry],
       sources: SOURCES,
     });
 
@@ -653,9 +668,9 @@ describe('идемпотентность (§1 контракта)', () => {
 });
 
 describe('сироты (§3 контракта)', () => {
-  it('запись убрана из frame → артефакт движка снимается', () => {
+  it('запись убрана из раскладки → артефакт движка снимается', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
     applyPlan(tree, computePlan({ tree, declaration }));
@@ -711,7 +726,7 @@ describe('сироты (§3 контракта)', () => {
 
   it('снятие сироты доводит дерево до пустого плана', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
     applyPlan(tree, computePlan({ tree, declaration }));
@@ -726,7 +741,7 @@ describe('сироты (§3 контракта)', () => {
 describe('конфликт владения (§4 контракта)', () => {
   it('чужой файл не перезаписывается молча — отказ с внятным сообщением', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
       existing: { [WORKFLOW]: 'name: написано руками\n' },
     });
@@ -746,7 +761,7 @@ describe('конфликт владения (§4 контракта)', () => {
 
   it('перезапись возможна только поимённым подтверждением', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
       existing: { [WORKFLOW]: 'name: написано руками\n' },
     });
@@ -759,7 +774,7 @@ describe('конфликт владения (§4 контракта)', () => {
 
   it('согласие не масштабируется само: соседний отказ остаётся в силе', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry, ignoreEntry],
+      layout: [ciEntry, ignoreEntry],
       sources: SOURCES,
       existing: {
         [WORKFLOW]: 'name: написано руками\n',
@@ -777,7 +792,7 @@ describe('конфликт владения (§4 контракта)', () => {
 
   it('подтверждение, которое не понадобилось, названо извещением', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
 
@@ -797,7 +812,7 @@ describe('конфликт владения (§4 контракта)', () => {
 
   it('два объявления одного dest — отказ, а не «последний победил»', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry, { ...exactEntry, src: 'ci/other.yml' }],
+      layout: [ciEntry, { ...ciEntry, src: 'ci/other.yml' }],
       sources: { ...SOURCES, 'ci/other.yml': 'name: other\n' },
     });
 
@@ -836,7 +851,7 @@ describe('конфликт владения (§4 контракта)', () => {
   );
 
   it('отсутствующий шаблон называет полный путь', () => {
-    const { tree, declaration } = createWorkspace({ layout: [exactEntry] });
+    const { tree, declaration } = createWorkspace({ layout: [ciEntry] });
 
     const plan = computePlan({ tree, declaration });
 
@@ -853,7 +868,7 @@ describe('конфликт владения (§4 контракта)', () => {
 describe('сходимость отделена от пустоты', () => {
   it('план без шагов, но с конфликтом, сходимости НЕ означает', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
       existing: { [WORKFLOW]: 'name: написано руками\n' },
     });
@@ -868,7 +883,7 @@ describe('сходимость отделена от пустоты', () => {
 
   it('признака «в плане нет шагов» в схеме нет — сходимость нельзя получить случайно', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
       existing: { [WORKFLOW]: 'name: написано руками\n' },
     });
@@ -881,7 +896,7 @@ describe('сходимость отделена от пустоты', () => {
 
   it('сошлось — это отсутствие и шагов, и конфликтов', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
     applyPlan(tree, computePlan({ tree, declaration }));
@@ -900,7 +915,7 @@ describe('сходимость отделена от пустоты', () => {
 describe('причина шага обязана быть правдой', () => {
   it('чужой файл под подтверждением берётся с причиной adopted', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
       existing: { [WORKFLOW]: 'name: написано руками\n' },
     });
@@ -973,8 +988,8 @@ describe('вывод машинночитаем в первую очередь',
   it('каждая причина отказа доступна кодом и данными, а не только текстом', () => {
     const { tree, declaration } = createWorkspace({
       layout: [
-        exactEntry,
-        { ...exactEntry, src: 'ci/other.yml' },
+        ciEntry,
+        { ...ciEntry, src: 'ci/other.yml' },
         { src: 'ci/missing.yml', dest: 'ci/missing.yml' },
         { src: 'ci/build.yml', dest: `${CONTENT_ROOT}/ci/build.yml` },
       ],
@@ -999,7 +1014,7 @@ describe('вывод машинночитаем в первую очередь',
 
   it('план и отчёт переживают сериализацию: решение принимается без парсинга текста', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry, ignoreEntry, docEntry],
+      layout: [ciEntry, ignoreEntry, docEntry],
       sources: SOURCES,
     });
 
@@ -1029,7 +1044,7 @@ describe('вывод машинночитаем в первую очередь',
     // из артефактов в манифест сбоку, 5 — класс артефакта и версия обвеса в
     // паспорте укладки, из-за чего `hash` стал необязательным.
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
 
@@ -1038,7 +1053,7 @@ describe('вывод машинночитаем в первую очередь',
 
   it('трейсы — именованные спаны с длительностью и атрибутами', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
 
@@ -1183,16 +1198,17 @@ describe('объявленное состояние обязано быть фи
  * штатным шагом, без конфликта, с `pending` в плане. В дефолтной раскладке было
  * замаскировано пропуском `node_modules`.
  */
-describe('скан владения не трогает источник шаблонов', () => {
-  it('помеченный файл внутри contentRoot сиротой не считается', () => {
+describe('поиск сирот не заходит в источник шаблонов', () => {
+  it('копия артефакта внутри contentRoot сиротой не считается', () => {
     const { tree, declaration } = createWorkspace({
       contentRoot: 'content',
       layout: [{ src: 'a.yml', dest: 'a.yml' }],
       sources: { 'a.yml': 'name: a\n' },
     });
     applyPlan(tree, computePlan({ tree, declaration }));
-    // в корне содержимого лежит артефакт с нашим маркером: шаблон-пример,
-    // вложенный шаблон, копия артефакта — движку туда ходить нечем
+    // в корне содержимого лежит файл, побайтово равный нашему артефакту:
+    // шаблон-пример, вложенный шаблон, копия — записи о нём нет, и поиск сирот
+    // идёт по записям, поэтому движку туда ходить нечем
     tree.write('content/sample.yml', tree.read('a.yml', 'utf-8') as string);
 
     const plan = computePlan({ tree, declaration });
@@ -1246,7 +1262,7 @@ describe('сбой на одной записи не уносит план це�
 
   it('сбой источника становится отказом по своему dest, а не броском наружу', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry, ignoreEntry],
+      layout: [ciEntry, ignoreEntry],
       sources: SOURCES,
     });
 
@@ -1268,7 +1284,7 @@ describe('сбой на одной записи не уносит план це�
 
   it('соседние записи планируются как обычно — падение одной их не гасит', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry, ignoreEntry, jsonEntry],
+      layout: [ciEntry, ignoreEntry, jsonEntry],
       sources: SOURCES,
     });
 
@@ -1286,7 +1302,7 @@ describe('сбой на одной записи не уносит план це�
 
   it('сбой дерева на артефакте тоже привязан к dest', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry, ignoreEntry],
+      layout: [ciEntry, ignoreEntry],
       sources: SOURCES,
       existing: { [WORKFLOW]: 'чужой\n' },
     });
@@ -1318,7 +1334,7 @@ describe('сбой на одной записи не уносит план це�
 
   it('план с отказом по сбою неприменим целиком', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry, ignoreEntry],
+      layout: [ciEntry, ignoreEntry],
       sources: SOURCES,
     });
 
@@ -1415,7 +1431,7 @@ describe('порядок машинного вывода детерминиро�
 describe('поиск сирот не ходит по дереву', () => {
   it('чужой файл, похожий на артефакт, сиротой не считается', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
     applyPlan(tree, computePlan({ tree, declaration }));
@@ -1448,7 +1464,7 @@ describe('поиск сирот не ходит по дереву', () => {
 
   it('извещения об охвате скана больше нет — как и самого скана', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
 
@@ -1463,7 +1479,7 @@ describe('поиск сирот не ходит по дереву', () => {
 describe('трейсы', () => {
   it('план несёт замеры этапов', () => {
     const { tree, declaration } = createWorkspace({
-      layout: [exactEntry],
+      layout: [ciEntry],
       sources: SOURCES,
     });
 
