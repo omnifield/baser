@@ -1,6 +1,6 @@
 {
   "name": "@omnifield/baser-cli",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Дверь baser: зовёт станок и кладёт обвес на диск — план называет движение до применения",
   "type": "module",
   "main": "./dist/index.js",

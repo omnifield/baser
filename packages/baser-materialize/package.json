@@ -1,6 +1,6 @@
 {
   "name": "@omnifield/baser-materialize",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Движок baser: раскладывает объявленное и обновляет разложенное — план, применение, владение паспортом укладки",
   "type": "module",
   "main": "./dist/index.js",
