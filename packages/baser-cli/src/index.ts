@@ -88,5 +88,10 @@ export type {
   SettingMovement,
 } from './lib/values.js';
 
+// `SettingMovement.placed` ссылается на эту форму — значит она публичная тоже.
+// Механизм восстановления (`recoverPlacedValues`) остаётся внутренним: наружу
+// уезжает ОТВЕТ, а не то, чем он посчитан.
+export type { PlacedValue } from './lib/previous.js';
+
 export { createDoorSource, renderLayout } from './lib/render.js';
 export type { RenderedLayout } from './lib/render.js';
