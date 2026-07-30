@@ -364,6 +364,66 @@ describe('запасной вариант: репозитория не видн�
   });
 });
 
+/**
+ * РЕГИСТР В ЗАГОЛОВКЕ СЕКЦИИ: git различает его ровно наполовину.
+ *
+ * Имена секций и ключей git считает без учёта регистра, **имя подсекции — с
+ * учётом**: `[remote "ORIGIN"]` для него отдельный remote, а не `origin`.
+ * Резолвер это правило знал комментарием и нарушал кодом — одна регулярка с
+ * флагом `i` накрывала и то, и другое (`tasker:BASER2-39`).
+ *
+ * Раскладка экзотическая: нужно, чтобы человек завёл remote в другом регистре и
+ * при этом не имел обычного `origin`. Чиним не из-за вероятности, а потому что
+ * код обязан делать то, что написано в его же комментарии: расхождение между
+ * ними живёт дольше и обходится дороже самой ошибки.
+ *
+ * Обе пробы проверены на красноту против кода ДО фикса: первая давала
+ * `other-devbox` вместо `fresh-devbox`.
+ */
+describe('РЕГИСТР: слово секции git не различает, имя remote — различает', () => {
+  /** Репозиторий с самодельным `.git/config` и без манифеста. */
+  function withGitConfig(repoName, config) {
+    consumer = installConsumer({
+      repoName,
+      manifest: null,
+      config: consumerConfig(),
+      tuning: tuning({ presets: ['omnifield'] }),
+    });
+    consumer.write('.git/config', config);
+    return consumer;
+  }
+
+  it('[remote "ORIGIN"] — ДРУГОЙ remote: origin нет, имя приходит от каталога', async () => {
+    // Ущерб, если принять его за `origin`, — не подпись контейнера, а сетевой
+    // алиас: обещание соседям, данное по ЧУЖОМУ адресу.
+    const box = withGitConfig(
+      'fresh',
+      '[core]\n\trepositoryformatversion = 0\n[remote "ORIGIN"]\n\turl = https://github.com/чужой/other.git\n',
+    );
+
+    const result = await run({ command: 'apply', cwd: box.root });
+
+    expect(result.status).toBe('applied');
+    expect(parseJsonc(box.read(LIVE)).name).toBe('fresh-devbox');
+    expect(alias(parseJsonc(box.read(LIVE)))).toBe('fresh');
+  });
+
+  it('[REMOTE "origin"] — тот же origin: слово секции регистр не различает', async () => {
+    // Обратный конец того же правила. Без него починка свелась бы к «сверять
+    // весь заголовок точно» — и перестала бы находить законный origin.
+    const box = withGitConfig(
+      'fresh',
+      '[core]\n\trepositoryformatversion = 0\n[REMOTE "origin"]\n\turl = https://github.com/omnifield/weber.git\n',
+    );
+
+    const result = await run({ command: 'apply', cwd: box.root });
+
+    expect(result.status).toBe('applied');
+    expect(parseJsonc(box.read(LIVE)).name).toBe('weber-devbox');
+    expect(alias(parseJsonc(box.read(LIVE)))).toBe('weber');
+  });
+});
+
 describe('ПЕРЕИМЕНОВАНИЕ при обновлении обвеса — что дверь про него говорит', () => {
   it('разложенное поедет: план называет расхождение и НОВОЕ имя', async () => {
     // Смена резолвера меняет уже разложенное у всех, кто имя не заполнял.
