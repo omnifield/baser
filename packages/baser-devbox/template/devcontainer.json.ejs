@@ -44,7 +44,30 @@ const refuse = (message) => {
 // окружения, а не `pnpm config set` в постсоздании: конфиг pnpm при томе кредов
 // лёг бы в ЧУЖОЙ том (NPM_CONFIG_USERCONFIG указывает в него), то есть один
 // девбокс писал бы настройку всем остальным.
-const storeDir = pnpmStoreVolume ? `${home}/.local/share/pnpm/store` : null;
+//
+// ── АДРЕС ТОМА — НАШ, И ЭТО ПОЧИНКА НАШЕЙ ЖЕ РЕГРЕССИИ ──────────────────────
+//
+// Сначала том встал по адресу pnpm-по-умолчанию — `~/.local/share/pnpm/store`,
+// то есть ВНУТРЬ общего XDG-каталога данных. Докер создаёт цепочку каталогов до
+// точки монтирования САМ и создаёт её от root, а постсоздание правит права
+// только на сам том. Через час у потребителя это выглядело так
+// (tasker:BASER2-114 Н2, tasker:BASER2-115):
+//
+//   drwxr-xr-x 3 root root  /home/node/.local/share       ← создан докером
+//   drwxr-xr-x 4 node node  /home/node/.local/share/pnpm/store  ← только это наше
+//   $ uv run ruff check .
+//   error: failed to create directory `/home/node/.local/share/uv/python`: Permission denied
+//
+// Ляжет так ЛЮБОЙ инструмент, кладущий данные в `~/.local/share/<имя>`, — а это
+// стандартный адрес, туда пишут почти все. Чинится это не chown'ом по цепочке:
+// правь мы права, каталог всё равно оставался бы захвачен нами ради ОДНОГО
+// инструмента, и следующий сосед упирался бы в следующий такой же захват.
+// Ошибка была не в правах, а в том, что мы въехали в общий каталог.
+//
+// Поэтому адрес тома теперь СВОЙ и лежит прямо в доме: между домом и точкой
+// монтирования нет ни одного каталога, который докер создал бы от root. Правило
+// общее для всех томов обвеса и держится пробой, а не внимательностью.
+const storeDir = pnpmStoreVolume ? `${home}/.pnpm-store` : null;
 
 const mounts = [];
 if (secretsVolume) mounts.push(`source=${secretsVolume},target=${home}/.secrets,type=volume`);
@@ -181,18 +204,37 @@ const q = (line) => `'[devbox] ${line}'`;
 // того, кто про этот тулчейн не говорил, и замолкает сама, как только нужную
 // фичу добавили. Ни списка «поддерживаемых стеков», ни настройки-выключателя:
 // нечего выключать там, где нечего и сказать.
+//
+// ── СПРАШИВАТЬ НАДО ПРО ТО, ЧЕМ РЕПОЗИТОРИЙ СОБИРАЕТСЯ ЗАПУСКАТЬ ────────────
+//
+// Первая редакция спрашивала `command -v python` у всякого, кто объявил питон, —
+// и кричала у того, кто сделал ВСЁ ПРАВИЛЬНО (tasker:BASER2-117). При модели uv
+// питона в PATH нет и быть не должно: `uv` поднимает CPython сам по
+// `.python-version` и держит его при проекте. Признак «репозиторий объявил
+// питон» был верен, признак «питона нет» — нет.
+//
+// Цена ложного срабатывания выше пропущенного: предупреждение, которое звучит у
+// правого, обесценивает себя — его перестают читать, и оно перестаёт работать
+// там, где нужно. Поэтому спрашиваем не «есть ли ЭТА команда», а «есть ли ЧЕМ
+// запускать»: у тулчейна список команд, и любой из них достаточно, а объявленный
+// uv снимает вопрос про питон целиком — он и есть ответ на него.
+const uvDeclared = "[ -f uv.lock ] || grep -qs '^\\[tool.uv\\]' pyproject.toml";
 const toolchains = [
-  {
-    what: 'питон',
-    declaredBy: '.python-version, pyproject.toml, uv.lock',
-    when: '[ -f .python-version ] || [ -f pyproject.toml ] || [ -f uv.lock ]',
-    tool: 'python',
-  },
   {
     what: 'uv',
     declaredBy: 'uv.lock, [tool.uv] в pyproject.toml',
-    when: "[ -f uv.lock ] || grep -qs '^\\[tool.uv\\]' pyproject.toml",
-    tool: 'uv',
+    when: uvDeclared,
+    tools: ['uv'],
+  },
+  {
+    // Вопрос про питон задаётся, только когда на него не ответил uv. И отвечает
+    // на него любая из двух команд: репозиторий на системном питоне зовёт
+    // `python3`, а `python` есть не в каждом образе — требовать именно его
+    // значило бы спрашивать про имя, а не про наличие рантайма.
+    what: 'питон',
+    declaredBy: '.python-version, pyproject.toml',
+    when: `{ [ -f .python-version ] || [ -f pyproject.toml ]; } && ! { ${uvDeclared}; }`,
+    tools: ['python', 'python3'],
   },
   // go идёт рядом с питоном не по симметрии: следующие три переезжающих продукта
   // (tasker, knowledger, chater) — все на Go, и класс у них тот же самый.
@@ -200,14 +242,18 @@ const toolchains = [
     what: 'go',
     declaredBy: 'go.mod',
     when: '[ -f go.mod ]',
-    tool: 'go',
+    tools: ['go'],
   },
 ];
+const missing = (tools) =>
+  tools.length > 1
+    ? `ни одной из команд ${tools.join(', ')} в девбоксе нет`
+    : `команды ${tools[0]} в девбоксе нет`;
 const toolchainCheck = [
   '( lost=;',
   ...toolchains.map((chain) =>
-    `if { ${chain.when}; } && ! command -v ${chain.tool} >/dev/null 2>&1; then ` +
-    `${say(q(`Репозиторий объявляет ${chain.what} (${chain.declaredBy}), а команды ${chain.tool} в девбоксе нет.`))}; lost=1; fi;`,
+    `if { ${chain.when}; } && ! { ${chain.tools.map((tool) => `command -v ${tool} >/dev/null 2>&1`).join(' || ')}; }; then ` +
+    `${say(q(`Репозиторий объявляет ${chain.what} (${chain.declaredBy}), а ${missing(chain.tools)}.`))}; lost=1; fi;`,
   ),
   'if [ -n "$lost" ]; then',
   say(

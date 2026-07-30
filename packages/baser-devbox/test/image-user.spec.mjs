@@ -98,7 +98,7 @@ describe('образ с чужим пользователем раскладыв
 
     expect(json.mounts).toEqual([
       'source=omnifield-secrets,target=/home/vscode/.secrets,type=volume',
-      'source=omnifield-pnpm-store,target=/home/vscode/.local/share/pnpm/store,type=volume',
+      'source=omnifield-pnpm-store,target=/home/vscode/.pnpm-store,type=volume',
     ]);
     expect(json.containerEnv).toEqual({
       CLAUDE_CONFIG_DIR: '/home/vscode/.secrets/claude',
@@ -107,13 +107,13 @@ describe('образ с чужим пользователем раскладыв
       NPM_CONFIG_USERCONFIG: '/home/vscode/.secrets/npmrc',
       // Адрес стора считается от того же пользователя — иначе pnpm ушёл бы в
       // чужой дом, а том остался бы нетронутым уже по второй причине.
-      NPM_CONFIG_STORE_DIR: '/home/vscode/.local/share/pnpm/store',
-      PNPM_CONFIG_STORE_DIR: '/home/vscode/.local/share/pnpm/store',
+      NPM_CONFIG_STORE_DIR: '/home/vscode/.pnpm-store',
+      PNPM_CONFIG_STORE_DIR: '/home/vscode/.pnpm-store',
     });
     // Права на том выставляются ПОЛЬЗОВАТЕЛЮ КОНТЕЙНЕРА: `node:node` здесь —
     // это `chown` на несуществующего пользователя, то есть падение постсоздания.
     expect(json.postCreateCommand).toContain(
-      'sudo chown -R vscode:vscode /home/vscode/.secrets /home/vscode/.local/share/pnpm/store',
+      'sudo chown -R vscode:vscode /home/vscode/.secrets /home/vscode/.pnpm-store',
     );
   });
 
@@ -166,7 +166,7 @@ describe('домашний каталог — соглашение, назван
     expect(json.remoteUser).toBe('root');
     expect(json.mounts).toEqual([
       'source=omnifield-secrets,target=/root/.secrets,type=volume',
-      'source=omnifield-pnpm-store,target=/root/.local/share/pnpm/store,type=volume',
+      'source=omnifield-pnpm-store,target=/root/.pnpm-store,type=volume',
     ]);
     expect(json.containerEnv.NPM_CONFIG_USERCONFIG).toBe(
       '/root/.secrets/npmrc',

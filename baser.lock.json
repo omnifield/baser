@@ -5,7 +5,7 @@
       "dest": ".devcontainer/devcontainer-lock.json",
       "src": "devcontainer-lock.json",
       "source": "omnifield/devbox",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "class": "regenerated",
       "hash": "sha256:5ca0a1a0a1b7f1b4c09670946a9689a6b10fe50ee6ad0d699334bed98fce7012"
     },
@@ -13,9 +13,9 @@
       "dest": ".devcontainer/devcontainer.json",
       "src": "devcontainer.json.ejs",
       "source": "omnifield/devbox",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "class": "regenerated",
-      "hash": "sha256:70a8d49232b41b50b61de429c0cdaa988deb3878752913f19e79eabb80364c45"
+      "hash": "sha256:d40cd05d7b8108c04a4eeee26d6d191a578bac199202940d3decdbba088d6c13"
     }
   ]
 }

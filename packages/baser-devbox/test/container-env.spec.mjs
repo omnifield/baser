@@ -170,7 +170,7 @@ describe('секрет-модель продуктовым слоем НЕ пе�
     const said = refusal(box);
     expect(said).toContain('pnpmStoreVolume');
     // Именно этот обход и вернул бы дефект `tasker:BASER2-111` через чёрный ход.
-    expect(said).toContain('/home/node/.local/share/pnpm/store');
+    expect(said).toContain('/home/node/.pnpm-store');
   });
 
   it('БЕЗ тома то же имя законно: перекрывать нечего', async () => {

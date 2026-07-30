@@ -326,7 +326,7 @@ describe('слой ПРЕСЕТ omnifield: ходовое положение р�
 
     expect(json.mounts).toEqual([
       'source=omnifield-secrets,target=/home/node/.secrets,type=volume',
-      'source=omnifield-pnpm-store,target=/home/node/.local/share/pnpm/store,type=volume',
+      'source=omnifield-pnpm-store,target=/home/node/.pnpm-store,type=volume',
     ]);
     // ENV указывает В ТОМ: ничего не хардкодится в образ и в репозиторий. Стор —
     // тоже ENV, и по той же причине: смонтированный том, в который никто не
@@ -336,8 +336,8 @@ describe('слой ПРЕСЕТ omnifield: ходовое положение р�
       GIT_CONFIG_GLOBAL: '/home/node/.secrets/gitconfig',
       GH_CONFIG_DIR: '/home/node/.secrets/gh',
       NPM_CONFIG_USERCONFIG: '/home/node/.secrets/npmrc',
-      NPM_CONFIG_STORE_DIR: '/home/node/.local/share/pnpm/store',
-      PNPM_CONFIG_STORE_DIR: '/home/node/.local/share/pnpm/store',
+      NPM_CONFIG_STORE_DIR: '/home/node/.pnpm-store',
+      PNPM_CONFIG_STORE_DIR: '/home/node/.pnpm-store',
     });
     // Права на тома выставляются на месте — том создаётся от root.
     expect(json.postCreateCommand).toContain(
