@@ -23,9 +23,16 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { run } from '../../baser-cli/src/index.ts';
 import {
   consumerConfig,
@@ -35,7 +42,7 @@ import {
   tuning,
 } from './packed.mjs';
 
-const STORE_TARGET = '/home/node/.local/share/pnpm/store';
+const STORE_TARGET = '/home/node/.pnpm-store';
 
 let consumer = null;
 let boxes = [];
@@ -43,7 +50,12 @@ let boxes = [];
 afterEach(() => {
   consumer?.cleanup();
   consumer = null;
-  for (const box of boxes) rmSync(box, { force: true, recursive: true });
+  for (const box of boxes) {
+    // Права возвращаются перед уборкой: пробы соседства оставляют каталоги,
+    // закрытые на запись, и без этого уборка спотыкается о собственную клетку.
+    execFileSync('chmod', ['-R', 'u+rwX', box]);
+    rmSync(box, { force: true, recursive: true });
+  }
   boxes = [];
 });
 
@@ -172,16 +184,152 @@ describe('настройка делает обещанное: pnpm ходит В
     );
 
     expect(json.mounts).toEqual([
-      'source=own-store,target=/home/vscode/.local/share/pnpm/store,type=volume',
+      'source=own-store,target=/home/vscode/.pnpm-store,type=volume',
     ]);
     expect(json.containerEnv).toEqual({
-      NPM_CONFIG_STORE_DIR: '/home/vscode/.local/share/pnpm/store',
-      PNPM_CONFIG_STORE_DIR: '/home/vscode/.local/share/pnpm/store',
+      NPM_CONFIG_STORE_DIR: '/home/vscode/.pnpm-store',
+      PNPM_CONFIG_STORE_DIR: '/home/vscode/.pnpm-store',
     });
     // Права на том выставляются до установки — иначе pnpm упрётся в том, который
     // создан от root, ровно на первом же скачивании.
     expect(json.postCreateCommand).toContain(
-      'sudo chown -R vscode:vscode /home/vscode/.local/share/pnpm/store',
+      'sudo chown -R vscode:vscode /home/vscode/.pnpm-store',
     );
+  });
+});
+
+/**
+ * СОСЕДСТВО: проба смотрит не только на свой предмет, но и ВОКРУГ него.
+ *
+ * Главный урок регрессии `tasker:BASER2-115`, и он не про стор. Проба выше была
+ * ВЕРНОЙ: она гоняла `pnpm store path` и требовала попадания в том — и всё
+ * равно пропустила поломку, потому что смотрела на свой предмет. А поломка была
+ * рядом: мы смонтировали том по адресу `~/.local/share/pnpm/store`, докер создал
+ * цепочку каталогов до точки монтирования ОТ ROOT, постсоздание выправило права
+ * только на сам том — и всякий инструмент с `~/.local/share/<имя>` получил отказ:
+ *
+ * ```
+ * drwxr-xr-x 3 root root  /home/node/.local/share
+ * $ uv run ruff check .
+ * error: failed to create directory `/home/node/.local/share/uv/python`: Permission denied
+ * ```
+ *
+ * Поэтому проба здесь утверждает не «наш том на месте», а «мы никому не
+ * помешали»: после применения пользователь заводит свой каталог в
+ * `~/.local/share` и не упирается в наши права.
+ *
+ * Механика докера воспроизводится БЕЗ докера и без root: «создано от root»
+ * моделируется каталогом, в который нам нельзя писать. Модель проверяется на
+ * себе (см. `assertCage`) и на СТАРОМ адресе — на нём проба обязана краснеть,
+ * иначе она не поймала бы и вчерашнюю регрессию.
+ */
+
+/** Точки монтирования и то, что постсоздание забирает себе — оба из АРТЕФАКТА. */
+function mountsAndChown(json) {
+  const targets = (json.mounts ?? []).map(
+    (mount) => mount.match(/target=([^,]+)/)[1],
+  );
+  const chown = /sudo chown -R [^ ]+ ([^&]+?)(?: &&|$)/.exec(
+    json.postCreateCommand,
+  );
+  return { targets, chowned: chown === null ? [] : chown[1].trim().split(' ') };
+}
+
+/**
+ * Клетка обязана быть клеткой: под root каталог без права записи не остановит
+ * ничего, и проба зеленела бы, ничего не проверив.
+ */
+function assertCage(box) {
+  const cage = join(box, '.cage');
+  mkdirSync(cage);
+  chmodSync(cage, 0o555);
+  let blocked = false;
+  try {
+    writeFileSync(join(cage, 'probe'), '');
+  } catch {
+    blocked = true;
+  }
+  chmodSync(cage, 0o755);
+  expect(
+    blocked,
+    'проба идёт под root: каталог без права записи ничего не запрещает, и она ничего не доказывает',
+  ).toBe(true);
+}
+
+/**
+ * Дом после старта контейнера: докер создал цепочку до каждой точки
+ * монтирования (от root), постсоздание выправило права на сами точки.
+ */
+function homeAfterStart({ targets, chowned }, home) {
+  const box = mkdtempSync(join(tmpdir(), 'baser-devbox-home-'));
+  boxes.push(box);
+  assertCage(box);
+
+  const created = [];
+  for (const target of targets) {
+    const parts = relative(home, target).split('/');
+    for (let depth = 1; depth <= parts.length; depth += 1) {
+      const path = join(box, ...parts.slice(0, depth));
+      if (!existsSync(path)) {
+        mkdirSync(path);
+        created.push({
+          path,
+          mine: chowned.includes(join(home, ...parts.slice(0, depth))),
+        });
+      }
+    }
+  }
+  // Права выставляются от глубоких к мелким: закрытый родитель не помешает
+  // закрыть ребёнка, а порядок обхода тут ни при чём.
+  for (const { path, mine } of [...created].reverse()) {
+    chmodSync(path, mine ? 0o755 : 0o555);
+  }
+  return box;
+}
+
+describe('соседство: мы никому не помешали', () => {
+  it('ФАКТ: после применения пользователь заводит свой каталог в ~/.local/share', async () => {
+    const json = await materialize(tuning({ presets: ['omnifield'] }));
+
+    const home = homeAfterStart(mountsAndChown(json), '/home/node');
+
+    // Ровно то, что упало у потребителя, — и ровно тем же способом.
+    expect(() =>
+      mkdirSync(join(home, '.local/share/uv/python'), { recursive: true }),
+    ).not.toThrow();
+  });
+
+  it('СТАРЫЙ адрес эту пробу роняет — значит она ловит, а не украшает', async () => {
+    // Проверка, которую нельзя провалить, ничего не проверяет. Здесь провал
+    // воспроизводится буквально: вчерашняя цель монтирования, вчерашний chown.
+    const yesterday = {
+      targets: ['/home/node/.secrets', '/home/node/.local/share/pnpm/store'],
+      chowned: ['/home/node/.secrets', '/home/node/.local/share/pnpm/store'],
+    };
+
+    const home = homeAfterStart(yesterday, '/home/node');
+
+    expect(() =>
+      mkdirSync(join(home, '.local/share/uv/python'), { recursive: true }),
+    ).toThrow(/EACCES|permission denied/i);
+  });
+
+  it('ПРАВИЛО, а не случай: между домом и точкой монтирования никого нет', async () => {
+    // Утверждение сильнее пробы про uv: не «этот инструмент не пострадал», а «мы
+    // не въехали ни в один каталог, который нам не принадлежит». Появится третий
+    // том — он попадёт под то же правило, даже если пробу под него не написали.
+    const json = await materialize(tuning({ presets: ['omnifield'] }));
+
+    const { targets, chowned } = mountsAndChown(json);
+    expect(targets.length).toBeGreaterThan(1);
+    for (const target of targets) {
+      expect(
+        dirname(target),
+        `${target} монтируется вглубь чужого каталога`,
+      ).toBe('/home/node');
+      // И каждый каталог, который докер создаст, обвес забирает себе: между
+      // «не въехали вглубь» и «права выставлены» зазора быть не должно.
+      expect(chowned).toContain(target);
+    }
   });
 });
