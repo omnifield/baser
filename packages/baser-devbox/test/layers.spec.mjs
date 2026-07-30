@@ -77,7 +77,13 @@ describe('слой УНИВЕРСАЛЬНОЕ: тот же обвес без п�
     expect(json.mounts).toBeUndefined();
     expect(json.containerEnv).toBeUndefined();
     expect(text).not.toContain('omnifield');
-    expect(json.postCreateCommand).toBe('pnpm install --frozen-lockfile');
+    // Постсоздание без пресета — названные потери тулчейна и установка, и ничего
+    // больше. Проверка тулчейна универсальна намеренно: «девбокс НОДОВЫЙ» это
+    // свойство обвеса, а не раскладки omnifield (`tasker:BASER2-110`).
+    expect(
+      json.postCreateCommand.endsWith('pnpm install --frozen-lockfile'),
+    ).toBe(true);
+    expect(json.postCreateCommand).toContain('command -v uv');
   });
 
   it('ВСЁ В КОНТЕЙНЕРЕ: образ с конкретной версией, работа под node', async () => {
@@ -135,17 +141,17 @@ describe('слой НАСТРОЙКИ: регулировка вместо пр�
     );
   });
 
-  it('образ, версия рантайма и команда установки — заполняемые', async () => {
+  it('образ, ТЕГ образа и команда установки — заполняемые', async () => {
     const { json } = await materialize({
       settings: {
         image: 'mcr.microsoft.com/devcontainers/base',
-        runtimeVersion: '20',
+        imageTag: '20',
         installCommand: 'npm ci',
       },
     });
 
     expect(json.image).toBe('mcr.microsoft.com/devcontainers/base:20');
-    expect(json.postCreateCommand).toBe('npm ci');
+    expect(json.postCreateCommand.endsWith('npm ci')).toBe(true);
   });
 
   it('расширения редактора — список, и он едет в customizations целиком', async () => {
@@ -279,7 +285,7 @@ describe('слой НАСТРОЙКИ: регулировка вместо пр�
   it('ЗАПОЛНЕННОЕ БЬЁТ ПРЕСЕТ, но слоя не отменяет', async () => {
     const { json, result } = await materialize({
       presets: ['omnifield'],
-      settings: { runtimeVersion: '20', installCommand: 'npm ci' },
+      settings: { imageTag: '20', installCommand: 'npm ci' },
     });
 
     expect(json.image).toBe(
@@ -291,7 +297,7 @@ describe('слой НАСТРОЙКИ: регулировка вместо пр�
     expect(json.postCreateCommand).toContain('/home/node/.secrets');
 
     const runtime = soleRun(result).settings.find(
-      (setting) => setting.key === 'runtimeVersion',
+      (setting) => setting.key === 'imageTag',
     );
     expect(runtime.origin.kind).toBe('filled');
     expect(runtime.ours).toBe(false);
@@ -322,12 +328,16 @@ describe('слой ПРЕСЕТ omnifield: ходовое положение р�
       'source=omnifield-secrets,target=/home/node/.secrets,type=volume',
       'source=omnifield-pnpm-store,target=/home/node/.local/share/pnpm/store,type=volume',
     ]);
-    // ENV указывает В ТОМ: ничего не хардкодится в образ и в репозиторий.
+    // ENV указывает В ТОМ: ничего не хардкодится в образ и в репозиторий. Стор —
+    // тоже ENV, и по той же причине: смонтированный том, в который никто не
+    // ходит, это не общий стор (`tasker:BASER2-111`).
     expect(json.containerEnv).toEqual({
       CLAUDE_CONFIG_DIR: '/home/node/.secrets/claude',
       GIT_CONFIG_GLOBAL: '/home/node/.secrets/gitconfig',
       GH_CONFIG_DIR: '/home/node/.secrets/gh',
       NPM_CONFIG_USERCONFIG: '/home/node/.secrets/npmrc',
+      NPM_CONFIG_STORE_DIR: '/home/node/.local/share/pnpm/store',
+      PNPM_CONFIG_STORE_DIR: '/home/node/.local/share/pnpm/store',
     });
     // Права на тома выставляются на месте — том создаётся от root.
     expect(json.postCreateCommand).toContain(

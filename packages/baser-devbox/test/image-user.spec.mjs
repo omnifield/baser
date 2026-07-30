@@ -58,7 +58,7 @@ function foreignImage(settings = {}) {
     presets: ['omnifield'],
     settings: {
       image: 'ghcr.io/omnifield/devbox',
-      runtimeVersion: 'v2026.07.10',
+      imageTag: 'v2026.07.10',
       imageUser: 'vscode',
       ...settings,
     },
@@ -105,6 +105,10 @@ describe('образ с чужим пользователем раскладыв
       GIT_CONFIG_GLOBAL: '/home/vscode/.secrets/gitconfig',
       GH_CONFIG_DIR: '/home/vscode/.secrets/gh',
       NPM_CONFIG_USERCONFIG: '/home/vscode/.secrets/npmrc',
+      // Адрес стора считается от того же пользователя — иначе pnpm ушёл бы в
+      // чужой дом, а том остался бы нетронутым уже по второй причине.
+      NPM_CONFIG_STORE_DIR: '/home/vscode/.local/share/pnpm/store',
+      PNPM_CONFIG_STORE_DIR: '/home/vscode/.local/share/pnpm/store',
     });
     // Права на том выставляются ПОЛЬЗОВАТЕЛЮ КОНТЕЙНЕРА: `node:node` здесь —
     // это `chown` на несуществующего пользователя, то есть падение постсоздания.

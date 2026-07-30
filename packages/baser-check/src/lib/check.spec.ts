@@ -21,6 +21,7 @@ import {
   editDeclaration,
   editManifest,
   emptyDir,
+  RESOLVER_SETTINGS,
 } from './devbox.fixture.js';
 import type { CheckProblemCode } from './problems.js';
 import type { CheckReport } from './report.js';
@@ -165,11 +166,7 @@ describe('объявленное лежит в поставке', () => {
       'resolver-missing',
       'resolver-missing',
     ]);
-    expect(at(report, 'resolver-missing')).toEqual([
-      'package.json.baser.settings.name.defaultFrom',
-      'package.json.baser.settings.networkAlias.defaultFrom',
-      'package.json.baser.settings.runtimeVersion.defaultFrom',
-    ]);
+    expect(at(report, 'resolver-missing')).toEqual(RESOLVER_SETTINGS);
   });
 
   it('резолвер из каталога разработчика, а не из состава пакета', () => {
@@ -217,11 +214,7 @@ describe('объявленное уедет потребителю', () => {
       'not-shipped',
       'not-shipped',
     ]);
-    expect(at(report, 'not-shipped')).toEqual([
-      'package.json.baser.settings.name.defaultFrom',
-      'package.json.baser.settings.networkAlias.defaultFrom',
-      'package.json.baser.settings.runtimeVersion.defaultFrom',
-    ]);
+    expect(at(report, 'not-shipped')).toEqual(RESOLVER_SETTINGS);
   });
 
   it('образец увозит часть каталога — назван ровно тот файл, что остался', () => {

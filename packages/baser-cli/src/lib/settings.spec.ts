@@ -104,7 +104,7 @@ function uncommentSettings(text: string, keys: readonly string[]): string {
 describe('ЦЕЛЬ: настройки живут в файле на инструмент, а не в baser.json', () => {
   it('заполненное в ФАЙЛЕ доезжает до артефакта', async () => {
     const box = install({
-      tuning: { [DEVBOX_ID]: { settings: { runtimeVersion: '20' } } },
+      tuning: { [DEVBOX_ID]: { settings: { imageTag: '20' } } },
     });
 
     const result = await run({ command: 'apply', cwd: box.root });
@@ -112,11 +112,11 @@ describe('ЦЕЛЬ: настройки живут в файле на инстр�
     expect(result.status).toBe('applied');
     expect(box.read(LIVE)).toContain('typescript-node:20');
     // И это заполненное: подниматься ему неоткуда.
-    const runtime = soleRun(result).settings.find(
-      (item) => item.key === 'runtimeVersion',
+    const tag = soleRun(result).settings.find(
+      (item) => item.key === 'imageTag',
     );
-    expect(runtime?.ours).toBe(false);
-    expect(runtime?.origin.kind).toBe('filled');
+    expect(tag?.ours).toBe(false);
+    expect(tag?.origin.kind).toBe('filled');
   });
 
   it('пресет выбирается ТАМ ЖЕ, и слой разворачивается', async () => {
@@ -135,7 +135,7 @@ describe('ЦЕЛЬ: настройки живут в файле на инстр�
     const box = install({
       config: {
         formVersion: 2,
-        sources: [{ use: DEVBOX_PACKAGE, settings: { runtimeVersion: '20' } }],
+        sources: [{ use: DEVBOX_PACKAGE, settings: { imageTag: '20' } }],
       },
     });
 
@@ -150,7 +150,7 @@ describe('ЦЕЛЬ: настройки живут в файле на инстр�
 
   it('адрес опечатки — ФАЙЛ НАСТРОЕК, а не baser.json', async () => {
     const box = install({
-      tuning: { [DEVBOX_ID]: { settings: { runtimeVerison: '24' } } },
+      tuning: { [DEVBOX_ID]: { settings: { imageTeg: '24' } } },
     });
 
     const result = await run({ command: 'plan', cwd: box.root });
@@ -161,7 +161,7 @@ describe('ЦЕЛЬ: настройки живут в файле на инстр�
     );
     // Идти чинить надо в тот файл, в котором опечатка.
     expect(problem?.at).toBe(
-      `${TUNING}.${SOURCE_CONFIG_KEY}.settings.runtimeVerison`,
+      `${TUNING}.${SOURCE_CONFIG_KEY}.settings.imageTeg`,
     );
   });
 
@@ -380,7 +380,7 @@ describe('после рождения дверь в файл НЕ ПИШЕТ', (
     await run({ command: 'apply', cwd: box.root });
     const born = box.read(TUNING) as string;
     expect(box.read(LIVE)).toContain(`typescript-node:${PINNED_NODE}`);
-    expect(born).toContain(`# runtimeVersion: "${PINNED_NODE}"`);
+    expect(born).toContain(`# imageTag: "${PINNED_NODE}"`);
 
     box.updateResolvers(BUMPED_RESOLVERS);
     const result = await run({ command: 'apply', cwd: box.root });
@@ -392,14 +392,14 @@ describe('после рождения дверь в файл НЕ ПИШЕТ', (
     expect(box.read(TUNING)).toBe(born);
     expect(result.writes.map((write) => write.path)).not.toContain(TUNING);
     expect(
-      soleRun(result).settings.find((item) => item.key === 'runtimeVersion')
+      soleRun(result).settings.find((item) => item.key === 'imageTag')
         ?.value,
     ).toBe(MOVED_NODE);
   });
 
   it('заполненное человеком не переписывается и не «фиксируется»', async () => {
     const box = install({
-      tuning: { [DEVBOX_ID]: { settings: { runtimeVersion: '20' } } },
+      tuning: { [DEVBOX_ID]: { settings: { imageTag: '20' } } },
     });
     const mine = box.read(TUNING);
 
@@ -421,7 +421,7 @@ describe('зарезервирован ровно один ключ — baser', 
       [
         'baser:',
         '  settings:',
-        "    runtimeVersion: '20'",
+        "    imageTag: '20'",
         '',
         'services:',
         '  tasker: http://10.8.1.1:8080/api/tasker',
@@ -444,7 +444,7 @@ describe('зарезервирован ровно один ключ — baser', 
 
   it('опечатка ВНУТРИ baser названа вслух — иначе ловить их было бы нечем', async () => {
     const box = install();
-    box.write(TUNING, 'baser:\n  setings:\n    runtimeVersion: "20"\n');
+    box.write(TUNING, 'baser:\n  setings:\n    imageTag: "20"\n');
 
     const result = await run({ command: 'plan', cwd: box.root });
 
@@ -459,7 +459,7 @@ describe('файл есть, но непригоден', () => {
     const box = install();
     box.write(
       TUNING,
-      'baser:\n  settings:\n   runtimeVersion: "20"\n  \tтаб\n',
+      'baser:\n  settings:\n   imageTag: "20"\n  \tтаб\n',
     );
 
     const result = await run({ command: 'plan', cwd: box.root });
@@ -511,7 +511,7 @@ describe('файл на КАЖДЫЙ инструмент свой', () => {
         sources: [{ use: DEVBOX_PACKAGE }, { use: AGENTS.packageName }],
       },
       tuning: {
-        [DEVBOX_ID]: { settings: { runtimeVersion: '20' } },
+        [DEVBOX_ID]: { settings: { imageTag: '20' } },
         [AGENTS.id]: { settings: { product: 'weber' } },
       },
     });

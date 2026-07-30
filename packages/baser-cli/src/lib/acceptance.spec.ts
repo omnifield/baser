@@ -242,19 +242,19 @@ describe('переход: пресет убран из файла настрое
 });
 
 describe('переход: обвес обновился, дефолт поднялся', () => {
-  it('ДЕФОЛТ ВЫПУСКА: незаполненная версия — та, что пришпилена обвесом', async () => {
-    // Единственное место, где число рантайма утверждается прямо. Выпустится
-    // обвес с другим пином — покраснеет эта проба и назовёт причину, а не
-    // восемь чужих ожиданий, каждое из которых выглядит самостоятельным.
+  it('ДЕФОЛТ ВЫПУСКА: незаполненный тег — тот, что пришпилен обвесом', async () => {
+    // Единственное место, где число тега утверждается прямо. Выпустится обвес с
+    // другим пином — покраснеет эта проба и назовёт причину, а не восемь чужих
+    // ожиданий, каждое из которых выглядит самостоятельным.
     const box = clean();
 
     const result = await run({ command: 'plan', cwd: box.root });
 
-    const runtime = soleRun(result).settings.find(
-      (setting) => setting.key === 'runtimeVersion',
+    const tag = soleRun(result).settings.find(
+      (setting) => setting.key === 'imageTag',
     );
-    expect(runtime?.value).toBe(PINNED_NODE);
-    expect(runtime?.ours).toBe(true);
+    expect(tag?.value).toBe(PINNED_NODE);
+    expect(tag?.ours).toBe(true);
   });
 
   it('движение названо ДО применения, и артефакт догоняет эталон', async () => {
@@ -266,11 +266,11 @@ describe('переход: обвес обновился, дефолт подня
 
     // Сначала ПЛАН: движение обязано быть названо до того, как что-то поедет.
     const plan = await run({ command: 'plan', cwd: box.root });
-    const runtime = soleRun(plan).settings.find(
-      (setting) => setting.key === 'runtimeVersion',
+    const tag = soleRun(plan).settings.find(
+      (setting) => setting.key === 'imageTag',
     );
-    expect(runtime?.value).toBe(MOVED_NODE);
-    expect(runtime?.ours).toBe(true);
+    expect(tag?.value).toBe(MOVED_NODE);
+    expect(tag?.ours).toBe(true);
     expect(soleRun(plan).plan?.steps[0].reason).toBe('diverged');
     // Названо — и не применено: команда `plan` дерева не трогает.
     expect(box.read(LIVE)).toContain(`typescript-node:${PINNED_NODE}`);
@@ -285,7 +285,7 @@ describe('переход: обвес обновился, дефолт подня
       tuning: {
         [DEVBOX_ID]: {
           presets: ['omnifield'],
-          settings: { runtimeVersion: '20' },
+          settings: { imageTag: '20' },
         },
       },
     });

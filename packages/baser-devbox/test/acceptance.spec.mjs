@@ -39,7 +39,7 @@
  * | —      | на настройках живого    | не расходится ни одна: сверка байт в    |
  * |        | репозитория             | байт, и это отдельная проба             |
  * | 8      | `"image": …:22` / `:24` | ТОЛЬКО без заполнения: живой репозиторий |
- * |        |                         | закрепил `runtimeVersion: "22"`, дефолт  |
+ * |        |                         | закрепил `imageTag: "22"`, дефолт  |
  * |        |                         | выпуска — 24. Заполни — исчезнет и она.  |
  *
  * Отсюда же «единственное различие» во второй пробе стало буквальным: раньше
@@ -102,7 +102,7 @@ function clean(options = {}) {
 /** Настройки, воспроизводящие живой репозиторий: пресет omnifield + его Node. */
 const AS_LIVE = tuning({
   presets: ['omnifield'],
-  settings: { runtimeVersion: '22' },
+  settings: { imageTag: '22' },
 });
 
 describe('ПРИЁМКА: поставил пакет → позвал дверь → .devcontainer лёг', () => {
@@ -179,7 +179,7 @@ describe('РАСХОЖДЕНИЕ, названное до user: дефолт в�
     const result = await run({ command: 'apply', cwd: box.root });
 
     const runtime = soleRun(result).settings.find(
-      (setting) => setting.key === 'runtimeVersion',
+      (setting) => setting.key === 'imageTag',
     );
     // Значение НАШЕ: пользователь его не заполнял, поэтому оно едет за выпуском
     // обвеса. Заполнил бы — не поднялось бы никогда.
@@ -324,7 +324,7 @@ describe('переход: обвес обновился под потребит�
     const plan = await run({ command: 'plan', cwd: box.root });
     const devbox = soleRun(plan);
     const runtime = devbox.settings.find(
-      (setting) => setting.key === 'runtimeVersion',
+      (setting) => setting.key === 'imageTag',
     );
     expect(runtime.value).toBe('26');
     expect(devbox.plan?.steps[0].reason).toBe('diverged');

@@ -21,6 +21,7 @@ import {
   installDevbox,
   soleRun,
   DEVBOX_PACKAGE,
+  PINNED_NODE,
   type Consumer,
   type InstallOptions,
 } from './devbox.fixture.js';
@@ -143,7 +144,7 @@ describe('отказ говорит чужим кодом, когда код е�
   it('опечатка в настройке — код КОНТРАКТОВ, а не выдумка двери', async () => {
     const box = install({
       config: CONFIG,
-      tuning: { [DEVBOX_ID]: { settings: { runtimeVerison: '24' } } },
+      tuning: { [DEVBOX_ID]: { settings: { imageTeg: '24' } } },
     });
 
     const result = await run({ command: 'plan', cwd: box.root });
@@ -174,19 +175,29 @@ describe('отказ говорит чужим кодом, когда код е�
   it('резолвер обвеса не нашёлся — код КОНТРАКТОВ, хотя звала его дверь', async () => {
     const box = install({ config: CONFIG, tuning: TUNED });
     // Модуль на месте, экспорта нет: обвес объявил дефолт, которого не отдаёт.
+    // Не отдаётся РОВНО ОДИН — остальные резолверы на месте намеренно. Проба про
+    // язык отказа, а не про то, чей отказ окажется первым: ключи сортируются
+    // побайтово, и настройка с буквой раньше молча меняла бы, кто назван первым
+    // (`tasker:BASER2-83`: `imageTag` встал раньше `name`).
     box.updateResolvers(
-      'export function repoName(ctx) { return ctx.repo.name; }\n',
+      [
+        'export function repoName(ctx) { return ctx.repo.name; }',
+        `export function latestStableNode() { return '${PINNED_NODE}'; }`,
+        '',
+      ].join('\n'),
     );
 
     const result = await run({ command: 'plan', cwd: box.root });
 
     expect(result.status).toBe('refused');
-    const problem = result.problems.find(
+    const failures = result.problems.filter(
       (item) => item.code === 'resolver-failed',
     );
-    expect(problem?.message).toContain('devboxName');
+    // Ровно один — иначе утверждение ниже говорило бы про случайного из многих.
+    expect(failures).toHaveLength(1);
+    expect(failures[0].message).toContain('devboxName');
     // Порт двери, отказ формы: одного языка отказа хватает на обе зоны.
-    expect(problem?.at).toContain('settings.name.defaultFrom');
+    expect(failures[0].at).toContain('settings.name.defaultFrom');
   });
 
   it('пакет назван в конфиге, но не поставлен', async () => {

@@ -121,24 +121,22 @@ describe('движение названо ОБОИМИ концами', () => {
 describe('переход: обвес обновился, дефолт поднялся', () => {
   it('НЕзаполненное значение едет за нами', async () => {
     const box = install();
-    expect((await movements(box)).get('runtimeVersion')?.value).toBe(
-      PINNED_NODE,
-    );
+    expect((await movements(box)).get('imageTag')?.value).toBe(PINNED_NODE);
 
     box.updateResolvers(BUMPED_RESOLVERS);
 
-    const bumped = (await movements(box)).get('runtimeVersion');
+    const bumped = (await movements(box)).get('imageTag');
     expect(bumped?.value).toBe(MOVED_NODE);
     expect(bumped?.ours).toBe(true);
   });
 
   it('ЗАПОЛНЕННОЕ значение не поднимается — подниматься неоткуда', async () => {
-    const box = install({ settings: { runtimeVersion: '20' } });
-    expect((await movements(box)).get('runtimeVersion')?.value).toBe('20');
+    const box = install({ settings: { imageTag: '20' } });
+    expect((await movements(box)).get('imageTag')?.value).toBe('20');
 
     box.updateResolvers(BUMPED_RESOLVERS);
 
-    const after = (await movements(box)).get('runtimeVersion');
+    const after = (await movements(box)).get('imageTag');
     // Дефолт под ним уехал вперёд, а значение осталось: заполненное бьёт всё.
     expect(after?.value).toBe('20');
     expect(after?.ours).toBe(false);

@@ -19,17 +19,25 @@
     "--restart=unless-stopped"
   ],
 
+  // Переменные окружения контейнера: секрет-модель, адрес pnpm-стора.
   // Секрет-модель (kb:FUND-4): креды/кэши — в named-volume'ах, ENV указывает в /home/node/.secrets.
   // Ничего не хардкодим в образ/репо; тома переживают recreate.
+  // Стор pnpm назван ДВУМЯ именами, и это не дубль: до pnpm 11 он читает npm-конфиг
+  // (NPM_CONFIG_*), с 11-й — свой (PNPM_CONFIG_*). Без них при воркспейсе-томе pnpm
+  // кладёт стор рядом с воркспейсом, а смонтированный том стоит нетронутым.
   "containerEnv": {
     "CLAUDE_CONFIG_DIR": "/home/node/.secrets/claude",
     "GIT_CONFIG_GLOBAL": "/home/node/.secrets/gitconfig",
     "GH_CONFIG_DIR": "/home/node/.secrets/gh",
-    "NPM_CONFIG_USERCONFIG": "/home/node/.secrets/npmrc"
+    "NPM_CONFIG_USERCONFIG": "/home/node/.secrets/npmrc",
+    "NPM_CONFIG_STORE_DIR": "/home/node/.local/share/pnpm/store",
+    "PNPM_CONFIG_STORE_DIR": "/home/node/.local/share/pnpm/store"
   },
 
-  // gh — для git-flow (rulesets/PR). node/pnpm/git несёт базовый образ (pnpm-версия — из пина
-  // репо `packageManager: pnpm@10.11.0` через corepack; образ = тонкая оболочка, версии — репо).
+  // Фичи Dev Containers — настройка devcontainerFeatures. Базовый образ несёт node/pnpm/git
+  // (версия pnpm — из пина самого репозитория через corepack; образ = тонкая оболочка),
+  // остальные тулчейны приезжают сюда: чего тут нет, того в девбоксе нет, и постсоздание
+  // говорит об этом вслух, если репозиторий тулчейн объявил.
   "features": {
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
@@ -58,6 +66,6 @@
   // (kb:FUND-4 — исполнение/ассистент живут В контейнере, не на хосте).
   "onCreateCommand": "sudo corepack enable && npm install -g @anthropic-ai/claude-code@latest",
 
-  // Репо-зависимая настройка: права на общие тома, seed claude-онбординга, установка зависимостей.
-  "postCreateCommand": "sudo chown -R node:node /home/node/.secrets /home/node/.local/share/pnpm/store && mkdir -p \"$CLAUDE_CONFIG_DIR\" && { [ -f \"$CLAUDE_CONFIG_DIR/.claude.json\" ] || printf '%s\\n' '{\"hasCompletedOnboarding\":true,\"hasTrustDialogAccepted\":true,\"theme\":\"dark\"}' > \"$CLAUDE_CONFIG_DIR/.claude.json\"; } && pnpm install --frozen-lockfile"
+  // Репо-зависимая настройка: названные потери тулчейна, права на общие тома, seed claude-онбординга, установка зависимостей.
+  "postCreateCommand": "( lost=; if { [ -f .python-version ] || [ -f pyproject.toml ] || [ -f uv.lock ]; } && ! command -v python >/dev/null 2>&1; then printf '%s\\n' '[devbox] Репозиторий объявляет питон (.python-version, pyproject.toml, uv.lock), а команды python в девбоксе нет.' >&2; lost=1; fi; if { [ -f uv.lock ] || grep -qs '^\\[tool.uv\\]' pyproject.toml; } && ! command -v uv >/dev/null 2>&1; then printf '%s\\n' '[devbox] Репозиторий объявляет uv (uv.lock, [tool.uv] в pyproject.toml), а команды uv в девбоксе нет.' >&2; lost=1; fi; if { [ -f go.mod ]; } && ! command -v go >/dev/null 2>&1; then printf '%s\\n' '[devbox] Репозиторий объявляет go (go.mod), а команды go в девбоксе нет.' >&2; lost=1; fi; if [ -n \"$lost\" ]; then printf '%s\\n' '[devbox] Девбокс НОДОВЫЙ: базовый образ несёт node/pnpm/git, остальные тулчейны приезжают фичами Dev Containers.' '[devbox] Добавь нужные настройкой devcontainerFeatures в файле настроек девбокса и пересоздай контейнер.' '[devbox] Каталог фич: https://containers.dev/features' '[devbox] Пока их нет — таргеты этого тулчейна упадут, и обычно первым же git commit.' >&2 ; fi ) && sudo chown -R node:node /home/node/.secrets /home/node/.local/share/pnpm/store && mkdir -p \"$CLAUDE_CONFIG_DIR\" && { [ -f \"$CLAUDE_CONFIG_DIR/.claude.json\" ] || printf '%s\\n' '{\"hasCompletedOnboarding\":true,\"hasTrustDialogAccepted\":true,\"theme\":\"dark\"}' > \"$CLAUDE_CONFIG_DIR/.claude.json\"; } && pnpm install --frozen-lockfile"
 }
