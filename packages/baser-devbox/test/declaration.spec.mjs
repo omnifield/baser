@@ -36,12 +36,16 @@ import {
   locateContentRoot,
   resolveInstalledPackage,
 } from '../../baser-cli/src/index.ts';
+import { run } from '../../baser-cli/src/index.ts';
 import {
+  consumerConfig,
   DEVBOX_PACKAGE,
   installConsumer,
+  LIVE,
   packedFiles,
   packedManifest,
   packedRoot,
+  tuning,
 } from './packed.mjs';
 
 /** Объявление, прочитанное из ОПУБЛИКОВАННОГО манифеста настоящим разбором. */
@@ -259,6 +263,60 @@ describe('дверь находит пакет так же, как его наш
         `node_modules/${DEVBOX_PACKAGE}/${declaration().source.contentRoot}`,
       );
       expect(existsSync(join(consumer.root, location.path))).toBe(true);
+    } finally {
+      consumer.cleanup();
+    }
+  });
+});
+
+/**
+ * СНЯТОЕ ИМЯ ОБЯЗАНО ОТВЕЧАТЬ, А НЕ ПРОПАДАТЬ.
+ *
+ * `runtimeVersion` опубликован (0.6.0) и заполнен у обоих живых потребителей, а
+ * с этого выпуска настройки с таким именем нет: значение подставлялось ТЕГОМ
+ * образа, и имя врало (`tasker:BASER2-83`). Ломающее — названное, а не тихое:
+ * конфиг со снятым ключом получает отказ `unknown-setting`, дверь не кладёт
+ * ничего и сама перечисляет, что есть, — включая замену.
+ *
+ * Проверяется это здесь, а не «известно по устройству двери»: обещание доке
+ * («миграция — перенос одного значения») ровно настолько же контракт, как код.
+ */
+describe('снятое имя даёт НАЗВАННЫЙ отказ и называет, чем заменено', () => {
+  it('заполненный runtimeVersion — unknown-setting, и в списке есть imageTag', async () => {
+    const consumer = installConsumer({
+      repoName: 'baser',
+      config: consumerConfig(),
+      tuning: tuning({ settings: { runtimeVersion: '22' } }),
+    });
+    try {
+      const result = await run({ command: 'apply', cwd: consumer.root });
+
+      expect(result.status).toBe('refused');
+      const problem = result.problems.find(
+        (item) => item.code === 'unknown-setting',
+      );
+      expect(problem, JSON.stringify(result.problems)).toBeDefined();
+      expect(problem.at).toContain('runtimeVersion');
+      expect(problem.message).toContain('imageTag');
+      // И ничего не легло: обновление «не глядя» тут невозможно, поэтому дверь
+      // не раскладывает половину.
+      expect(consumer.read(LIVE)).toBe(null);
+    } finally {
+      consumer.cleanup();
+    }
+  });
+
+  it('перенос одного значения чинит целиком — и артефакт тот же', async () => {
+    const consumer = installConsumer({
+      repoName: 'baser',
+      config: consumerConfig(),
+      tuning: tuning({ settings: { imageTag: '22' } }),
+    });
+    try {
+      const result = await run({ command: 'apply', cwd: consumer.root });
+
+      expect(result.status).toBe('applied');
+      expect(consumer.read(LIVE)).toContain('typescript-node:22');
     } finally {
       consumer.cleanup();
     }

@@ -58,7 +58,7 @@ function foreignImage(settings = {}) {
     presets: ['omnifield'],
     settings: {
       image: 'ghcr.io/omnifield/devbox',
-      runtimeVersion: 'v2026.07.10',
+      imageTag: 'v2026.07.10',
       imageUser: 'vscode',
       ...settings,
     },

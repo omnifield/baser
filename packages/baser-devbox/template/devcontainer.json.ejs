@@ -141,7 +141,7 @@ const list = (items) => items.map((v) => `    ${JSON.stringify(v)}`).join(',\n')
   // (devbox.sh/-manifest/-session/-services) и БЕЗ biome/GH-Packages — это devopser-legacy.
   // Docker-инварианты канон-чистого девбокса сохранены (kb:DEVOPSER-3).
   "name": "<%- name %>",
-  "image": "<%- image %>:<%- runtimeVersion %>",
+  "image": "<%- image %>:<%- imageTag %>",
   "remoteUser": "<%- imageUser %>",
 
 <% if (network) { -%>

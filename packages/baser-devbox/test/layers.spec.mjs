@@ -135,11 +135,11 @@ describe('слой НАСТРОЙКИ: регулировка вместо пр�
     );
   });
 
-  it('образ, версия рантайма и команда установки — заполняемые', async () => {
+  it('образ, ТЕГ образа и команда установки — заполняемые', async () => {
     const { json } = await materialize({
       settings: {
         image: 'mcr.microsoft.com/devcontainers/base',
-        runtimeVersion: '20',
+        imageTag: '20',
         installCommand: 'npm ci',
       },
     });
@@ -279,7 +279,7 @@ describe('слой НАСТРОЙКИ: регулировка вместо пр�
   it('ЗАПОЛНЕННОЕ БЬЁТ ПРЕСЕТ, но слоя не отменяет', async () => {
     const { json, result } = await materialize({
       presets: ['omnifield'],
-      settings: { runtimeVersion: '20', installCommand: 'npm ci' },
+      settings: { imageTag: '20', installCommand: 'npm ci' },
     });
 
     expect(json.image).toBe(
@@ -291,7 +291,7 @@ describe('слой НАСТРОЙКИ: регулировка вместо пр�
     expect(json.postCreateCommand).toContain('/home/node/.secrets');
 
     const runtime = soleRun(result).settings.find(
-      (setting) => setting.key === 'runtimeVersion',
+      (setting) => setting.key === 'imageTag',
     );
     expect(runtime.origin.kind).toBe('filled');
     expect(runtime.ours).toBe(false);
