@@ -136,8 +136,13 @@ describe('обвес сменил резолвер: поедет имя конт
     const byKey = await movements(box);
 
     // Утверждение на каждую настройку обесценило бы утверждение: переехали две.
-    expect(byKey.get('image')?.placed).toBeUndefined();
-    expect(byKey.get('runtimeVersion')?.placed).toBeUndefined();
+    // Названные сначала БЕРУТСЯ, а потом проверяются: `get(...)?.placed` на
+    // снятой настройке зеленеет сам собой — ключа нет, поля нет, проба молчит.
+    for (const key of ['image', 'imageTag']) {
+      const setting = byKey.get(key);
+      expect(setting, key).toBeDefined();
+      expect(setting?.placed).toBeUndefined();
+    }
     expect(
       [...byKey.values()].filter((setting) => setting.placed !== undefined)
         .length,
