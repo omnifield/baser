@@ -49,9 +49,15 @@
  *
  * ## Отказ не оставляет за собой недособранной нагрузки
  *
- * Всё, что упаковка успела положить на диск до отказа, она за собой убирает.
+ * Всё, что упаковка успела положить на диск до отказа, она за собой убирает —
+ * и нагрузку, и опись рядом с ней, включая опись, оборванную на середине.
  * Полусобранная нагрузка выглядит как настоящая, а «выдавать нечего» перестаёт
  * быть видно ровно в тот момент, когда её кто-нибудь понесёт.
+ *
+ * Обещание безусловное, и условным оно быть не может: человек, которому сказали
+ * «мусора не будет», по этому слову планирует. Поэтому убирается СПИСОК
+ * созданного, а не один путь, — и убирается ровно созданное нами: чужой каталог
+ * выдачи, существовавший до нас, остаётся на месте пустым.
  */
 
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
@@ -113,8 +119,16 @@ export function packPackage(source: string, options: PackOptions): PackReport {
   const payloadRoot = join(absoluteTarget, PAYLOAD_DIR);
   const manifestPath = join(absoluteTarget, PAYLOAD_MANIFEST_FILE);
 
-  /** Что упаковка создала своими руками — то и уберёт за собой при отказе. */
-  let created: string | null = null;
+  /**
+   * Что упаковка создала своими руками — то и уберёт за собой при отказе.
+   *
+   * Список, а не один путь: в каталог выдачи кладутся ДВА объекта, нагрузка и
+   * опись рядом с ней. Пока здесь стоял один путь, уборка снимала нагрузку и
+   * проходила мимо описи — а при каталоге выдачи, существовавшем до нас, снести
+   * его целиком нельзя, и огрызок описи оставался лежать рядом с пустым местом
+   * (`tasker:BASER2-74`).
+   */
+  const created: string[] = [];
 
   /** Замер шага и его строка в `stages` — одним местом, чтобы не разъехались. */
   const stage = <T>(
@@ -151,9 +165,17 @@ export function packPackage(source: string, options: PackOptions): PackReport {
     }
   };
 
-  /** Убирает следы отказа: недособранной нагрузки на диске не остаётся. */
+  /**
+   * Убирает следы отказа: недособранной выдачи на диске не остаётся.
+   *
+   * Убирается ровно созданное нами и ничего сверх: чужой каталог выдачи был
+   * здесь до нас и останется после. Порядок обратный порядку создания — иначе
+   * снос каталога уносил бы то, что в нём лежит, ещё до собственной строки.
+   */
   const discard = (): void => {
-    rmSync(created ?? payloadRoot, { recursive: true, force: true });
+    for (const path of [...created].reverse()) {
+      rmSync(path, { recursive: true, force: true });
+    }
   };
 
   const report = (
@@ -225,7 +247,7 @@ export function packPackage(source: string, options: PackOptions): PackReport {
         mkdirSync(payloadRoot, { recursive: true });
         // Убираем за собой ровно то, что создали: чужой пустой каталог выдачи
         // был здесь до нас и останется после.
-        created = targetExisted ? payloadRoot : absoluteTarget;
+        created.push(targetExisted ? payloadRoot : absoluteTarget);
       } catch (cause) {
         log.add(
           'payload-target-unwritable',
@@ -322,6 +344,9 @@ export function packPackage(source: string, options: PackOptions): PackReport {
         source: { ok: check.ok, stages: check.stages },
         payload: { ok: verify.ok, stages: verify.stages },
       });
+      // Адрес описи назван созданным ДО записи, а не после: отказ на середине
+      // оставляет огрызок, и убрать его надо ровно так же, как целую опись.
+      created.push(manifestPath);
       try {
         writePayloadManifest(manifestPath, built);
       } catch (cause) {

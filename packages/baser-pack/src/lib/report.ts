@@ -96,7 +96,12 @@ export interface PackReport {
    * выдачу.
    */
   readonly payloadRoot: string | null;
-  /** Путь описи выдачи — или `null`, если её не писали. */
+  /**
+   * Путь описи выдачи — или `null`, если описи на диске нет.
+   *
+   * `null` и при отказе НА записи: оборванная опись убрана вместе с нагрузкой,
+   * и называть её путь значило бы указывать на пустое место.
+   */
   readonly manifestPath: string | null;
   /** Опись выдачи, та же, что записана файлом. */
   readonly manifest: PayloadManifest | null;
