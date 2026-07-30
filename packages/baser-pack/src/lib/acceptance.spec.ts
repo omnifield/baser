@@ -19,6 +19,11 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import {
+  ARTIFACT_CLASSES,
+  DEFAULT_ARTIFACT_CLASS,
+} from '@omnifield/baser-contracts';
+
+import {
   cleanupBoxes,
   copyDevbox,
   DEVBOX_ROOT,
@@ -95,29 +100,87 @@ describe('приёмка на живом обвесе девбокса', () => {
    * Личность обвеса — прибита НАМЕРЕННО.
    *
    * `id`, `title` и имя пакета меняются осознанным решением, а не ходом времени:
-   * это то, по чему принимающая сторона узнаёт деталь. Поехала личность — приёмка
+   * это то, по чему принимающая сторона узнаёт обвес. Поехала личность — приёмка
    * обязана покраснеть и потребовать, чтобы человек назвал перемену вслух.
    *
    * Версии здесь нет специально: она меняется каждым выпуском соседа и потому
    * утверждается формой, а не значением, — соседней пробой ниже.
    */
-  it('принимающая сторона узнаёт деталь, не вскрывая её', () => {
+  it('принимающая сторона узнаёт обвес, не вскрывая нагрузку', () => {
     expect(manifest.source.id).toBe('omnifield/devbox');
     expect(manifest.source.title).toBe('Девбокс: проект целиком в контейнере');
     expect(manifest.source.package.name).toBe('@omnifield/baser-devbox');
     expect(manifest.formVersion).toBe(2);
+    // Класс здесь — не литерал: девбокс его не объявляет, и в описи стоит
+    // умолчание, которое проставляет ФОРМА. Поедет умолчание формы — поедет и
+    // эта проба вместе с ним, а не покраснеет на ровном месте.
     expect(manifest.artifacts).toEqual([
       {
         dest: '.devcontainer/devcontainer.json',
         from: 'template/devcontainer.json.ejs',
         render: true,
+        class: DEFAULT_ARTIFACT_CLASS,
       },
       {
         dest: '.devcontainer/devcontainer-lock.json',
         from: 'template/devcontainer-lock.json',
         render: false,
+        class: DEFAULT_ARTIFACT_CLASS,
       },
     ]);
+  });
+
+  /**
+   * Класс артефакта — утверждается ФОРМОЙ, а не перечислением значений.
+   *
+   * Перечислить `regenerated` и `placed-once` здесь значило бы завести вторую
+   * правду о форме: третье слово (`kb:WEBER-4` его уже описал) приехало бы в
+   * контракты, а зона упаковки узнала бы об этом молчанием — класс не доехал
+   * бы, и ни одна проба не покраснела. Поэтому проба перебирает то, что
+   * объявляет форма, и требует, чтобы КАЖДОЕ её слово доехало до описи как
+   * есть.
+   *
+   * Живой случай, ради которого узел поднят (`tasker:BASER2-63`, снятие
+   * оговорки architect 2026-07-30): плагин агент-харнесса заполняется человеком,
+   * то есть ровно `placed-once`. Без класса в описи принимающая сторона не
+   * отличит его от артефакта, который перепишется на следующем обновлении.
+   */
+  it('класс артефакта доезжает до описи — каждое слово, которое знает форма', () => {
+    expect(ARTIFACT_CLASSES.length).toBeGreaterThanOrEqual(2);
+
+    for (const declared of ARTIFACT_CLASSES) {
+      const root = copyDevbox();
+      editManifest(root, (manifest) => {
+        for (const entry of manifest.baser.layout) {
+          entry.class = declared;
+        }
+      });
+
+      const packed = packPackage(root, { into: target() });
+
+      expect([declared, packed.problems]).toEqual([declared, []]);
+      expect(packed.manifest?.artifacts.map((one) => one.class)).toEqual(
+        packed.manifest?.artifacts.map(() => declared),
+      );
+    }
+  });
+
+  /**
+   * Класс не назван — в описи стоит умолчание формы, а не пусто.
+   *
+   * Опись существует, чтобы принимающая сторона знала груз не вскрывая: поле,
+   * которого иногда нет, заставило бы её гадать, что значит его отсутствие.
+   */
+  it('необъявленный класс приезжает умолчанием формы, а не дырой', () => {
+    const declared = readManifest(DEVBOX_ROOT).baser.layout;
+
+    expect(declared.every((entry) => entry.class === undefined)).toBe(true);
+    expect(manifest.artifacts.every((one) => one.class !== undefined)).toBe(
+      true,
+    );
+    expect(manifest.artifacts.map((one) => one.class)).toEqual(
+      declared.map(() => DEFAULT_ARTIFACT_CLASS),
+    );
   });
 
   /**
@@ -172,7 +235,7 @@ describe('приёмка на живом обвесе девбокса', () => {
     );
   });
 
-  it('в описи сказано, чем деталь проверена — обоими вердиктами', () => {
+  it('в описи сказано, чем обвес проверен — обоими вердиктами', () => {
     expect(manifest.shipping).toEqual({
       claim: 'declared',
       decidedBy: 'npm',

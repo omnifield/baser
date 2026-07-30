@@ -1,5 +1,5 @@
 /**
- * НАСТОЯЩИЙ обвес как приборная деталь для сборки.
+ * НАСТОЯЩИЙ обвес как образец для сборки.
  *
  * Проба берёт `packages/baser-devbox` — тот самый обвес, который мы выпускаем, —
  * и собирает нагрузку из него, а не из выдуманного пакета в три строки.
@@ -115,6 +115,11 @@ export interface Manifest {
     source: { id: string; title: string; contentRoot: string };
     settings: Record<string, Record<string, unknown>>;
     presets: Record<string, unknown>;
-    layout: { src: string; dest: string; render?: boolean }[];
+    layout: {
+      src: string;
+      dest: string;
+      render?: boolean;
+      class?: string;
+    }[];
   };
 }

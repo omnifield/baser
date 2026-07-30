@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { ARTIFACT_CLASSES } from '@omnifield/baser-contracts';
 import type { SourceDeclaration } from '@omnifield/baser-contracts';
 
 import {
@@ -84,13 +85,58 @@ describe('опись', () => {
         dest: '.devcontainer/devcontainer.json',
         from: 'template/x.ejs',
         render: true,
+        class: 'regenerated',
       },
     ]);
+  });
+
+  /**
+   * Класс переносится из объявления, а не сочиняется здесь.
+   *
+   * Проба идёт по КАЖДОМУ слову формы: перечислить их в зоне упаковки значило бы
+   * завести вторую правду о форме, и новое слово доехало бы сюда молчанием.
+   */
+  it('класс артефакта — тот, что стоит в объявлении, слово в слово', () => {
+    for (const declared of ARTIFACT_CLASSES) {
+      const manifest = buildPayloadManifest({
+        declaration: {
+          ...DECLARATION,
+          layout: DECLARATION.layout.map((entry) => ({
+            ...entry,
+            class: declared,
+          })),
+        },
+        packageName: '@omnifield/baser-devbox',
+        packageVersion: '0.2.0',
+        shipping: { claim: 'declared', decidedBy: 'npm' },
+        files: FILES,
+        checkSchemaVersion: 1,
+        source: VERDICT,
+        payload: VERDICT,
+      });
+
+      expect(manifest.artifacts.map((one) => one.class)).toEqual([declared]);
+    }
   });
 
   it('несёт свою версию формы — несовместимость обязана быть видимой', () => {
     expect(manifestOf(FILES).payloadSchemaVersion).toBe(PAYLOAD_SCHEMA_VERSION);
     expect(manifestOf(FILES).formVersion).toBe(1);
+  });
+
+  /**
+   * Поле поехало — поехала и версия формы описи.
+   *
+   * Сверка версии с собственной константой (проба выше) молчит о том, подняли
+   * ли её вообще: забытое поднятие выглядело бы там зелёным. Поэтому появление
+   * класса связано с числом прямо — иначе получатель не отличит «класса нет» от
+   * «опись старой формы» (`tasker:BASER2-63`).
+   */
+  it('появление класса названо версией формы, а не молчанием', () => {
+    expect(
+      manifestOf(FILES).artifacts.every((one) => one.class !== undefined),
+    ).toBe(true);
+    expect(PAYLOAD_SCHEMA_VERSION).toBeGreaterThanOrEqual(2);
   });
 
   it('отпечаток в описи посчитан по её же файлам', () => {
