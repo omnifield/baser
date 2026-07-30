@@ -185,7 +185,7 @@ describe('МЕХАНИКА: список фич выражается настр�
 });
 
 describe('НЕ МОЛЧАТЬ: тулчейн, объявленный репозиторием, назван вслух', () => {
-  it('питон объявлен, команды нет — сказано ЧТО объявлено и ЧЕМ чинить', async () => {
+  it('тулчейн объявлен, запускать нечем — сказано ЧТО объявлено и ЧЕМ чинить', async () => {
     const { json } = await materialize();
     const step = toolchainStep(json);
 
@@ -197,8 +197,10 @@ describe('НЕ МОЛЧАТЬ: тулчейн, объявленный репоз
     // Не отказ: девбокс работает, упадут только таргеты этого тулчейна. Но
     // молчать он не имеет права — человек узнавал это первым `git commit`.
     expect(result.code).toBe(0);
-    expect(result.err).toContain('Репозиторий объявляет питон');
+    // Вопрос ровно один и ровно про то, чем репозиторий собрался запускать питон.
+    // Про сам питон не спрашиваем: на этот вопрос уже ответил объявленный uv.
     expect(result.err).toContain('Репозиторий объявляет uv');
+    expect(result.err).not.toContain('объявляет питон');
     // Названо и то, чего человек не знал: «девбокс» у нас значит «НОДОВЫЙ девбокс».
     expect(result.err).toContain('Девбокс НОДОВЫЙ');
     // И названо, ЧЕМ чинить: настройкой, а не форком обвеса.
@@ -206,6 +208,44 @@ describe('НЕ МОЛЧАТЬ: тулчейн, объявленный репоз
     expect(result.err).toContain('https://containers.dev/features');
     // И когда прилетит цена, если не чинить.
     expect(result.err).toContain('первым же git commit');
+  });
+
+  it('НА UV ПИТОНА В PATH НЕТ И БЫТЬ НЕ ДОЛЖНО — предупреждение молчит', async () => {
+    // Регрессия текста, найденная потребителем на живом применении
+    // (`tasker:BASER2-117`): первая редакция спрашивала `command -v python` у
+    // всякого, кто объявил питон, — и кричала у того, кто сделал ВСЁ ПРАВИЛЬНО.
+    // uv поднимает CPython сам по `.python-version` и держит его при проекте;
+    // питона в PATH при этой модели нет по построению.
+    //
+    // Предупреждение, которое звучит у правого, обесценивает себя: его
+    // перестают читать, и оно перестаёт работать там, где нужно.
+    const { json } = await materialize();
+
+    const result = await sh(
+      toolchainStep(json),
+      repo({ files: ['.python-version', 'uv.lock'], tools: ['uv'] }),
+    );
+
+    expect(result.err).toBe('');
+    expect(result.code).toBe(0);
+  });
+
+  it('питон БЕЗ uv: отвечает любая из двух команд, а нет обеих — вопрос', async () => {
+    // Репозиторий на системном питоне зовёт `python3`, и `python` есть не в
+    // каждом образе: требовать именно его значило бы спрашивать про имя, а не
+    // про наличие рантайма.
+    const { json } = await materialize();
+    const step = toolchainStep(json);
+
+    const byPython3 = await sh(
+      step,
+      repo({ files: ['.python-version'], tools: ['python3'] }),
+    );
+    expect(byPython3.err).toBe('');
+
+    const neither = await sh(step, repo({ files: ['.python-version'] }));
+    expect(neither.err).toContain('Репозиторий объявляет питон');
+    expect(neither.err).toContain('ни одной из команд python, python3');
   });
 
   it('go — тот же класс: следующие три переезжающих продукта на нём', async () => {

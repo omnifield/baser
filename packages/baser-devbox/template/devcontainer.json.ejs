@@ -204,18 +204,37 @@ const q = (line) => `'[devbox] ${line}'`;
 // того, кто про этот тулчейн не говорил, и замолкает сама, как только нужную
 // фичу добавили. Ни списка «поддерживаемых стеков», ни настройки-выключателя:
 // нечего выключать там, где нечего и сказать.
+//
+// ── СПРАШИВАТЬ НАДО ПРО ТО, ЧЕМ РЕПОЗИТОРИЙ СОБИРАЕТСЯ ЗАПУСКАТЬ ────────────
+//
+// Первая редакция спрашивала `command -v python` у всякого, кто объявил питон, —
+// и кричала у того, кто сделал ВСЁ ПРАВИЛЬНО (tasker:BASER2-117). При модели uv
+// питона в PATH нет и быть не должно: `uv` поднимает CPython сам по
+// `.python-version` и держит его при проекте. Признак «репозиторий объявил
+// питон» был верен, признак «питона нет» — нет.
+//
+// Цена ложного срабатывания выше пропущенного: предупреждение, которое звучит у
+// правого, обесценивает себя — его перестают читать, и оно перестаёт работать
+// там, где нужно. Поэтому спрашиваем не «есть ли ЭТА команда», а «есть ли ЧЕМ
+// запускать»: у тулчейна список команд, и любой из них достаточно, а объявленный
+// uv снимает вопрос про питон целиком — он и есть ответ на него.
+const uvDeclared = "[ -f uv.lock ] || grep -qs '^\\[tool.uv\\]' pyproject.toml";
 const toolchains = [
-  {
-    what: 'питон',
-    declaredBy: '.python-version, pyproject.toml, uv.lock',
-    when: '[ -f .python-version ] || [ -f pyproject.toml ] || [ -f uv.lock ]',
-    tool: 'python',
-  },
   {
     what: 'uv',
     declaredBy: 'uv.lock, [tool.uv] в pyproject.toml',
-    when: "[ -f uv.lock ] || grep -qs '^\\[tool.uv\\]' pyproject.toml",
-    tool: 'uv',
+    when: uvDeclared,
+    tools: ['uv'],
+  },
+  {
+    // Вопрос про питон задаётся, только когда на него не ответил uv. И отвечает
+    // на него любая из двух команд: репозиторий на системном питоне зовёт
+    // `python3`, а `python` есть не в каждом образе — требовать именно его
+    // значило бы спрашивать про имя, а не про наличие рантайма.
+    what: 'питон',
+    declaredBy: '.python-version, pyproject.toml',
+    when: `{ [ -f .python-version ] || [ -f pyproject.toml ]; } && ! { ${uvDeclared}; }`,
+    tools: ['python', 'python3'],
   },
   // go идёт рядом с питоном не по симметрии: следующие три переезжающих продукта
   // (tasker, knowledger, chater) — все на Go, и класс у них тот же самый.
@@ -223,14 +242,18 @@ const toolchains = [
     what: 'go',
     declaredBy: 'go.mod',
     when: '[ -f go.mod ]',
-    tool: 'go',
+    tools: ['go'],
   },
 ];
+const missing = (tools) =>
+  tools.length > 1
+    ? `ни одной из команд ${tools.join(', ')} в девбоксе нет`
+    : `команды ${tools[0]} в девбоксе нет`;
 const toolchainCheck = [
   '( lost=;',
   ...toolchains.map((chain) =>
-    `if { ${chain.when}; } && ! command -v ${chain.tool} >/dev/null 2>&1; then ` +
-    `${say(q(`Репозиторий объявляет ${chain.what} (${chain.declaredBy}), а команды ${chain.tool} в девбоксе нет.`))}; lost=1; fi;`,
+    `if { ${chain.when}; } && ! { ${chain.tools.map((tool) => `command -v ${tool} >/dev/null 2>&1`).join(' || ')}; }; then ` +
+    `${say(q(`Репозиторий объявляет ${chain.what} (${chain.declaredBy}), а ${missing(chain.tools)}.`))}; lost=1; fi;`,
   ),
   'if [ -n "$lost" ]; then',
   say(
