@@ -1,0 +1,35 @@
+{
+  "name": "@fixture/seed",
+  "version": "0.2.0",
+  "baser": {
+    "formVersion": 2,
+
+    "source": {
+      "id": "fixture/seed",
+      "title": "Фикстура: обвес, чей артефакт дальше ведёт человек",
+      "contentRoot": "template"
+    },
+
+    "settings": {
+      "owner": {
+        "title": "Кто ведёт файл дальше",
+        "type": "string",
+        "defaultFrom": "./defaults.mjs#repoName"
+      },
+      "areas": {
+        "title": "Разделы заготовки",
+        "description": "Пустой список законен: заготовка без разделов — рабочее состояние.",
+        "type": "list",
+        "default": []
+      }
+    },
+
+    "layout": [
+      {
+        "src": "seed.yaml.ejs",
+        "dest": "fixture/seed.yaml",
+        "class": "placed-once"
+      }
+    ]
+  }
+}

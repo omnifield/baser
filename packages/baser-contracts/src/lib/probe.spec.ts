@@ -1,10 +1,11 @@
 /**
- * ПРОБА ФОРМЫ на живых обвесах.
+ * ПРОБА ФОРМЫ на СИНТЕТИЧЕСКОЙ фикстуре.
  *
- * Приёмка формы — её выразительность: если реальный обвес ею не описывается,
- * плохая форма, а не пример. Поэтому проба берёт ДВА обвеса этого репозитория —
- * `.devcontainer` (девбокс) и `.omnifield/harness.yaml` (плагин агент-харнесса) —
- * и описывает их объявлениями во всех слоях: универсальное, настройки, пресет.
+ * Приёмка формы — её выразительность: если инструмент ею не описывается, плохая
+ * форма, а не пример. Проба берёт ДВА обвеса-фикстуры (`examples/kit` и
+ * `examples/seed`) и описывает ими всё, что форма умеет сказать: личность,
+ * раскладку с классами, настройки всех типов, вычисляемый дефолт, пресет,
+ * столкновение и язык шаблона.
  *
  * Два, а не один, намеренно: несколько инструментов в репозитории — норма по
  * построению (`kb:BASER2-2` §2, `tasker:BASER2-48`), и форма обязана выражать это
@@ -12,15 +13,35 @@
  * артефактов разный КЛАСС, а настройки каждого лежат в СВОЁМ файле, имя которого
  * считается из личности.
  *
+ * ## Почему фикстура синтетическая, а не «настоящий обвес»
+ *
+ * Пример был черновиком обвеса, пока настоящего пакета не существовало
+ * (`tasker:BASER2-27`). Пакет есть — и копия немедленно разъехалась с ним
+ * (`0.1.0` против `0.5.0`), потому что копии для этого достаточно существовать.
+ *
+ * Выразительность формы на НАСТОЯЩЕМ обвесе доказывает дверь
+ * (`tasker:BASER2-26`, `tasker:BASER2-78`): её приёмка ставит `@omnifield/baser-devbox`
+ * так же, как его получит потребитель — распакованным тарболом от `npm pack`, —
+ * и сверяет уложенное с живым репозиторием байт в байт. Второй копии того же
+ * обвеса здесь поэтому нет и быть не должно: контракты программируют форму, а не
+ * повторяют инструмент. Зависимости на девбокс у контрактов нет намеренно — обвес
+ * программирует против формы, а не наоборот.
+ *
+ * ## Эталон укладки — в самой фикстуре, и сверка не прощает ничего
+ *
+ * `examples/consumer` — синтетический репозиторий потребителя: перечень
+ * поставленного, два файла настроек и то, что обвесы в него укладывают. Проба
+ * рендерит объявления и сверяет результат с этими файлами **байт в байт, без
+ * единого исключения**: прощённая строка означала бы, что расхождение уже
+ * поселилось и его согласились не замечать.
+ *
+ * Проба не читает ни одного файла живого репозитория — ни `.devcontainer`, ни
+ * `.omnifield/harness.yaml`. Сверка с живым файлом принадлежит двери, у которой
+ * есть и настоящий обвес, и движок.
+ *
  * Прогон идёт через РЕАЛИЗОВАННЫЕ валидаторы, а не глазами: те же объявления
  * проходят `readSourceDeclaration`, `parseConsumerConfig`, `parseSourceConfig`,
  * `resolveSettings` и `checkSingleProvider`, что и настоящий обвес у двери.
- *
- * **`examples/` — не выписка из живых пакетов.** Объявления здесь написаны под
- * пробу и от выпущенных обвесов отстали: у девбокса `0.1.0` против `0.5.0` и три
- * незаведённые настройки. Выразительность формы это не искажает — все её слова в
- * примере есть, — но читать пример как актуальное объявление девбокса нельзя.
- * Приведение примеров к живым обвесам — `tasker:BASER2-27`, отдельный заход.
  *
  * Подстановку значений и разбор YAML здесь делает сам тест — это обязательства
  * ДВЕРИ (`tasker:BASER2-23`, `tasker:BASER2-53`), а не контрактов: пакет ничего
@@ -34,6 +55,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
+  CONSUMER_CONFIG_PATH,
   parseConsumerConfig,
   parseSourceConfig,
   sourceConfigPath,
@@ -52,14 +74,20 @@ import { FORM_VERSION } from './version.js';
 import type { SettingValue } from './values.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, '../../../..');
-const examples = join(repoRoot, 'packages/baser-contracts/examples');
-const consumer = join(examples, 'consumer');
+const examples = resolve(here, '../../examples');
 
-/** Обвесы, поставленные в этот репозиторий: каталог примера → имя пакета. */
+/**
+ * Синтетический репозиторий потребителя: что поставлено, как настроено и что
+ * легло. Он же — эталон, с которым сверяется рендер.
+ */
+const consumer = join(examples, 'consumer');
+/** Имя «репозитория» для резолверов — фикстура, а не этот репозиторий. */
+const CONSUMER_REPO = 'consumer';
+
+/** Обвесы-фикстуры: каталог примера → имя пакета, которым его привезли. */
 const TOOLS = {
-  devbox: '@omnifield/baser-devbox',
-  harness: '@omnifield/brainer-agent-harness',
+  kit: '@fixture/kit',
+  seed: '@fixture/seed',
 } as const;
 type Tool = keyof typeof TOOLS;
 
@@ -92,14 +120,22 @@ beforeAll(async () => {
   parseYaml = (text) => yaml.parse(text);
 });
 
+/** Манифест пакета обвеса-фикстуры — то, что дверь читает у поставщика. */
+function manifest(tool: Tool): Record<string, unknown> {
+  return readJson(join(examples, tool, 'declaration.json')) as Record<
+    string,
+    unknown
+  >;
+}
+
 function declaration(tool: Tool): SourceDeclaration {
   const parsed = readSourceDeclaration(
-    readJson(join(examples, tool, 'declaration.json')),
+    manifest(tool),
     `examples/${tool}/declaration.json`,
   );
   if (!parsed.ok) {
     throw new Error(
-      `объявление обвеса непригодно:\n${JSON.stringify(parsed.problems, null, 2)}`,
+      `объявление обвеса непригодно:\n${describeProblems(parsed.problems)}`,
     );
   }
   return parsed.value;
@@ -107,7 +143,9 @@ function declaration(tool: Tool): SourceDeclaration {
 
 /** Установленный набор — то, что дверь получает из `baser.json`. */
 function installed() {
-  const parsed = parseConsumerConfig(readJson(join(consumer, 'baser.json')));
+  const parsed = parseConsumerConfig(
+    readJson(join(consumer, CONSUMER_CONFIG_PATH)),
+  );
   if (!parsed.ok) {
     throw new Error(
       `конфиг потребителя непригоден:\n${describeProblems(parsed.problems)}`,
@@ -148,17 +186,14 @@ function resolved(
       throw new Error(`в ${ref.module} нет экспорта ${ref.member}`);
     }
     return fn({
-      repo: { name: 'baser', root: repoRoot },
+      repo: { name: CONSUMER_REPO, root: consumer },
       source: {
         id: decl.source.id,
         packageName: TOOLS[tool],
         // Версия приходит из манифеста пакета — вторым полем объявления она не
-        // заводится (`tasker:BASER2-10` §1).
-        version: (
-          readJson(join(examples, tool, 'declaration.json')) as {
-            version: string;
-          }
-        ).version,
+        // заводится (`tasker:BASER2-10` §1) и бывает отсутствующей
+        // (`tasker:BASER2-69`).
+        version: (manifest(tool)['version'] as string | undefined) ?? null,
       },
     });
   };
@@ -166,7 +201,7 @@ function resolved(
   const result = resolveSettings(decl, config, { computeDefault });
   if (!result.ok) {
     throw new Error(
-      `значения не разрешились:\n${JSON.stringify(result.problems, null, 2)}`,
+      `значения не разрешились:\n${describeProblems(result.problems)}`,
     );
   }
   return result.value.values as Record<string, SettingValue>;
@@ -201,14 +236,14 @@ function materialize(
   return out;
 }
 
-describe('проба формы: два обвеса этого репозитория сразу', () => {
+describe('проба формы: два обвеса-фикстуры сразу', () => {
   it('оба объявления и перечень поставленного пригодны', () => {
     expect(installed().sources.map((entry) => entry.use)).toEqual([
-      TOOLS.devbox,
-      TOOLS.harness,
+      TOOLS.kit,
+      TOOLS.seed,
     ]);
-    expect(declaration('devbox').source.id).toBe('omnifield/devbox');
-    expect(declaration('harness').source.id).toBe('omnifield/agent-harness');
+    expect(declaration('kit').source.id).toBe('fixture/kit');
+    expect(declaration('seed').source.id).toBe('fixture/seed');
   });
 
   it('НЕСКОЛЬКО ИНСТРУМЕНТОВ СРАЗУ: одна карта владения, разные классы', () => {
@@ -222,145 +257,130 @@ describe('проба формы: два обвеса этого репозито
     if (!owners.ok) return;
 
     expect(Object.keys(owners.value)).toEqual([
-      '.devcontainer/devcontainer-lock.json',
-      '.devcontainer/devcontainer.json',
-      '.omnifield/harness.yaml',
+      'fixture/kit.json',
+      'fixture/kit.lock.json',
+      'fixture/seed.yaml',
     ]);
-    // Наш файл перегенерируется целиком; конфиг, которым дальше владеет продукт,
-    // кладётся один раз и больше не трогается.
-    expect(owners.value['.devcontainer/devcontainer.json'].class).toBe(
-      'regenerated',
-    );
-    expect(owners.value['.omnifield/harness.yaml'].class).toBe('placed-once');
-    // Второй артефакт девбокса обязан лечь байт в байт — это пин toolchain по digest.
-    expect(owners.value['.devcontainer/devcontainer-lock.json'].render).toBe(
-      false,
-    );
+    // Наш файл перегенерируется целиком; заготовка, которой дальше владеет
+    // человек, кладётся один раз и больше не трогается.
+    expect(owners.value['fixture/kit.json'].class).toBe('regenerated');
+    expect(owners.value['fixture/seed.yaml'].class).toBe('placed-once');
+    // Второй артефакт набора обязан лечь байт в байт — это уже содержимое.
+    expect(owners.value['fixture/kit.lock.json'].render).toBe(false);
   });
 
   it('У КАЖДОГО ИНСТРУМЕНТА СВОЙ ФАЙЛ НАСТРОЕК, имя — из личности', () => {
-    expect(sourceConfigPath(declaration('devbox').source.id)).toBe(
-      '.omnifield/omnifield-devbox.yaml',
+    expect(sourceConfigPath(declaration('kit').source.id)).toBe(
+      '.omnifield/fixture-kit.yaml',
     );
-    expect(sourceConfigPath(declaration('harness').source.id)).toBe(
-      '.omnifield/omnifield-agent-harness.yaml',
+    expect(sourceConfigPath(declaration('seed').source.id)).toBe(
+      '.omnifield/fixture-seed.yaml',
     );
     // Оба лежат в одной папке — человек ходит в одно место (`kb:BASER2-2` §4).
-    expect(tuning('devbox').presets).toEqual(['omnifield']);
-    expect(tuning('harness').settings['zones']).toEqual([
-      'contracts',
-      'materialize',
-      'cli',
-    ]);
+    expect(tuning('kit').presets).toEqual(['shared']);
+    expect(tuning('seed').settings['areas']).toEqual(['form', 'probe', 'door']);
   });
 
   it('ОДИН ФАЙЛ, ДВА ЧИТАТЕЛЯ: чужая половина двери не мешает', () => {
-    // В файле настроек харнесса рядом с ключом `baser` лежат адреса сервисов —
-    // это дело самого инструмента, и дверь о них молчит.
+    // В файле настроек набора рядом с ключом `baser` лежат настройки самого
+    // инструмента — это его дело, и дверь о них молчит.
     const raw = parseYaml(
-      readFileSync(
-        join(consumer, sourceConfigPath('omnifield/agent-harness')),
-        'utf-8',
-      ),
+      readFileSync(join(consumer, sourceConfigPath('fixture/kit')), 'utf-8'),
     ) as Record<string, unknown>;
-    expect(raw['services']).toBeDefined();
-    expect(Object.keys(tuning('harness').settings)).toEqual(['zones']);
+    expect(raw['runner']).toBeDefined();
+    // Дверь при этом видит только свою половину, и в ней не заполнено ничего.
+    expect(tuning('kit').settings).toEqual({});
   });
 
-  it('НОЛЬ ВОПРОСОВ ПОЛЬЗОВАТЕЛЮ: имя из имени репозитория, остальное — пресет', () => {
-    // В файле настроек девбокса не заполнено ни одного значения — только пресет.
-    expect(resolved('devbox')).toEqual({
-      name: 'baser-devbox',
-      networkAlias: 'baser',
-      image: 'mcr.microsoft.com/devcontainers/typescript-node',
-      runtimeVersion: '22',
-      installCommand: 'pnpm install --frozen-lockfile',
-      editorExtensions: ['esbenp.prettier-vscode', 'nrwl.angular-console'],
-      network: 'omnifield-gateway',
-      secretsVolume: 'omnifield-secrets',
-      pnpmStoreVolume: 'omnifield-pnpm-store',
-      installAssistant: true,
+  it('НОЛЬ ВОПРОСОВ ПОЛЬЗОВАТЕЛЮ: дефолт, вычисляемое и пресет сходятся сами', () => {
+    // В файле настроек набора не заполнено ни одного значения — только пресет.
+    expect(resolved('kit')).toEqual({
+      name: 'consumer-kit',
+      stamp: 'fixture/kit@1.0.0',
+      command: 'pnpm exec fixture --scope "*"',
+      retries: 2,
+      labels: ['form', 'probe'],
+      store: 'fixture-store',
+      strict: true,
     });
   });
 
-  it('слой «универсальное + настройки + пресет» сходится с файлом на диске', () => {
-    const produced = materialize('devbox', resolved('devbox'));
+  it('СВЕРКА НЕ ПРОЩАЕТ НИЧЕГО: уложенное сходится с эталоном байт в байт', () => {
+    const compared: string[] = [];
 
-    for (const [dest, text] of Object.entries(produced)) {
-      const actual = readFileSync(join(repoRoot, dest), 'utf-8');
-      if (dest.endsWith('devcontainer.json')) {
-        // Единственное расхождение названо заранее и оно ПРОЗАИЧЕСКОЕ: во второй
-        // строке живого файла руками написано «baser devbox», а обвес на её месте
-        // подставляет настройку `name`. Структурных расхождений нет.
-        expect(withoutLine(text, 2)).toBe(withoutLine(actual, 2));
-        expect(text.split('\n')[1]).toContain('baser-devbox — Ф2');
-        expect(actual.split('\n')[1]).toContain('baser devbox — Ф2');
-      } else {
-        expect(text).toBe(actual);
+    for (const tool of Object.keys(TOOLS) as Tool[]) {
+      const produced = materialize(tool, resolved(tool));
+      for (const [dest, text] of Object.entries(produced)) {
+        expect(text).toBe(readFileSync(join(consumer, dest), 'utf-8'));
+        compared.push(dest);
       }
     }
-  });
 
-  it('placed-once: артефакт харнесса сходится с живым по существу', () => {
-    const text = materialize('harness', resolved('harness'))[
-      '.omnifield/harness.yaml'
-    ];
-    const produced = parseYaml(text) as Record<string, unknown>;
-    const live = parseYaml(
-      readFileSync(join(repoRoot, '.omnifield/harness.yaml'), 'utf-8'),
-    ) as Record<string, unknown>;
-
-    // Байт в байт с живым файлом он и НЕ ОБЯЗАН сходиться: класс placed-once
-    // означает, что дальше файлом владеет продукт, и правки в нём — не
-    // расхождение, а работа человека. Сверяем то, что кладёт обвес.
-    expect(produced['product']).toBe(live['product']);
-    expect(produced['kind']).toBe('harness');
-    expect(Object.keys(produced['zones'] as object)).toEqual([
-      'contracts',
-      'materialize',
-      'cli',
+    // Прощённых строк нет — но их не должно быть и в виде артефакта, который
+    // сверку молча обошёл. Перечень сверенного назван целиком.
+    expect(compared.sort()).toEqual([
+      'fixture/kit.json',
+      'fixture/kit.lock.json',
+      'fixture/seed.yaml',
     ]);
   });
 
-  it('рендер не экранирует под HTML — кавычка остаётся кавычкой', () => {
-    const text = materialize('devbox', resolved('devbox'))[
-      '.devcontainer/devcontainer.json'
-    ];
-    expect(text).not.toContain('&#34;');
-    expect(text).toContain('"--network=omnifield-gateway"');
-    expect(() => JSON.parse(stripComments(text))).not.toThrow();
+  it('ЗАПОЛНЕННОЕ БЬЁТ ДЕФОЛТ: разделы заготовки приехали от человека', () => {
+    expect(resolved('seed')).toEqual({
+      owner: CONSUMER_REPO,
+      areas: ['form', 'probe', 'door'],
+    });
+    // Дефолт обвеса — пустой список, и он законен: заготовка без разделов
+    // рабочая. Человек заполнил, и это значение не поднимется никогда.
+    expect(declaration('seed').settings['areas'].default).toEqual([]);
   });
 
-  it('слой «универсальное»: тот же обвес без пресета — валидный devcontainer', () => {
-    const text = materialize('devbox', resolved('devbox', { presets: [] }))[
-      '.devcontainer/devcontainer.json'
-    ];
-    const parsed = JSON.parse(stripComments(text)) as Record<string, unknown>;
-
-    expect(parsed['runArgs']).toEqual([
-      '--add-host=host.docker.internal:host-gateway',
-      '--restart=unless-stopped',
+  it('артефакт без подстановки ложится содержимым, а не шаблоном', () => {
+    const produced = materialize('kit', resolved('kit'));
+    const source = readFileSync(
+      join(examples, 'kit/template/kit.lock.json'),
+      'utf-8',
+    );
+    expect(produced['fixture/kit.lock.json']).toBe(source);
+    // Языком формы он не меряется по построению — тегов подстановки в нём нет,
+    // и объявленный рендеримым он получил бы отказ `template-not-ejs`.
+    expect(checkTemplate(source, 'kit.lock.json').map((p) => p.code)).toEqual([
+      'template-not-ejs',
     ]);
+  });
+
+  it('слой «универсальное»: без пресета блок не разворачивается вовсе', () => {
+    const text = materialize('kit', resolved('kit', { presets: [] }))[
+      'fixture/kit.json'
+    ];
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+
+    // Том не задан (`null`) — значит блока с томами в артефакте нет совсем, а не
+    // есть пустой: третий слой выражается ветвлением шаблона.
     expect(parsed['mounts']).toBeUndefined();
-    expect(parsed['containerEnv']).toBeUndefined();
-    expect(parsed['postCreateCommand']).toBe('pnpm install --frozen-lockfile');
+    expect(text).not.toContain('mounts');
+    expect(parsed['onFailure']).toBe('continue');
+    expect(parsed['name']).toBe('consumer-kit');
   });
 
   it('слой «настройки»: заполненное значение бьёт пресет', () => {
     const text = materialize(
-      'devbox',
-      resolved('devbox', {
-        settings: { runtimeVersion: '24', installCommand: 'npm ci' },
-      }),
-    )['.devcontainer/devcontainer.json'];
-    const parsed = JSON.parse(stripComments(text)) as Record<string, string>;
+      'kit',
+      resolved('kit', { settings: { store: 'своё-хранилище', retries: 5 } }),
+    )['fixture/kit.json'];
+    const parsed = JSON.parse(text) as Record<string, unknown>;
 
-    expect(parsed['image']).toBe(
-      'mcr.microsoft.com/devcontainers/typescript-node:24',
-    );
-    expect(parsed['postCreateCommand']).toMatch(/&& npm ci$/);
+    expect(parsed['mounts']).toEqual(['своё-хранилище:/work/cache']);
+    expect(parsed['retries']).toBe(5);
     // Пресет при этом на месте: заполнено одно значение, а не отменён слой.
-    expect(parsed['postCreateCommand']).toContain('/home/node/.secrets');
+    expect(parsed['onFailure']).toBe('stop');
+  });
+
+  it('рендер не экранирует под HTML — кавычка остаётся кавычкой', () => {
+    const text = materialize('kit', resolved('kit'))['fixture/kit.json'];
+    expect(text).not.toContain('&#34;');
+    expect(text).toContain('"pnpm exec fixture --scope \\"*\\""');
+    expect(() => JSON.parse(text)).not.toThrow();
   });
 });
 
@@ -369,39 +389,61 @@ describe('проба отказов: каждый случай называет�
     const надстройка = readSourceDeclaration({
       baser: declarationBlock({
         source: {
-          id: 'omnifield/devbox-over',
-          title: 'Надстройка',
+          id: 'fixture/kit-over',
+          title: 'Надстройка над набором',
           contentRoot: 'tpl',
         },
-        layout: [{ src: 'over.json', dest: '.devcontainer/devcontainer.json' }],
+        layout: [{ src: 'over.json', dest: 'fixture/kit.json' }],
       }),
     });
     expect(надстройка.ok).toBe(true);
     if (!надстройка.ok) return;
 
     const result = checkSingleProvider([
-      { declaration: declaration('devbox'), packageName: TOOLS.devbox },
-      { declaration: надстройка.value, packageName: '@чужой/devbox-over' },
+      { declaration: declaration('kit'), packageName: TOOLS.kit },
+      { declaration: надстройка.value, packageName: '@чужой/kit-over' },
     ]);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.problems[0].code).toBe('artifact-shared');
-    expect(result.problems[0].message).toContain(
-      '.devcontainer/devcontainer.json',
-    );
+    expect(result.problems[0].message).toContain('fixture/kit.json');
+  });
+
+  it('АРТЕФАКТ ПОВЕРХ КОНФИГА ПОТРЕБИТЕЛЯ: соседние записи разбираются как обычно', () => {
+    // Живое объявление фикстуры, которому дописали третью запись раскладки:
+    // она целится в перечень поставленного (`tasker:BASER2-25`).
+    const block = manifest('kit')['baser'] as Record<string, unknown>;
+    const жадный = readSourceDeclaration({
+      baser: {
+        ...block,
+        layout: [
+          ...(block['layout'] as unknown[]),
+          { src: 'kit.json.ejs', dest: CONSUMER_CONFIG_PATH },
+        ],
+      },
+    });
+
+    expect(жадный.ok).toBe(false);
+    if (жадный.ok) return;
+    // Ровно один отказ и ровно по третьей записи: две первые прошли разбор
+    // молча, то есть непригодна запись, а не объявление вокруг неё.
+    expect(codesOf(жадный.problems)).toEqual([
+      'artifact-over-consumer-config @ package.json.baser.layout[2].dest',
+    ]);
+    expect(жадный.problems[0].message).toContain(CONSUMER_CONFIG_PATH);
   });
 
   it('незнакомый ключ настройки в файле настроек', () => {
-    expect(() =>
-      resolved('devbox', { settings: { runtimeVerison: '24' } }),
-    ).toThrow(/unknown-setting/);
+    expect(() => resolved('kit', { settings: { retires: 5 } })).toThrow(
+      /unknown-setting/,
+    );
   });
 
   it('обвес без дефолта у настройки', () => {
     const broken = readSourceDeclaration({
       baser: declarationBlock({
-        settings: { runtimeVersion: { title: 'Версия Node', type: 'string' } },
+        settings: { retries: { title: 'Сколько раз', type: 'number' } },
       }),
     });
     expect(broken.ok).toBe(false);
@@ -411,15 +453,13 @@ describe('проба отказов: каждый случай называет�
   });
 
   it('ОБВЕС ПЕРВОЙ ФОРМЫ: отказ целиком, а не разбор наполовину', () => {
-    // Живой обвес, у которого поднята только версия формы: настройки потребителя
-    // он всё ещё ждёт в baser.json, и разобрать его по правилам формы 2 значило бы
+    // Обвес, у которого поднята только версия формы: настройки потребителя он
+    // всё ещё ждёт в baser.json, и разобрать его по правилам формы 2 значило бы
     // молча потерять то, что человек настроил.
-    const manifest = readJson(join(examples, 'devbox/declaration.json')) as {
-      baser: Record<string, unknown>;
-    };
+    const block = manifest('kit')['baser'] as Record<string, unknown>;
     const старый = readSourceDeclaration({
-      ...manifest,
-      baser: { ...manifest.baser, formVersion: 1 },
+      ...manifest('kit'),
+      baser: { ...block, formVersion: 1 },
     });
 
     expect(старый.ok).toBe(false);
@@ -435,7 +475,7 @@ describe('проба отказов: каждый случай называет�
   it('НАСТРОЙКИ, ОСТАВЛЕННЫЕ В baser.json: сказано, куда они уехали', () => {
     const первая = parseConsumerConfig({
       formVersion: 2,
-      sources: [{ use: TOOLS.devbox, presets: ['omnifield'] }],
+      sources: [{ use: TOOLS.kit, presets: ['shared'] }],
     });
     expect(первая.ok).toBe(false);
     if (первая.ok) return;
@@ -444,18 +484,14 @@ describe('проба отказов: каждый случай называет�
   });
 
   it('ТОТ ЖЕ ОБВЕС, ШАБЛОН НА ЧУЖОМ ЯЗЫКЕ', () => {
-    // Берём живой шаблон девбокса и переписываем подстановки на Handlebars.
+    // Берём живой шаблон фикстуры и переписываем подстановки на Handlebars.
     // EJS отрендерил бы такое сам в себя: артефакт лёг бы к потребителю с
     // неподставленным "{{ name }}" и ничем бы себя не выдал.
-    const real = readFileSync(
-      join(examples, 'devbox/template/devcontainer.json.ejs'),
-      'utf-8',
-    );
-    const foreign = real
+    const foreign = template('kit/template/kit.json.ejs')
       .replace(/<%[^]*?%>/g, '')
       .replace('"name": ""', '"name": "{{ name }}"');
 
-    const problems = checkTemplate(foreign, 'подделка → devcontainer.json');
+    const problems = checkTemplate(foreign, 'подделка → fixture/kit.json');
     expect(problems.map((problem) => problem.code)).toEqual([
       'template-not-ejs',
     ]);
@@ -463,13 +499,12 @@ describe('проба отказов: каждый случай называет�
   });
 
   it('тот же обвес с экранирующей подстановкой', () => {
-    const real = readFileSync(
-      join(examples, 'devbox/template/devcontainer.json.ejs'),
-      'utf-8',
+    const escaping = template('kit/template/kit.json.ejs').replace(
+      '<%- name %>',
+      '<%= name %>',
     );
-    const escaping = real.replace('<%- name %>', '<%= name %>');
 
-    const problems = checkTemplate(escaping, 'подделка → devcontainer.json');
+    const problems = checkTemplate(escaping, 'подделка → fixture/kit.json');
     expect(problems.map((problem) => problem.code)).toEqual([
       'template-html-escape',
     ]);
@@ -484,14 +519,8 @@ function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf-8'));
 }
 
-function stripComments(text: string): string {
-  return text.replace(/^\s*\/\/.*$/gm, '');
-}
-
-function withoutLine(text: string, line: number): string {
-  const lines = text.split('\n');
-  lines.splice(line - 1, 1);
-  return lines.join('\n');
+function template(path: string): string {
+  return readFileSync(join(examples, path), 'utf-8');
 }
 
 /**
@@ -499,9 +528,15 @@ function withoutLine(text: string, line: number): string {
  * `yaml` — с инструментарием сборки. Своих зависимостей на них контракты НЕ
  * заводят: подстановка значений и чтение файла — дело двери (`tasker:BASER2-53`),
  * а пакет формы не читает и не исполняет ничего.
+ *
+ * Это единственное, что проба берёт за пределами своего пакета, и устареть
+ * незамеченным оно не может: версия пакета в сторе меняется вместе с локом, а
+ * лок nx хеширует сам. Файлов живого репозитория проба не читает вовсе — потому
+ * в манифесте зоны и нет блока `namedInputs` (сравни с дверью,
+ * `tasker:BASER2-78`).
  */
 function fromStore(name: string): string {
-  const store = join(repoRoot, 'node_modules/.pnpm');
+  const store = resolve(here, '../../../../node_modules/.pnpm');
   const dir = readdirSync(store)
     .filter((entry) => entry.startsWith(`${name}@`))
     .sort()
