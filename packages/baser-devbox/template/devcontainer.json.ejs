@@ -28,9 +28,27 @@ const refuse = (message) => {
   throw new Error(`[devbox] ${message}`);
 };
 
+// СТОР PNPM: том мало смонтировать, в него надо ЗАВЕСТИ pnpm.
+//
+// Настройка монтировала том — и всё. При воркспейсе-томе («Clone Repository in
+// Container Volume», kb:ADR-16) pnpm держит стор на файловой системе САМОГО
+// воркспейса ради хардлинков, дефолт `~/.local/share/pnpm/store` отбрасывается,
+// и стор уезжает внутрь воркспейс-тома. Замерено на живом переезде
+// (tasker:BASER2-111): том 310M не тронут с 25.07, реальный стор — 355M внутри
+// /workspaces. То есть настройка обещала «общий на машине стор, переживающий
+// пересоздание», а давала ровно обратное — смертный стор внутри воркспейса.
+//
+// Половина имитации хуже её отсутствия (kb:BASER2-2 §5), поэтому из трёх выходов
+// — направить pnpm · снять настройку · сказать в плане — выбран первый: том уже
+// смонтирован, оставалось направить туда pnpm. Делается это ниже, переменными
+// окружения, а не `pnpm config set` в постсоздании: конфиг pnpm при томе кредов
+// лёг бы в ЧУЖОЙ том (NPM_CONFIG_USERCONFIG указывает в него), то есть один
+// девбокс писал бы настройку всем остальным.
+const storeDir = pnpmStoreVolume ? `${home}/.local/share/pnpm/store` : null;
+
 const mounts = [];
 if (secretsVolume) mounts.push(`source=${secretsVolume},target=${home}/.secrets,type=volume`);
-if (pnpmStoreVolume) mounts.push(`source=${pnpmStoreVolume},target=${home}/.local/share/pnpm/store,type=volume`);
+if (storeDir) mounts.push(`source=${pnpmStoreVolume},target=${storeDir},type=volume`);
 const mountTargets = mounts.map((m) => m.split(',')[1].slice('target='.length));
 
 // ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ КОНТЕЙНЕРА: три источника и один запрет.
@@ -45,6 +63,14 @@ if (secretsVolume) {
   env.set('GIT_CONFIG_GLOBAL', `${home}/.secrets/gitconfig`);
   env.set('GH_CONFIG_DIR', `${home}/.secrets/gh`);
   env.set('NPM_CONFIG_USERCONFIG', `${home}/.secrets/npmrc`);
+}
+if (storeDir) {
+  // ДВА ИМЕНИ ОДНОГО ЗНАЧЕНИЯ — не дубль, а две линии pnpm: до 11-й он читает
+  // npm-конфиг (`NPM_CONFIG_*`), с 11-й — свой (`PNPM_CONFIG_*`), и каждая линия
+  // чужое имя игнорирует. Замерено обеими (10.11.0 и 11.9.0), а не выведено из
+  // доки: назвать одно имя значило бы починить стор ровно половине потребителей.
+  env.set('NPM_CONFIG_STORE_DIR', storeDir);
+  env.set('PNPM_CONFIG_STORE_DIR', storeDir);
 }
 
 const computedEnv = new Set(env.keys());
@@ -272,6 +298,7 @@ const pairs = (entries) =>
 // Комментарий над блоком переменных собирается из тех же частей, что и сам блок.
 const envWhat = [];
 if (secretsVolume) envWhat.push('секрет-модель');
+if (storeDir) envWhat.push('адрес pnpm-стора');
 if (env.size > computedEnv.size) envWhat.push('продуктовые переменные');
 -%>
 {
@@ -301,6 +328,11 @@ if (env.size > computedEnv.size) envWhat.push('продуктовые перем
 <% if (secretsVolume) { -%>
   // Секрет-модель (kb:FUND-4): креды/кэши — в named-volume'ах, ENV указывает в <%- home %>/.secrets.
   // Ничего не хардкодим в образ/репо; тома переживают recreate.
+<% } -%>
+<% if (storeDir) { -%>
+  // Стор pnpm назван ДВУМЯ именами, и это не дубль: до pnpm 11 он читает npm-конфиг
+  // (NPM_CONFIG_*), с 11-й — свой (PNPM_CONFIG_*). Без них при воркспейсе-томе pnpm
+  // кладёт стор рядом с воркспейсом, а смонтированный том стоит нетронутым.
 <% } -%>
   "containerEnv": {
 <%- pairs([...env]) %>
