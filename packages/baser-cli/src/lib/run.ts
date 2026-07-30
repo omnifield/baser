@@ -69,6 +69,7 @@ import {
   sourceConfigPath,
   type ArtifactOwners,
   type ConsumerSourceEntry,
+  type SettingValue,
   type SourceConfig,
   type SourceDeclaration,
 } from '@omnifield/baser-contracts';
@@ -79,6 +80,8 @@ import {
   createTrace,
   MANIFEST_PATH,
   OUTPUT_SCHEMA_VERSION,
+  readManifest,
+  toRepoPath,
   type ApplyReport,
   type Declaration,
   type MaterializationPlan,
@@ -109,6 +112,7 @@ import {
   type RenderedLayout,
 } from './render.js';
 import { readSourceConfig, renderSourceConfig } from './settings.js';
+import { recoverPlacedValues, type PlacedValue } from './previous.js';
 import { loadDefaults, resolveValues, type SettingMovement } from './values.js';
 import type {
   ConfigReport,
@@ -164,12 +168,117 @@ interface DraftRun {
   applied: ApplyReport | null;
 }
 
+/**
+ * ОЧЕРЕДЬ ПРОГОНОВ: отдающий артефакт идёт раньше принимающего.
+ *
+ * Случай: сосед выпустился и перестал класть файл, а второй начал. Отдающий
+ * снимет его как своего сироту и уберёт запись; принимающий положит и запишет
+ * себя. Порядок между этими двумя действиями не свободен — освобождение обязано
+ * случиться раньше захвата, иначе принимающий видит в паспорте чужую запись и
+ * упирается в `cross-source-dest` (`tasker:BASER2-58`).
+ *
+ * ## Это НЕ «разрешение столкновения порядком прогона»
+ *
+ * Запрет, из-за которого правку однажды отложили, звучит иначе: **владение не
+ * должно доставаться тому, кто прогнался первым** (`kb:BASER2-6`). Здесь
+ * ровно наоборот — очередь УБИРАЕТ зависимость от порядка: при любой записи в
+ * конфиге освобождение считается раньше захвата, и исход один и тот же.
+ * Спор двух объявлений на один путь этим не решается и решаться не может: его
+ * ловит форма (`checkSingleProvider`) ДО всякого прогона, и очередь его не
+ * видит вовсе.
+ *
+ * ## Что считается связью
+ *
+ * `dest` объявлен обвесом B, а паспорт укладки числит его за A, и A **в этом
+ * прогоне участвует и больше его не объявляет** — значит A отдаёт, B принимает.
+ * Ни одно из трёх условий не лишнее: A вне прогона освободить путь не может
+ * (отказ остаётся, и он верен), а A, всё ещё объявляющий этот путь, — это спор,
+ * а не передача.
+ *
+ * ## Взаимный обмен
+ *
+ * Два обвеса, меняющиеся артефактами, дают цикл, и очередью он не разрешается:
+ * кто бы ни пошёл первым, он захватывает путь, ещё числящийся за соседом.
+ * Порядок в этом случае остаётся конфиговым, и дверь останавливается отказом —
+ * ОДИНАКОВЫМ в обе стороны. Задача была не «пропустить всё», а «перестать
+ * зависеть от очереди записей», и на цикле это соблюдено тоже.
+ *
+ * Порядок устойчив: при отсутствии связей он в точности конфиговый — рассказ о
+ * прогонах читает человек, и переставлять его без причины значит путать без
+ * причины.
+ */
+function handoverOrder(
+  prepared: readonly Prepared[],
+  tree: RepoTree,
+): readonly Prepared[] {
+  if (prepared.length < 2) {
+    return prepared;
+  }
+
+  const manifest = readManifest(tree);
+  const declaredBy = new Map<string, Set<string>>(
+    prepared.map((item) => [
+      item.declaration.source.id,
+      new Set(item.declaration.layout.map((entry) => entry.dest)),
+    ]),
+  );
+  const byId = new Map(
+    prepared.map((item) => [item.declaration.source.id, item]),
+  );
+
+  /** Кого этот обвес обязан дождаться: ключ ждёт значений. */
+  const waitsFor = new Map<Prepared, Set<Prepared>>(
+    prepared.map((item) => [item, new Set()]),
+  );
+
+  for (const claimer of prepared) {
+    for (const entry of claimer.declaration.layout) {
+      const record = manifest.get(entry.dest);
+      const owner = record === undefined ? null : byId.get(record.source);
+      if (
+        record === undefined ||
+        owner === null ||
+        owner === undefined ||
+        owner === claimer ||
+        declaredBy.get(record.source)?.has(entry.dest) === true
+      ) {
+        continue;
+      }
+      waitsFor.get(claimer)?.add(owner);
+    }
+  }
+
+  const ordered: Prepared[] = [];
+  const left = [...prepared];
+  while (left.length > 0) {
+    const index = left.findIndex((item) =>
+      [...(waitsFor.get(item) ?? [])].every((wait) => ordered.includes(wait)),
+    );
+    if (index === -1) {
+      // Цикл: очередью не разрешается. Остаток идёт как в конфиге — исход
+      // (отказ) от этого не меняется, а порядок остаётся предсказуемым.
+      ordered.push(...left);
+      break;
+    }
+    ordered.push(...left.splice(index, 1));
+  }
+  return ordered;
+}
+
 /** Обвес, доведённый до входа в движок: объявление, содержимое, черновик. */
 interface Prepared {
   readonly declaration: SourceDeclaration;
   readonly pkg: InstalledPackage;
   readonly location: SourceLocation;
   readonly rendered: RenderedLayout;
+  /**
+   * Значения, с которыми собрано содержимое.
+   *
+   * Держатся до конца прогона, потому что нужны ПОСЛЕ плана: прежний конец
+   * движения восстанавливается пересчётом этого же шаблона на других значениях
+   * (`previous.ts`).
+   */
+  readonly values: Readonly<Record<string, SettingValue>>;
   /**
    * Текст новорождённого файла настроек; `null` — файл уже есть.
    *
@@ -333,8 +442,13 @@ async function runInRepo(
   // Применяется и под командой `plan`: план второго обвеса обязан считаться по
   // дереву, в котором первый уже лёг, иначе это план по состоянию, которого не
   // будет. На диск при этом не уходит ничего — сброса ниже у `plan` нет.
+  // Очередь прогонов: отдающий артефакт раньше принимающего (`BASER2-58`).
+  // Сюда доходят ВСЕ обвесы — прогон с непригодным отказал бы выше, — поэтому
+  // очередь и есть полный список прогонов, и ответ строится по ней.
+  const sequence = handoverOrder(prepared, tree);
+
   let blocked = false;
-  for (const item of prepared) {
+  for (const item of sequence) {
     const { draft } = item;
     let plan: MaterializationPlan;
     try {
@@ -351,6 +465,15 @@ async function runInRepo(
       return refused(session, log.list(), drafts);
     }
     draft.plan = plan;
+
+    // Прежний конец движения — ПОСЛЕ плана и до применения: материал даёт сам
+    // план (`step.previous`), а сказать это человеку надо раньше, чем что-то
+    // поедет (`tasker:BASER2-38`).
+    draft.settings = trace.span(
+      'door.placed',
+      () => withPlacedValues(draft.settings, plan, item),
+      { source: draft.source.id, steps: plan.steps.length },
+    );
 
     // Заблокированный прогон к дереву не применяется, а разбор идёт дальше:
     // соседний обвес целится в СВОИ пути (карта владения выше это доказала), и
@@ -376,7 +499,13 @@ async function runInRepo(
     }
   }
 
-  const base = { ...shell(session), runs: freeze(drafts) };
+  // Прогоны отдаются В ТОМ ПОРЯДКЕ, в котором считались. Показать их порядком
+  // из конфига значило бы соврать про причинность: план второго обвеса считан
+  // по дереву, в котором первый уже применён, и читаться они обязаны так же.
+  const base = {
+    ...shell(session),
+    runs: freeze(sequence.map((item) => item.draft)),
+  };
 
   if (blocked) {
     // Отказы движка остаются его отказами — дверь их не переписывает. Но у
@@ -588,7 +717,70 @@ async function prepare(
       )
     : null;
 
-  return { ...item, rendered, born, draft };
+  return { ...item, rendered, values: values.value.values, born, draft };
+}
+
+/**
+ * Дописывает движению прежний конец — тот, с которым артефакт УЖЕ разложен.
+ *
+ * Считается по шагам плана, а не по диску: движок уже сказал, какие артефакты
+ * НАШИ и разошлись (`diverged`), и отдал их прежнее содержимое. Читать файлы
+ * самостоятельно значило бы завести вторую правду о том, что лежит, и утверждать
+ * прежнее значение для файла, который дверью не владеется.
+ *
+ * Один артефакт доказывает значение целиком: если два артефакта одного обвеса
+ * доказали РАЗНОЕ прежнее значение одной настройки, названо не будет ни одно —
+ * такого не бывает при честной раскладке, а выбирать из двух правд наугад хуже,
+ * чем промолчать.
+ */
+function withPlacedValues(
+  movements: readonly SettingMovement[],
+  plan: MaterializationPlan,
+  item: Prepared,
+): readonly SettingMovement[] {
+  const placed = new Map<string, PlacedValue>();
+  const conflicting = new Set<string>();
+
+  for (const step of plan.steps) {
+    if (
+      step.reason !== 'diverged' ||
+      step.previous === null ||
+      step.src === undefined
+    ) {
+      continue;
+    }
+    const src = toRepoPath(step.src);
+    if (!src.ok) {
+      continue;
+    }
+
+    const found = recoverPlacedValues({
+      values: item.values,
+      placed: step.previous,
+      dest: step.dest,
+      rerender: (values) => item.rendered.rerender(src.path, values),
+    });
+
+    for (const [key, value] of found) {
+      const seen = placed.get(key);
+      if (seen !== undefined && seen.value !== value.value) {
+        conflicting.add(key);
+        continue;
+      }
+      placed.set(key, value);
+    }
+  }
+
+  if (placed.size === 0) {
+    return movements;
+  }
+
+  return movements.map((movement) => {
+    const was = conflicting.has(movement.key)
+      ? undefined
+      : placed.get(movement.key);
+    return was === undefined ? movement : { ...movement, placed: was };
+  });
 }
 
 /**

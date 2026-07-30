@@ -46,6 +46,24 @@ export interface RenderedLayout {
    */
   readonly bySrc: ReadonlyMap<string, string>;
   readonly problems: readonly DoorProblem[];
+  /**
+   * Пересчитать ОДИН шаблон на других значениях. Диска не касается.
+   *
+   * Нужно ровно одному: восстановлению прежнего конца движения
+   * (`previous.ts`, `tasker:BASER2-38`). Прежние значения нигде не хранятся, а
+   * разложенный артефакт — их отпечаток, и прочитать его можно только тем же
+   * шаблоном, которым он положен. Поэтому подстановка остаётся ЗДЕСЬ: второй
+   * вызов `ejs` в соседнем файле был бы вторым местом, где решается вопрос про
+   * экранирование, и разошёлся бы с этим при первой же правке.
+   *
+   * `null` — шаблона под этим `src` нет, он не рендерится вовсе (`render: false`)
+   * либо подстановка сорвалась. Все три случая для восстановления значат одно:
+   * доказать нечем, и утверждать нечего.
+   */
+  rerender(
+    src: string,
+    values: Readonly<Record<string, SettingValue>>,
+  ): string | null;
 }
 
 /**
@@ -61,6 +79,8 @@ export function renderLayout(
 ): RenderedLayout {
   const log = new DoorProblemLog();
   const bySrc = new Map<string, string>();
+  /** Тексты шаблонов, прошедших проверку формы, — материал для пересчёта. */
+  const templates = new Map<string, string>();
   const templatesRoot = resolvePath(pkg.root, declaration.source.contentRoot);
 
   for (const entry of declaration.layout) {
@@ -103,12 +123,30 @@ export function renderLayout(
       // Ни контекста резолвера, ни окружения, ни файловой системы: всё, что
       // обвесу нужно вычислить, посчитал его резолвер и приехало настройкой.
       bySrc.set(canonical.path, ejs.render(template, { ...values }, {}));
+      templates.set(canonical.path, template);
     } catch (cause) {
       log.add('render-failed', at, `подстановка сорвалась: ${describe(cause)}`);
     }
   }
 
-  return { bySrc, problems: log.list() };
+  return {
+    bySrc,
+    problems: log.list(),
+    rerender(src, other) {
+      const template = templates.get(src);
+      if (template === undefined) {
+        return null;
+      }
+      try {
+        return ejs.render(template, { ...other }, {});
+      } catch {
+        // Подстановка на подобранных значениях имеет полное право сорваться:
+        // подбор — это гипотеза. Сорвалась — гипотеза не подтвердилась, и
+        // отказом прогона это не становится.
+        return null;
+      }
+    },
+  };
 }
 
 /**

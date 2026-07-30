@@ -125,6 +125,7 @@ function renderRun(run: SourceRun, command: DoorResult['command']): string[] {
 
   if (run.settings.length > 0) {
     lines.push('', ...renderMovement(run.settings));
+    lines.push(...renderPlaced(run.settings));
   }
 
   if (run.plan) {
@@ -151,6 +152,38 @@ function renderMovement(settings: readonly SettingMovement[]): string[] {
       const head = `  ${setting.key.padEnd(width)}  `;
       const path = setting.chain.map((link) => value(link.value)).join(' → ');
       return `${head}${path}  ${trace(setting)}`;
+    }),
+  ];
+}
+
+/**
+ * ПЕРЕЕЗД УЖЕ РАЗЛОЖЕННОГО — отдельным блоком, а не строкой в общем списке.
+ *
+ * Это другое событие, чем «откуда взялось значение»: там рассказ про сегодня,
+ * здесь — про то, что у человека В РЕПОЗИТОРИИ сменится, когда он применит.
+ * Смешать их в одну колонку значило бы спрятать переименование сетевого алиаса
+ * среди тринадцати строк, из которых двенадцать ничего не меняют.
+ *
+ * Блок печатается ТОЛЬКО когда есть что назвать: заголовок «переезжает: 0»
+ * на каждом прогоне за неделю перестал бы читаться.
+ */
+function renderPlaced(settings: readonly SettingMovement[]): string[] {
+  const moving = settings.filter((setting) => setting.placed !== undefined);
+  if (moving.length === 0) {
+    return [];
+  }
+
+  const width = Math.max(...moving.map((setting) => setting.key.length));
+  return [
+    '',
+    `уже разложенное переедет: ${moving.length} — прежнее прочитано из артефакта и доказано побайтово`,
+    ...moving.map((setting) => {
+      const placed = setting.placed as NonNullable<SettingMovement['placed']>;
+      return (
+        `  ${setting.key.padEnd(width)}  ${value(placed.value)} → ${value(
+          setting.value,
+        )}` + `  — доказано ${placed.provenBy}`
+      );
     }),
   ];
 }
