@@ -69,6 +69,7 @@ import {
   sourceConfigPath,
   type ArtifactOwners,
   type ConsumerSourceEntry,
+  type SettingValue,
   type SourceConfig,
   type SourceDeclaration,
 } from '@omnifield/baser-contracts';
@@ -79,6 +80,7 @@ import {
   createTrace,
   MANIFEST_PATH,
   OUTPUT_SCHEMA_VERSION,
+  toRepoPath,
   type ApplyReport,
   type Declaration,
   type MaterializationPlan,
@@ -109,6 +111,7 @@ import {
   type RenderedLayout,
 } from './render.js';
 import { readSourceConfig, renderSourceConfig } from './settings.js';
+import { recoverPlacedValues, type PlacedValue } from './previous.js';
 import { loadDefaults, resolveValues, type SettingMovement } from './values.js';
 import type {
   ConfigReport,
@@ -170,6 +173,14 @@ interface Prepared {
   readonly pkg: InstalledPackage;
   readonly location: SourceLocation;
   readonly rendered: RenderedLayout;
+  /**
+   * Значения, с которыми собрано содержимое.
+   *
+   * Держатся до конца прогона, потому что нужны ПОСЛЕ плана: прежний конец
+   * движения восстанавливается пересчётом этого же шаблона на других значениях
+   * (`previous.ts`).
+   */
+  readonly values: Readonly<Record<string, SettingValue>>;
   /**
    * Текст новорождённого файла настроек; `null` — файл уже есть.
    *
@@ -351,6 +362,15 @@ async function runInRepo(
       return refused(session, log.list(), drafts);
     }
     draft.plan = plan;
+
+    // Прежний конец движения — ПОСЛЕ плана и до применения: материал даёт сам
+    // план (`step.previous`), а сказать это человеку надо раньше, чем что-то
+    // поедет (`tasker:BASER2-38`).
+    draft.settings = trace.span(
+      'door.placed',
+      () => withPlacedValues(draft.settings, plan, item),
+      { source: draft.source.id, steps: plan.steps.length },
+    );
 
     // Заблокированный прогон к дереву не применяется, а разбор идёт дальше:
     // соседний обвес целится в СВОИ пути (карта владения выше это доказала), и
@@ -588,7 +608,70 @@ async function prepare(
       )
     : null;
 
-  return { ...item, rendered, born, draft };
+  return { ...item, rendered, values: values.value.values, born, draft };
+}
+
+/**
+ * Дописывает движению прежний конец — тот, с которым артефакт УЖЕ разложен.
+ *
+ * Считается по шагам плана, а не по диску: движок уже сказал, какие артефакты
+ * НАШИ и разошлись (`diverged`), и отдал их прежнее содержимое. Читать файлы
+ * самостоятельно значило бы завести вторую правду о том, что лежит, и утверждать
+ * прежнее значение для файла, который дверью не владеется.
+ *
+ * Один артефакт доказывает значение целиком: если два артефакта одного обвеса
+ * доказали РАЗНОЕ прежнее значение одной настройки, названо не будет ни одно —
+ * такого не бывает при честной раскладке, а выбирать из двух правд наугад хуже,
+ * чем промолчать.
+ */
+function withPlacedValues(
+  movements: readonly SettingMovement[],
+  plan: MaterializationPlan,
+  item: Prepared,
+): readonly SettingMovement[] {
+  const placed = new Map<string, PlacedValue>();
+  const conflicting = new Set<string>();
+
+  for (const step of plan.steps) {
+    if (
+      step.reason !== 'diverged' ||
+      step.previous === null ||
+      step.src === undefined
+    ) {
+      continue;
+    }
+    const src = toRepoPath(step.src);
+    if (!src.ok) {
+      continue;
+    }
+
+    const found = recoverPlacedValues({
+      values: item.values,
+      placed: step.previous,
+      dest: step.dest,
+      rerender: (values) => item.rendered.rerender(src.path, values),
+    });
+
+    for (const [key, value] of found) {
+      const seen = placed.get(key);
+      if (seen !== undefined && seen.value !== value.value) {
+        conflicting.add(key);
+        continue;
+      }
+      placed.set(key, value);
+    }
+  }
+
+  if (placed.size === 0) {
+    return movements;
+  }
+
+  return movements.map((movement) => {
+    const was = conflicting.has(movement.key)
+      ? undefined
+      : placed.get(movement.key);
+    return was === undefined ? movement : { ...movement, placed: was };
+  });
 }
 
 /**
