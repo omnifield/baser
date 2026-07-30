@@ -128,7 +128,7 @@ describe('образ с чужим пользователем раскладыв
     // человек не найдёт своего npmrc, заводит в тупик ровно там, где отказ
     // затевался как указатель.
     const { text } = await materialize(
-      foreignImage({ privateScope: '@omnifield' }),
+      foreignImage({ npmScope: '@omnifield' }),
     );
 
     expect(text).toContain('/home/vscode/.secrets/npmrc');
