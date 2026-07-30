@@ -21,6 +21,13 @@ const home = imageUser === 'root' ? '/root' : `/home/${imageUser}`;
 // Containers (`node`, `vscode`, `codespace`), так же устроен и root.
 const owner = `${imageUser}:${imageUser}`;
 
+// НАЗВАННЫЙ ОТКАЗ ОБВЕСА. Своего кода у него нет — коды называет форма, — поэтому
+// прогон получает `render-failed` с НАШИМ текстом, и на диск не ложится ничего.
+// Это единственный канал, которым инструмент говорит «так нельзя» до применения.
+const refuse = (message) => {
+  throw new Error(`[devbox] ${message}`);
+};
+
 const mounts = [];
 if (secretsVolume) mounts.push(`source=${secretsVolume},target=${home}/.secrets,type=volume`);
 if (pnpmStoreVolume) mounts.push(`source=${pnpmStoreVolume},target=${home}/.local/share/pnpm/store,type=volume`);
@@ -62,8 +69,84 @@ const injectedFormatter =
   Boolean(editorFormatter) && !builtInFormatter && !editorExtensions.includes(editorFormatter);
 const extensions = injectedFormatter ? [...editorExtensions, editorFormatter] : editorExtensions;
 
-const onCreate = ['sudo corepack enable'];
-if (installAssistant) onCreate.push('npm install -g @anthropic-ai/claude-code@latest');
+// ФИЧИ DEV CONTAINERS — настройка, а не список, прибитый в шаблоне.
+//
+// Спека девконтейнеров решает тулчейн именно фичами, и шаблон ими уже
+// пользовался — но список был прибит, и полиглот-репозиторий не мог добавить
+// себе питон, не форкнув обвес из-за одной строки (tasker:BASER2-110). Это ровно
+// тот дефект шаблона, что и прибитый форматтер: отсутствие регулировки под
+// ходовую нужду — наш брак, а не выбор пользователя (kb:BASER2-7).
+//
+// Форма — список строк: опции фичи (карта) ею невыразимы намеренно, по одному
+// примеру форму не расширяем. Фича приезжает с опциями по умолчанию, и это
+// сказано в описании настройки, а не подразумевается.
+const features = devcontainerFeatures ?? [];
+for (const [index, ref] of features.entries()) {
+  if (typeof ref !== 'string' || ref.trim() === '') {
+    refuse(`настройка devcontainerFeatures: ${JSON.stringify(ref)} — не ссылка на фичу`);
+  }
+  if (features.indexOf(ref) !== index) {
+    refuse(`настройка devcontainerFeatures: ${JSON.stringify(ref)} названа дважды — в артефакте это один ключ, и второй молча съел бы первый`);
+  }
+}
+
+// Обе проверки постсоздания говорят одним голосом: строка с ярлыком `[devbox]` в
+// stderr. Помощники объявлены здесь, потому что ими пользуются обе.
+const say = (...args) => `printf '%s\\n' ${args.join(' ')} >&2`;
+const q = (line) => `'[devbox] ${line}'`;
+
+// ЧЕГО ДЕВБОКС НЕ ДАЁТ — НАЗЫВАЕТСЯ ВСЛУХ.
+//
+// «Девбокс» у нас сегодня значит «НОДОВЫЙ девбокс»: базовый образ несёт
+// node/pnpm/git, всё прочее приезжает фичами. Нигде не написанное, это
+// обнаруживалось самым дорогим способом — первым `git commit`: репозиторий
+// brainer объявляет питон в корне (`.python-version`, `[tool.uv]`, `uv.lock`), его
+// nx-таргеты зовут `uv`, а `uv` в девбоксе нет — pre-commit упал на трёх зонах
+// сразу, и коммит-каденс продукта встал целиком (tasker:BASER2-109 П1).
+//
+// Обвес не обязан нести все тулчейны мира — но обязан НАЗВАТЬ расхождение, и
+// назвать его фактом с двух концов: объявил ли ТУЛЧЕЙН САМ РЕПОЗИТОРИЙ (файл в
+// корне) и есть ли КОМАНДА в контейнере. Отсюда два свойства: проверка молчит у
+// того, кто про этот тулчейн не говорил, и замолкает сама, как только нужную
+// фичу добавили. Ни списка «поддерживаемых стеков», ни настройки-выключателя:
+// нечего выключать там, где нечего и сказать.
+const toolchains = [
+  {
+    what: 'питон',
+    declaredBy: '.python-version, pyproject.toml, uv.lock',
+    when: '[ -f .python-version ] || [ -f pyproject.toml ] || [ -f uv.lock ]',
+    tool: 'python',
+  },
+  {
+    what: 'uv',
+    declaredBy: 'uv.lock, [tool.uv] в pyproject.toml',
+    when: "[ -f uv.lock ] || grep -qs '^\\[tool.uv\\]' pyproject.toml",
+    tool: 'uv',
+  },
+  // go идёт рядом с питоном не по симметрии: следующие три переезжающих продукта
+  // (tasker, knowledger, chater) — все на Go, и класс у них тот же самый.
+  {
+    what: 'go',
+    declaredBy: 'go.mod',
+    when: '[ -f go.mod ]',
+    tool: 'go',
+  },
+];
+const toolchainCheck = [
+  '( lost=;',
+  ...toolchains.map((chain) =>
+    `if { ${chain.when}; } && ! command -v ${chain.tool} >/dev/null 2>&1; then ` +
+    `${say(q(`Репозиторий объявляет ${chain.what} (${chain.declaredBy}), а команды ${chain.tool} в девбоксе нет.`))}; lost=1; fi;`,
+  ),
+  'if [ -n "$lost" ]; then',
+  say(
+    q('Девбокс НОДОВЫЙ: базовый образ несёт node/pnpm/git, остальные тулчейны приезжают фичами Dev Containers.'),
+    q('Добавь нужные настройкой devcontainerFeatures в файле настроек девбокса и пересоздай контейнер.'),
+    q('Каталог фич: https://containers.dev/features'),
+    q('Пока их нет — таргеты этого тулчейна упадут, и обычно первым же git commit.'),
+  ),
+  '; fi )',
+].join(' ');
 
 // Куда человеку класть креды. Путь настоящий, а не «куда-нибудь»: обещание в тексте
 // отказа — такой же контракт, как код, и непроверенное оно заводит в тупик.
@@ -83,8 +166,6 @@ const npmrc = secretsVolume
 // user-конфиге перестанет быть нужен, `npm config get` вернёт `undefined` — и
 // проверка уронила бы ПРАВИЛЬНО настроенный девбокс, прочитав это как «реестр не
 // настроен». У всех сразу.
-const say = (...args) => `printf '%s\\n' ${args.join(' ')} >&2`;
-const q = (line) => `'[devbox] ${line}'`;
 const registryCheck = npmScope && npmScopeIsPrivate && [
   '(',
   `reg=$(npm config get ${npmScope}:registry);`,
@@ -114,7 +195,14 @@ const registryCheck = npmScope && npmScopeIsPrivate && [
   ')',
 ].join(' ');
 
+const onCreate = ['sudo corepack enable'];
+if (installAssistant) onCreate.push('npm install -g @anthropic-ai/claude-code@latest');
+
 const post = [];
+// Названная потеря идёт ПЕРВОЙ, а не последней: постсоздание кончается установкой
+// зависимостей, и это инвариант зоны — по нему проба отрезает шаг проверки реестра.
+// Предупреждение, приписанное в хвост, сместило бы конец и стоило бы этого инварианта.
+post.push(toolchainCheck);
 if (mountTargets.length) post.push(`sudo chown -R ${owner} ${mountTargets.join(' ')}`);
 if (installAssistant) post.push('mkdir -p "$CLAUDE_CONFIG_DIR" && { [ -f "$CLAUDE_CONFIG_DIR/.claude.json" ] || printf \'%s\\n\' \'{"hasCompletedOnboarding":true,"hasTrustDialogAccepted":true,"theme":"dark"}\' > "$CLAUDE_CONFIG_DIR/.claude.json"; }');
 // Порядок несущий: креды лежат в томе, права на который выставляет chown выше, а
@@ -126,13 +214,15 @@ post.push(installCommand);
 // Комментарий над шагом собирается из ТЕХ ЖЕ частей, что и сам шаг. Отдельный текст
 // про постсоздание разошёлся бы с постсозданием при первой же новой настройке — ровно
 // так «БЕЗ biome» пережило появление настройки форматтера.
-const postWhat = [];
+const postWhat = ['названные потери тулчейна'];
 if (mountTargets.length) postWhat.push('права на общие тома');
 if (installAssistant) postWhat.push('seed claude-онбординга');
 if (registryCheck) postWhat.push('проверка доступа к реестру');
 postWhat.push('установка зависимостей');
 
 const list = (items) => items.map((v) => `    ${JSON.stringify(v)}`).join(',\n');
+const pairs = (entries) =>
+  entries.map(([key, value]) => `    ${JSON.stringify(key)}: ${JSON.stringify(value)}`).join(',\n');
 -%>
 {
   // <%- name %> — Ф2 (kb:ADR-16 volume-workspace, kb:FUND-4 containers-only).
@@ -167,12 +257,16 @@ const list = (items) => items.map((v) => `    ${JSON.stringify(v)}`).join(',\n')
   },
 
 <% } -%>
-  // gh — для git-flow (rulesets/PR). node/pnpm/git несёт базовый образ (pnpm-версия — из пина
-  // репо `packageManager: pnpm@10.11.0` через corepack; образ = тонкая оболочка, версии — репо).
+<% if (features.length) { -%>
+  // Фичи Dev Containers — настройка devcontainerFeatures. Базовый образ несёт node/pnpm/git
+  // (версия pnpm — из пина самого репозитория через corepack; образ = тонкая оболочка),
+  // остальные тулчейны приезжают сюда: чего тут нет, того в девбоксе нет, и постсоздание
+  // говорит об этом вслух, если репозиторий тулчейн объявил.
   "features": {
-    "ghcr.io/devcontainers/features/github-cli:1": {}
+<%- pairs(features.map((ref) => [ref, {}])) %>
   },
 
+<% } -%>
 <% if (mounts.length) { -%>
   // Общие на машине named-volume'ы (одни креды/стор на все omnifield-девбоксы), переживают recreate.
   // Workspace-ТОМ здесь НЕ объявляем: им управляет "Clone Repository in Container Volume"

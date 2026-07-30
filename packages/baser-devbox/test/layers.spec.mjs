@@ -77,7 +77,13 @@ describe('слой УНИВЕРСАЛЬНОЕ: тот же обвес без п�
     expect(json.mounts).toBeUndefined();
     expect(json.containerEnv).toBeUndefined();
     expect(text).not.toContain('omnifield');
-    expect(json.postCreateCommand).toBe('pnpm install --frozen-lockfile');
+    // Постсоздание без пресета — названные потери тулчейна и установка, и ничего
+    // больше. Проверка тулчейна универсальна намеренно: «девбокс НОДОВЫЙ» это
+    // свойство обвеса, а не раскладки omnifield (`tasker:BASER2-110`).
+    expect(
+      json.postCreateCommand.endsWith('pnpm install --frozen-lockfile'),
+    ).toBe(true);
+    expect(json.postCreateCommand).toContain('command -v uv');
   });
 
   it('ВСЁ В КОНТЕЙНЕРЕ: образ с конкретной версией, работа под node', async () => {
@@ -145,7 +151,7 @@ describe('слой НАСТРОЙКИ: регулировка вместо пр�
     });
 
     expect(json.image).toBe('mcr.microsoft.com/devcontainers/base:20');
-    expect(json.postCreateCommand).toBe('npm ci');
+    expect(json.postCreateCommand.endsWith('npm ci')).toBe(true);
   });
 
   it('расширения редактора — список, и он едет в customizations целиком', async () => {

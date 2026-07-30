@@ -39,6 +39,24 @@ import {
 const SCOPE = '@omnifield';
 const INSTALL = 'pnpm install --frozen-lockfile';
 
+/**
+ * Постсоздание БЕЗ первого шага — названных потерь тулчейна.
+ *
+ * Он стоит первым в любом профиле (`tasker:BASER2-110`) и к реестру отношения не
+ * имеет, поэтому пробы этого файла говорят про то, что осталось. Срез идёт по
+ * хвосту самого шага, а не по «первому &&»: внутри проверки свои `&&`, и наивный
+ * срез отрезал бы половину, продолжая выглядеть работающим.
+ */
+const TOOLCHAIN_END = '; fi )';
+function afterToolchain(post) {
+  const cut = post.indexOf(TOOLCHAIN_END);
+  expect(
+    post.startsWith('( lost=;') && cut !== -1,
+    `постсоздание начинается не с проверки тулчейна: ${post}`,
+  ).toBe(true);
+  return post.slice(cut + TOOLCHAIN_END.length).replace(/^ && /, '');
+}
+
 let consumer = null;
 
 afterEach(() => {
@@ -61,7 +79,9 @@ function checkStep(npmScope = SCOPE) {
     tuning: tuning({ settings: { npmScope } }),
   });
   return run({ command: 'apply', cwd: consumer.root }).then(() => {
-    const post = parseJsonc(consumer.read(LIVE)).postCreateCommand;
+    const post = afterToolchain(
+      parseJsonc(consumer.read(LIVE)).postCreateCommand,
+    );
     const tail = ` && ${INSTALL}`;
     expect(
       post.endsWith(tail),
@@ -309,8 +329,9 @@ describe('внешнему потребителю приватный реест�
     expect(text).not.toContain('npm whoami');
     expect(text).not.toContain('registry');
     expect(text).not.toContain('_authToken');
-    // Постсоздание — ровно установка зависимостей, и ничего больше.
-    expect(parseJsonc(text).postCreateCommand).toBe(INSTALL);
+    // Постсоздание — ровно установка зависимостей, и ничего больше (первый шаг,
+    // названные потери тулчейна, стоит в любом профиле и про реестр не говорит).
+    expect(afterToolchain(parseJsonc(text).postCreateCommand)).toBe(INSTALL);
   });
 
   it('проверка НЕ в пресете omnifield: baser сам публикует @omnifield/*', async () => {
@@ -377,7 +398,7 @@ describe('scope публичный — сказано ЗНАЧЕНИЕМ, а н�
     // Артефакт — как у того, кто про реестр вообще не говорил: делать нечего.
     expect(text).not.toContain('npm whoami');
     expect(text).not.toContain('_authToken');
-    expect(parseJsonc(text).postCreateCommand).toBe(INSTALL);
+    expect(afterToolchain(parseJsonc(text).postCreateCommand)).toBe(INSTALL);
 
     // А конфиг говорит РОВНО ТО, ЧТО ЕСТЬ: scope такой-то, и он публичный.
     // Оба значения заполнены человеком — «подумали» видно по origin, а не по
@@ -430,13 +451,14 @@ describe('scope публичный — сказано ЗНАЧЕНИЕМ, а н�
       npmScope: SCOPE,
       npmScopeIsPrivate: false,
     });
-    const post = parseJsonc(text).postCreateCommand;
+    const post = afterToolchain(parseJsonc(text).postCreateCommand);
     const before = post.endsWith(INSTALL)
       ? post.slice(0, -INSTALL.length).replace(/ && $/, '')
       : post;
 
-    // Всё, что публичный профиль делает до установки, — ничто. Исполняем это
-    // ничто в том же окружении: отказу взяться неоткуда.
+    // Всё, что публичный профиль делает до установки СВЕРХ названных потерь
+    // тулчейна, — ничто. Исполняем это ничто в том же окружении: отказу взяться
+    // неоткуда.
     expect(before).toBe('');
     expect((await sh(before || 'true', env)).code).toBe(0);
   });
@@ -459,7 +481,7 @@ describe('scope публичный — сказано ЗНАЧЕНИЕМ, а н�
     // отвечают на разные вопросы и совпадать не обязаны. Артефакт молчит.
     const { text } = await withScope({ npmScopeIsPrivate: true });
 
-    expect(parseJsonc(text).postCreateCommand).toBe(INSTALL);
+    expect(afterToolchain(parseJsonc(text).postCreateCommand)).toBe(INSTALL);
     expect(text).not.toContain('registry');
   });
 });

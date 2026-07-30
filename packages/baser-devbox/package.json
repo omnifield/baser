@@ -56,6 +56,14 @@
         "type": "string",
         "default": "node"
       },
+      "devcontainerFeatures": {
+        "title": "Фичи Dev Containers",
+        "description": "Список ссылок на фичи (ghcr.io/devcontainers/features/<имя>:<версия>); кладутся в артефакт как есть, с опциями фичи по умолчанию — опции в форме настроек невыразимы, она знает список строк, а не карту. Отсюда приезжает всё, чего нет в базовом образе: он несёт node/pnpm/git, а python, go, uv и прочее — это фичи. Заполненный список ЗАМЕНЯЕТ дефолт целиком: нужен gh (git-flow: rulesets и PR) — оставь его в своём списке. Пустой список — фич нет вовсе.",
+        "type": "list",
+        "default": [
+          "ghcr.io/devcontainers/features/github-cli:1"
+        ]
+      },
       "installCommand": {
         "title": "Команда установки зависимостей",
         "type": "string",
