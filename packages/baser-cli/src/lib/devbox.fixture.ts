@@ -7,10 +7,21 @@
  *
  * Поэтому здесь именно УСТАНОВКА: обвес девбокса раскладывается в
  * `node_modules/@omnifield/baser-devbox` временного репозитория ровно так, как
- * его положил бы npm, — манифест, резолверы, каталог шаблонов. Берётся он из
- * принятого примера зоны контрактов (`examples/devbox`), а не переписывается
- * заново: две копии одного обвеса разъехались бы, и приёмка двери начала бы
- * зеленеть на обвесе, которого нет ни у кого.
+ * его положил бы npm, — манифест, резолверы, каталог шаблонов.
+ *
+ * ── ОТКУДА БЕРЁТСЯ ОБВЕС (`tasker:BASER2-26`) ───────────────────────────────
+ *
+ * Из ТАРБОЛА настоящего пакета `@omnifield/baser-devbox` (`npm pack`), а не из
+ * копии-примера зоны контрактов, на которой приёмка стояла раньше. Копия
+ * разъехалась ровно так, как и должна была: пример остался на своём рантайме и
+ * своих комментариях, пакет уехал вперёд, обе стороны зеленели — до дня, когда
+ * этот репозиторий сам сел на станок, и сверка с живым `.devcontainer` уперлась
+ * в то, что сверялась не с тем обвесом.
+ *
+ * Тарбол, а не каталог монорепы, — потому что между «файл лежит в репозитории»
+ * и «файл приехал потребителю» стоит `files` из `package.json`, и разойтись они
+ * могут молча. Свой разбор `files` был бы второй правдой о составе пакета;
+ * правда одна, и она у того, кто пакет собирает.
  *
  * Отсюда же и главный инструмент фикстуры — `updateSource`. Контракт проверяется
  * ПЕРЕХОДАМИ, а не устойчивыми состояниями (`packages/baser-materialize`,
@@ -19,7 +30,7 @@
  * **Второй обвес ставится тем же способом** (`installSource`, `tasker:BASER2-55`):
  * пакет в `node_modules` плюс строка в `devDependencies` — ровно то, что делает
  * npm, и ровно то, по чему дверь обвесы находит. Объявление у него собирается
- * здесь, а не берётся из примера: живой пример зоны контрактов ровно один, а
+ * здесь, а не берётся с диска: настоящий обвес в этом репозитории ровно один, а
  * второй инструмент нужен именно как ВТОРОЙ — со своей идентичностью, своими
  * путями и своими настройками (живой случай `tasker:BASER2-44` — девбокс плюс
  * плагин агентов).
@@ -27,11 +38,13 @@
  * Файл исключён из сборки пакета.
  */
 
+import { execFileSync } from 'node:child_process';
 import {
   cpSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
   existsSync,
@@ -40,7 +53,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Tree } from '@nx/devkit';
-import { stringify } from 'yaml';
+import { parse, stringify } from 'yaml';
 import {
   sourceConfigPath,
   SOURCE_CONFIG_KEY,
@@ -56,13 +69,90 @@ const here = dirname(fileURLToPath(import.meta.url));
 /** Корень ЭТОГО репозитория — из него берётся живой `.devcontainer`. */
 export const REPO_ROOT = resolve(here, '../../../..');
 
-/** Принятый обвес девбокса — общий с пробой формы зоны контрактов. */
-const DEVBOX_EXAMPLE = join(
-  REPO_ROOT,
-  'packages/baser-contracts/examples/devbox',
-);
+/** Исходный каталог настоящего обвеса — из него собирается тарбол. */
+const DEVBOX_SOURCE = join(REPO_ROOT, 'packages/baser-devbox');
 
 export const DEVBOX_PACKAGE = '@omnifield/baser-devbox';
+
+let packed: string | null = null;
+
+/**
+ * Каталог с содержимым тарбола: то и только то, что уедет потребителю.
+ *
+ * Собирается один раз на процесс — не ради скорости, а ради того, чтобы все
+ * пробы файла говорили про ОДИН И ТОТ ЖЕ состав пакета.
+ *
+ * `--ignore-scripts` — обвес контент, а не код: собирать ему нечего, и молчаливо
+ * исполнить чужой скрипт ради фикстуры мы не согласны.
+ */
+function packedDevbox(): string {
+  if (packed !== null) {
+    return packed;
+  }
+
+  const box = mkdtempSync(join(tmpdir(), 'baser-cli-pack-'));
+  execFileSync(
+    'npm',
+    ['pack', '--ignore-scripts', '--pack-destination', box, DEVBOX_SOURCE],
+    { cwd: DEVBOX_SOURCE, stdio: 'pipe' },
+  );
+
+  const tarball = readdirSync(box).find((name) => name.endsWith('.tgz'));
+  if (tarball === undefined) {
+    throw new Error(`npm pack не оставил тарбол в ${box}`);
+  }
+  execFileSync('tar', ['-xzf', join(box, tarball), '-C', box], {
+    stdio: 'pipe',
+  });
+
+  packed = join(box, 'package');
+  return packed;
+}
+
+/** Разобранный `package.json` ОПУБЛИКОВАННОГО обвеса — вместе с блоком `baser`. */
+export function devboxManifest(): {
+  version: string;
+  baser: { settings: Record<string, unknown> };
+} {
+  return JSON.parse(
+    readFileSync(join(packedDevbox(), 'package.json'), 'utf-8'),
+  ) as { version: string; baser: { settings: Record<string, unknown> } };
+}
+
+/**
+ * Настройки, ОБЪЯВЛЕННЫЕ обвесом, — перечнем из его же манифеста.
+ *
+ * Пробы про «ноль вопросов пользователю» сверяют с этим списком, а не с числом:
+ * число молча устаревает при каждом выпуске обвеса и потому проверяет не то,
+ * что написано в его имени.
+ */
+export function declaredSettings(): readonly string[] {
+  return Object.keys(devboxManifest().baser.settings);
+}
+
+/**
+ * Версия рантайма, ПРИШПИЛЕННАЯ выпуском обвеса, и следующая за ней.
+ *
+ * Числа держатся здесь одной парой, а не россыпью по пробам: их правда — в
+ * `defaults.mjs` обвеса, и при его выпуске краснеть должна ОДНА проба с ясной
+ * причиной (`acceptance.spec.ts`, «дефолт выпуска»), а не восемь ожиданий,
+ * каждое из которых выглядит как самостоятельное утверждение.
+ */
+export const PINNED_NODE = '24';
+export const MOVED_NODE = '26';
+
+/**
+ * Резолверы обвеса, поднявшие версию рантайма: обвес выпустился заново.
+ *
+ * Переход «обвес обновился» — центральный у двери, и подменять ради него
+ * настоящий модуль приходится всем пробам сразу. Текст один на всех: три копии
+ * расходились бы по одной, и разошлись бы молча.
+ */
+export const BUMPED_RESOLVERS = `
+export function repoName(ctx) { return ctx.repo.name; }
+export function devboxName(ctx) { return \`\${ctx.repo.name}-devbox\`; }
+export function latestStableNode() { return '${MOVED_NODE}'; }
+`;
 
 /** Репозиторий потребителя с поставленным обвесом. */
 export interface Consumer {
@@ -210,20 +300,10 @@ export function installDevbox(options: InstallOptions = {}): Consumer {
   );
   mkdirSync(sourceRoot, { recursive: true });
 
-  // Манифест обвеса — это и есть его объявление: `declaration.json` примера
-  // лежит в форме `package.json` (имя, версия, блок `baser`), поэтому кладётся
-  // под своим настоящим именем, а не пересобирается.
-  cpSync(
-    join(DEVBOX_EXAMPLE, 'declaration.json'),
-    join(sourceRoot, 'package.json'),
-  );
-  cpSync(
-    join(DEVBOX_EXAMPLE, 'defaults.mjs'),
-    join(sourceRoot, 'defaults.mjs'),
-  );
-  cpSync(join(DEVBOX_EXAMPLE, 'template'), join(sourceRoot, 'template'), {
-    recursive: true,
-  });
+  // Тарбол кладётся ЦЕЛИКОМ и как есть: манифест обвеса (он же его объявление —
+  // блок `baser` в `package.json`), резолверы, каталог шаблонов. Выбирать здесь
+  // файлы поимённо значило бы ставить не тот пакет, который получит человек.
+  cpSync(packedDevbox(), sourceRoot, { recursive: true });
 
   const consumer: Consumer = {
     root,
@@ -470,6 +550,23 @@ export { soleRun } from './result.js';
 /** Живой `.devcontainer` этого репозитория — эталон приёмки. */
 export function liveArtifact(dest: string): string {
   return readFileSync(join(REPO_ROOT, dest), 'utf-8');
+}
+
+/**
+ * НАСТРОЙКИ, на которых живёт ЭТОТ репозиторий, — из его же файла настроек.
+ *
+ * Эталон приёмки — живой `.devcontainer`, а он есть функция двух вещей: обвеса и
+ * вот этих значений. Взять первое настоящим, а второе переписать в пробу
+ * руками значило бы вернуть ровно ту копию, из-за которой заход и случился:
+ * человек правит `.omnifield/omnifield-devbox.yaml`, приёмка сверяется со
+ * снимком, обе стороны зелены и обе про разное.
+ */
+export function liveTuning(sourceId: string): unknown {
+  const raw = readFileSync(
+    join(REPO_ROOT, sourceConfigPath(sourceId)),
+    'utf-8',
+  );
+  return (parse(raw) as Record<string, unknown>)[SOURCE_CONFIG_KEY];
 }
 
 /**

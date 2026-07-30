@@ -13,9 +13,13 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  declaredSettings,
   installDevbox,
   soleRun,
+  BUMPED_RESOLVERS,
   DEVBOX_PACKAGE,
+  MOVED_NODE,
+  PINNED_NODE,
   type Consumer,
 } from './devbox.fixture.js';
 import { run } from './run.js';
@@ -53,20 +57,15 @@ async function movements(box: Consumer): Promise<Map<string, SettingMovement>> {
   );
 }
 
-/** Резолверы, поднявшие версию рантайма: обвес выпустился заново. */
-const BUMPED = `
-export function repoName(ctx) { return ctx.repo.name; }
-export function devboxName(ctx) { return \`\${ctx.repo.name}-devbox\`; }
-export function latestStableNode() { return '24'; }
-`;
-
 describe('ноль вопросов пользователю', () => {
   it('конфиг без единого заполненного значения даёт ПОЛНЫЙ набор', async () => {
     const box = install();
     const byKey = await movements(box);
 
     // Ни одна настройка не осталась без значения — вопросов задавать нечего.
-    expect(byKey.size).toBe(10);
+    // Сверяется ПЕРЕЧЕНЬ, объявленный самим обвесом, а не число: число молча
+    // устаревает на первом же его выпуске и проверяет уже не полноту набора.
+    expect([...byKey.keys()].sort()).toEqual([...declaredSettings()].sort());
     expect(
       [...byKey.values()].every((setting) => setting.value !== undefined),
     ).toBe(true);
@@ -122,12 +121,14 @@ describe('движение названо ОБОИМИ концами', () => {
 describe('переход: обвес обновился, дефолт поднялся', () => {
   it('НЕзаполненное значение едет за нами', async () => {
     const box = install();
-    expect((await movements(box)).get('runtimeVersion')?.value).toBe('22');
+    expect((await movements(box)).get('runtimeVersion')?.value).toBe(
+      PINNED_NODE,
+    );
 
-    box.updateResolvers(BUMPED);
+    box.updateResolvers(BUMPED_RESOLVERS);
 
     const bumped = (await movements(box)).get('runtimeVersion');
-    expect(bumped?.value).toBe('24');
+    expect(bumped?.value).toBe(MOVED_NODE);
     expect(bumped?.ours).toBe(true);
   });
 
@@ -135,13 +136,13 @@ describe('переход: обвес обновился, дефолт подня
     const box = install({ settings: { runtimeVersion: '20' } });
     expect((await movements(box)).get('runtimeVersion')?.value).toBe('20');
 
-    box.updateResolvers(BUMPED);
+    box.updateResolvers(BUMPED_RESOLVERS);
 
     const after = (await movements(box)).get('runtimeVersion');
-    // Дефолт под ним уехал на 24, а значение осталось: заполненное бьёт всё.
+    // Дефолт под ним уехал вперёд, а значение осталось: заполненное бьёт всё.
     expect(after?.value).toBe('20');
     expect(after?.ours).toBe(false);
-    expect(after?.chain[0].value).toBe('24');
+    expect(after?.chain[0].value).toBe(MOVED_NODE);
     expect(after?.chain[after.chain.length - 1]).toEqual({
       kind: 'filled',
       value: '20',

@@ -32,10 +32,14 @@ import {
 } from '@omnifield/baser-contracts';
 import { MANIFEST_PATH } from '@omnifield/baser-materialize';
 import {
+  devboxManifest,
   installDevbox,
   manifestOf,
   soleRun,
+  BUMPED_RESOLVERS,
   DEVBOX_PACKAGE,
+  MOVED_NODE,
+  PINNED_NODE,
   type Consumer,
   type SourceSpec,
 } from './devbox.fixture.js';
@@ -49,13 +53,6 @@ const LIVE = '.devcontainer/devcontainer.json';
 
 /** `baser.json` формы 2: ТОЛЬКО перечень поставленного. */
 const CONFIG = { formVersion: 2, sources: [{ use: DEVBOX_PACKAGE }] };
-
-/** Резолверы, поднявшие версию рантайма: обвес выпустился заново. */
-const BUMPED = `
-export function repoName(ctx) { return ctx.repo.name; }
-export function devboxName(ctx) { return \`\${ctx.repo.name}-devbox\`; }
-export function latestStableNode() { return '24'; }
-`;
 
 let consumer: Consumer | null = null;
 
@@ -235,7 +232,25 @@ describe('рождение: один раз, если файла нет', () => 
       expect(text).toContain(`# ${setting.title}`);
       expect(text).toContain(`# ${setting.key}:`);
     }
-    expect(text).toContain('# Пин, поставленный при выпуске обвеса');
+
+    // И описание доезжает СЛОВО В СЛОВО из объявления обвеса. Пересказ его
+    // куском в пробе означал бы, что проверяется память автора пробы, а не
+    // доставка: обвес выпускается заново — текст расходится молча.
+    const declared = devboxManifest().baser.settings as Record<
+      string,
+      { description?: string }
+    >;
+    const described = Object.values(declared).filter(
+      (spec) => typeof spec.description === 'string',
+    );
+    expect(described.length).toBeGreaterThan(0);
+    for (const spec of described) {
+      const first = (spec.description as string)
+        .split('\n')
+        .map((line) => line.trim())
+        .find((line) => line !== '') as string;
+      expect(text).toContain(`# ${first}`);
+    }
     // Вычисляемый дефолт назван вычисляемым: значение, «взявшееся само», иначе
     // выглядит случайным, и его заполняют «чтобы зафиксировать».
     expect(text).toContain(
@@ -364,13 +379,13 @@ describe('после рождения дверь в файл НЕ ПИШЕТ', (
     const box = install();
     await run({ command: 'apply', cwd: box.root });
     const born = box.read(TUNING) as string;
-    expect(box.read(LIVE)).toContain('typescript-node:22');
-    expect(born).toContain('# runtimeVersion: "22"');
+    expect(box.read(LIVE)).toContain(`typescript-node:${PINNED_NODE}`);
+    expect(born).toContain(`# runtimeVersion: "${PINNED_NODE}"`);
 
-    box.updateResolvers(BUMPED);
+    box.updateResolvers(BUMPED_RESOLVERS);
     const result = await run({ command: 'apply', cwd: box.root });
 
-    expect(box.read(LIVE)).toContain('typescript-node:24');
+    expect(box.read(LIVE)).toContain(`typescript-node:${MOVED_NODE}`);
     // Файл не тронут — включая закомментированный дефолт, который устарел.
     // Он рассказ о том, что было при рождении, а не вторая правда о значении:
     // живое значение дверь называет в ответе и печатает в тексте.
@@ -379,7 +394,7 @@ describe('после рождения дверь в файл НЕ ПИШЕТ', (
     expect(
       soleRun(result).settings.find((item) => item.key === 'runtimeVersion')
         ?.value,
-    ).toBe('24');
+    ).toBe(MOVED_NODE);
   });
 
   it('заполненное человеком не переписывается и не «фиксируется»', async () => {
@@ -388,7 +403,7 @@ describe('после рождения дверь в файл НЕ ПИШЕТ', (
     });
     const mine = box.read(TUNING);
 
-    box.updateResolvers(BUMPED);
+    box.updateResolvers(BUMPED_RESOLVERS);
     await run({ command: 'apply', cwd: box.root });
 
     expect(box.read(TUNING)).toBe(mine);

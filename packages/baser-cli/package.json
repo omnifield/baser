@@ -36,5 +36,18 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "nx": {
+    "namedInputs": {
+      "default": [
+        "{projectRoot}/**/*",
+        "sharedGlobals",
+        "{workspaceRoot}/.devcontainer/**/*",
+        "{workspaceRoot}/baser.json",
+        "{workspaceRoot}/baser.lock.json",
+        "{workspaceRoot}/.omnifield/omnifield-devbox.yaml",
+        "{workspaceRoot}/packages/baser-devbox/**/*"
+      ]
+    }
   }
 }
