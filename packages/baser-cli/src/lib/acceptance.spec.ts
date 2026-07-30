@@ -524,10 +524,17 @@ describe('переход: служебная запись потеряна ил�
     });
 
     const blocked = await run({ command: 'plan', cwd: consumer.root });
-    expect(
+    const message =
       blocked.problems.find((problem) => problem.code === 'manifest-missing')
-        ?.message,
-    ).toContain('файлы на этих местах не наши');
+        ?.message ?? '';
+    expect(message).toContain('файлы на этих местах не наши');
+
+    // Этот выход ведёт к тому же `--confirm`, что и первая установка, значит и
+    // цену обязан называть ту же: подтвердивший получит СБОРКУ ОТ ДЕФОЛТОВ, а
+    // не подстройку под свой файл (`tasker:BASER2-106`). Умолчать здесь значило
+    // бы починить один вход в потерю и оставить открытым соседний.
+    expect(message).toContain('СБОРКОЙ ОТ ДЕФОЛТОВ');
+    expect(message).toContain('из твоего файла не переедет ничего');
 
     const fixed = await run({
       command: 'apply',
@@ -633,6 +640,45 @@ describe('ПЕРВАЯ УСТАНОВКА В НЕПУСТОЙ РЕПОЗИТОР
     expect(message).toContain('--confirm');
     expect(message).toContain('правки руками в ней не переживут');
     expect(message).toContain('сними обвес');
+  });
+
+  it('НАЗЫВАЕТ, откуда берутся значения: твой файл станок не читал', async () => {
+    // Цена умолчания посчитана на живом потребителе (`tasker:BASER2-103`): он
+    // прочитал наши тексты как обещание подхватить его значения, а применённый
+    // вслепую обвес дал бы девбокс БЕЗ ОБОИХ ТОМОВ — по дефолту они `null`.
+    // Спасла его не формулировка, а сам отказ трогать чужой файл. Подстраховка
+    // при этом снимается одним `--confirm`: поверивший снимает её ровно в тот
+    // момент, когда теряет значения (`tasker:BASER2-106`).
+    const result = await run({ command: 'plan', cwd: occupied().root });
+    const message =
+      result.problems.find((problem) => problem.code === 'first-install')
+        ?.message ?? '';
+
+    expect(message).toContain('НЕ ПРОЧИТАЛИ');
+    expect(message).toContain('от дефолтов обвеса и его файла настроек');
+    // Не «многое не переносится», а «не переносится ничего»: половинчатая
+    // формулировка оставляет надежду, что важное-то подхватят.
+    expect(message).toContain('не попадает НИЧЕГО');
+  });
+
+  it('ГРАНИЦА регулировки названа, и сверка стоит ДО подтверждения', async () => {
+    const result = await run({ command: 'plan', cwd: occupied().root });
+    const message =
+      result.problems.find((problem) => problem.code === 'first-install')
+        ?.message ?? '';
+
+    // Второй конец того же умолчания: не назвав границу, текст оставляет
+    // достраивать, что нерегулируемого не бывает. На этом тот же потребитель
+    // завёл ложный риск «после apply теряем дверь к сервисам».
+    expect(message).toContain('Регулируется только названное настройкой');
+    expect(message).toContain('приезжает из шаблона как есть');
+
+    // ПОРЯДОК и есть обещание: предупреждение, стоящее после инструкции,
+    // прочитают уже после решения. Сверка обязана попасться раньше `--confirm`.
+    expect(message.indexOf('ДО подтверждения')).toBeGreaterThan(-1);
+    expect(message.indexOf('ДО подтверждения')).toBeLessThan(
+      message.indexOf('--confirm'),
+    );
   });
 
   it('ОБЕЩАНИЕ 1: согласился — файл стал нашим, и это видно', async () => {

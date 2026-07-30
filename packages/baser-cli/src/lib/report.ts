@@ -141,6 +141,13 @@ function renderRun(run: SourceRun, command: DoorResult['command']): string[] {
  * Настройки, которые никуда не двигались, тоже печатаются — иначе «этих
  * значений я не выбирал» осталось бы невидимым, а именно они поедут за
  * следующим выпуском обвеса.
+ *
+ * ГРАНИЦА РЕГУЛИРОВКИ названа второй строкой (`tasker:BASER2-106`). Список без
+ * неё читается как полный перечень того, из чего собран артефакт, — и первый
+ * чужой потребитель достроил ровно это: раз `--add-host` настройкой не назван,
+ * значит станок его не кладёт. Риск оказался ложным, но стоил захода с
+ * экспериментом. Строка стоит здесь, а не только в отказе первой установки:
+ * отказ видит тот, у кого файл уже лежал, а этот блок — каждый, кто ставит.
  */
 function renderMovement(settings: readonly SettingMovement[]): string[] {
   const ours = settings.filter((setting) => setting.ours).length;
@@ -148,6 +155,7 @@ function renderMovement(settings: readonly SettingMovement[]): string[] {
 
   return [
     `значения: ${settings.length}, из них наших ${ours} — незаполненное едет за выпуском обвеса`,
+    'регулируется ровно это: всё остальное приезжает из шаблона как есть',
     ...settings.map((setting) => {
       const head = `  ${setting.key.padEnd(width)}  `;
       const path = setting.chain.map((link) => value(link.value)).join(' → ');
