@@ -39,7 +39,7 @@ if (editorFormatter) {
   editorSettings.push('"editor.formatOnSave": true');
   editorSettings.push(`"editor.defaultFormatter": ${JSON.stringify(editorFormatter)}`);
 }
-// tsdk слотом НЕ становится: он указывает на TypeScript САМОГО репозитория, и для
+// tsdk регулировкой НЕ становится: он указывает на TypeScript САМОГО репозитория, и для
 // devbox-образа typescript-node другого верного значения нет.
 editorSettings.push('"typescript.tsdk": "node_modules/typescript/lib"');
 
