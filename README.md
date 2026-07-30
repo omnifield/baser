@@ -2,13 +2,28 @@
 
 **Фундамент-фреймворк Omnifield** — переиспользуемые капабилити (`@omnifield/baser-*`), построенные на рыночном каноне (rebuild-on-canon), а не на самопале.
 
-- Каноны/vision: knowledger `BASER-2` (канон-стек), `BASER-1` (release-research).
-- Решения: `ADR-15` (split), `ADR-19` (реестр=публичный npm), `ADR-20` (гринфилд на Nx).
+- **Канон продукта — раздел `BASER2` в knowledger**, и только он: `kb:BASER2-2` (что такое станок), `kb:BASER2-4` (рабочая аналогия), `kb:BASER2-5` (где живут настройки), `kb:BASER2-12` (форма ответа). Старый раздел `BASER` — **legacy**: там описана механика владения, которой больше нет, и читать его как руководство нельзя.
+- Решения: `ADR-15` (split), `ADR-19` (релизный реестр = публичный npm), `ADR-20` (гринфилд на Nx).
 - Именование пакетов: `@omnifield/<product>-<package>` (MECH-15).
+
+## Где брать пакеты
+
+**Сегодня они живут в GitHub Packages, а не в публичном npm.** Публичный npm — это релизный поток, и он ещё ни разу не выполнялся: `nx release` описан ниже, но выпуска не было. Пока идёт дев-поток.
+
+Потребителю нужны две строки в пользовательском `~/.npmrc` — токен с правом `read:packages`:
+
+```
+@omnifield:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=<токен>
+```
+
+В omnifield-девбоксах это уже настроено: `NPM_CONFIG_USERCONFIG` указывает на общий том `omnifield-secrets`, и токен там лежит. Ставить руками ничего не нужно.
+
+**Даже публичные пакеты GitHub Packages требуют токен на чтение** — это свойство сервиса, а не наша настройка. Без него `npm i @omnifield/baser-devbox` ответит «404, пакета нет», и человек пойдёт искать несуществующий пакет вместо своих кредов.
 
 ## Стек
 - **Монорепо-движок:** [Nx](https://nx.dev) (package-based, pnpm) — генераторы, project-graph, `nx release`.
-- **Публикация:** `nx release` (independent, Conventional Commits) → публичный npm, OIDC trusted publishing + provenance.
+- **Релизный поток:** `nx release` (independent, Conventional Commits) → публичный npm, OIDC trusted publishing + provenance. Ещё не запускался.
 - **Без Nx Cloud** — локального кэша достаточно для фундамент-монорепо.
 
 ## Разработка
@@ -31,7 +46,7 @@ pnpm exec nx release --dry-run             # предпросмотр релиз
 | `@omnifield/baser-check` | проверка посадки: подходит ли обвес, ответ данными |
 | `@omnifield/baser-pack` | выдача: проверенный обвес с манифестом |
 | `@omnifield/baser-devbox` | первый настоящий обвес: `.devcontainer` с пресетом `omnifield` |
-| `@omnifield/baser-release` | (каркас) release-капабилити на nx release |
+| `@omnifield/baser-release` | пустая заглушка: кода нет, в реестр не публикуется (`tasker:BASER2-96`) |
 
 ## Вклад
 
