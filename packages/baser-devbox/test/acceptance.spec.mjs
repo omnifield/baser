@@ -56,12 +56,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { run } from '../../baser-cli/src/index.ts';
 // Обвесов в ответе двери столько же, сколько поставлено (`tasker:BASER2-55`), и
-// каждый прогон лежит под своим. Здесь обвес один — берём хелпер зоны `cli`, а
-// не `runs[0]`: он бросает, если обвес не один, и проба про один обвес не
-// начнёт молча проверять первый из двух.
-import { soleRun } from '../../baser-cli/src/lib/devbox.fixture.ts';
+// каждый прогон лежит под своим. Здесь обвес один — берём `soleRun` двери, а не
+// `runs[0]`: он бросает, если обвес не один, и проба про один обвес не начнёт
+// молча проверять первый из двух. Берётся он публичным входом зоны `cli`, как и
+// `run`: приёмка одной зоны не имеет права держаться за внутренности другой
+// (`tasker:BASER2-59`).
+import { run, soleRun } from '../../baser-cli/src/index.ts';
 import { MANIFEST_PATH } from '../../baser-materialize/src/index.ts';
 import {
   consumerConfig,
