@@ -1,6 +1,6 @@
 {
   "name": "@omnifield/baser-devbox",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Обвес девбокса: .devcontainer как шаблон с пресетом omnifield",
   "license": "MIT",
   "type": "module",
