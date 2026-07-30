@@ -15,6 +15,15 @@
   "publishConfig": {
     "access": "public"
   },
+  "nx": {
+    "namedInputs": {
+      "default": [
+        "{projectRoot}/**/*",
+        "sharedGlobals",
+        "{workspaceRoot}/.devcontainer/**/*"
+      ]
+    }
+  },
   "baser": {
     "formVersion": 2,
     "source": {

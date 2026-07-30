@@ -16,7 +16,13 @@ import {
   ARTIFACT_CLASSES,
   type ArtifactClass,
 } from './classes.js';
-import { byBytes, checkPath, PATH_PROBLEM, type CheckedPath } from './paths.js';
+import {
+  byBytes,
+  checkPath,
+  CONSUMER_CONFIG_PATH,
+  PATH_PROBLEM,
+  type CheckedPath,
+} from './paths.js';
 import { ProblemLog, type FormResult } from './problems.js';
 import {
   describeValue,
@@ -709,6 +715,23 @@ function parseLayoutEntry(
   }
 
   if (src === '' || dest === '') {
+    return null;
+  }
+
+  // Артефакт не имеет права лечь поверх перечня поставленного. Проверка ЗДЕСЬ, а
+  // не у движка и не у двери: имя конфига потребителя — константа формы, значит
+  // объявление, целящееся в него, непригодно САМО ПО СЕБЕ, независимо от того,
+  // чем его прогоняют (`tasker:BASER2-25`). Про паспорт укладки форма так не
+  // говорит: его имя — не её слово, и защищает его движок (`dest-is-manifest`).
+  if (dest === CONSUMER_CONFIG_PATH) {
+    log.add(
+      'artifact-over-consumer-config',
+      `${at}.dest`,
+      `артефакт целится в "${CONSUMER_CONFIG_PATH}" — это перечень поставленного, ` +
+        'который ведут дверь и человек. Записью раскладки он не является и в паспорте ' +
+        'укладки не числится: владеть им нечем, а перегенерация снесла бы перечень, ' +
+        'по которому этот же обвес и нашли. Артефакту нужен другой адрес',
+    );
     return null;
   }
 

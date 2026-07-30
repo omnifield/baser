@@ -1,7 +1,4 @@
 {
   "formVersion": 2,
-  "sources": [
-    { "use": "@omnifield/baser-devbox" },
-    { "use": "@omnifield/brainer-agent-harness" }
-  ]
+  "sources": [{ "use": "@fixture/kit" }, { "use": "@fixture/seed" }]
 }

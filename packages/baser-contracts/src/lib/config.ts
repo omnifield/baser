@@ -31,14 +31,19 @@
  * пресет — вопрос к паре «объявление + конфиг», он решается в `settings.ts`.
  */
 
-import { byBytes } from './paths.js';
+import { byBytes, CONSUMER_CONFIG_PATH } from './paths.js';
 import { ProblemLog, type FormResult } from './problems.js';
 import { describeValue, type SettingValue } from './values.js';
 import { isPlainObject } from './declaration.js';
 import { FORM_VERSION, MIN_FORM_VERSION } from './version.js';
 
-/** Где перечень поставленного лежит по умолчанию. Читает его дверь, не движок. */
-export const CONSUMER_CONFIG_PATH = 'baser.json';
+/**
+ * Где перечень поставленного лежит по умолчанию. Читает его дверь, не движок.
+ *
+ * Само имя объявлено в `paths.ts`: в него обязано не целиться и объявление
+ * обвеса, а держать одно имя в двух модулях значило бы дать ему разъехаться.
+ */
+export { CONSUMER_CONFIG_PATH };
 
 /**
  * Папка, в которой лежит всё, что заполняет человек (`kb:BASER2-2` §4).
@@ -141,8 +146,12 @@ export const EMPTY_SOURCE_CONFIG: SourceConfig = { presets: [], settings: {} };
  * `$schema` лежит ВНЕ ключа `baser` — там дверь и так молчит про чужие ключи.
  * В обоих этих местах `$schema` — обычное незнакомое поле (`unknown-field`).
  *
- * Сама схема по адресу из `$schema` пока не публикуется: поле принимается,
- * подсказок за ним нет (`tasker:BASER2-70`, побочный пункт).
+ * **Значение не проверяется, и схемы по этому адресу нет.** Она сознательно не
+ * публикуется, пока формат шаблона отложен (`tasker:BASER2-8`): иначе у формы
+ * появился бы второй дом — JSON Schema пришлось бы держать в согласии с этим
+ * разборщиком, и они разъехались бы (решение architect, `tasker:BASER2-75`).
+ * Поле — вежливый пропуск того, что редакторы подставляют сами, а не приглашение
+ * сослаться: подсказок за ним человек не получит.
  */
 const CONFIG_FIELDS = new Set(['$schema', 'formVersion', 'sources']);
 const ENTRY_FIELDS = new Set(['use']);

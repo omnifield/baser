@@ -25,10 +25,10 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { renderText, run } from '../../baser-cli/src/index.ts';
-// Обвес здесь один — прогон под него берётся хелпером зоны `cli`, а не
-// `runs[0]`: он бросает, если обвес не один (`tasker:BASER2-55`).
-import { soleRun } from '../../baser-cli/src/lib/devbox.fixture.ts';
+// Обвес здесь один — прогон под него берётся `soleRun` двери, а не `runs[0]`:
+// он бросает, если обвес не один (`tasker:BASER2-55`). Публичным входом зоны
+// `cli`, как и `run` (`tasker:BASER2-59`).
+import { renderText, run, soleRun } from '../../baser-cli/src/index.ts';
 import {
   consumerConfig,
   DEVBOX_PACKAGE,
@@ -341,18 +341,86 @@ describe('запасной вариант: репозитория не видн�
   it('битый .git/config не роняет прогон и не отравляет имя', async () => {
     // Резолвер, бросивший исключение, — это `resolver-failed` на весь прогон.
     // Имя девбокса такой цены не стоит: нечитаемое просто не участвует.
+    //
+    // Байт NUL в начале фикстуры записан ЭКРАНИРОВАННЫМ намеренно. Лежал он
+    // здесь сырым — и от одного байта весь ЭТОТ файл становился для инструментов
+    // бинарным: `file` звал его `data`, а `grep` переставал находить в нём хоть
+    // что-нибудь, молча и без единой жалобы. Ровно так `tasker:BASER2-59` чуть
+    // не осталась сделанной наполовину: поиск глубоких импортов эту пробу не
+    // показал. В конфиг потребителя приезжает тот же самый байт — проба от
+    // экранирования не слабеет ни на сколько.
     consumer = installConsumer({
       repoName: 'fresh',
       manifest: null,
       config: consumerConfig(),
       tuning: tuning({ presets: ['omnifield'] }),
     });
-    consumer.write('.git/config', ' [remote "origin"\n\turl =\n=?');
+    consumer.write('.git/config', '\u0000[remote "origin"\n\turl =\n=?');
 
     const result = await run({ command: 'apply', cwd: consumer.root });
 
     expect(result.status).toBe('applied');
     expect(parseJsonc(consumer.read(LIVE)).name).toBe('fresh-devbox');
+  });
+});
+
+/**
+ * РЕГИСТР В ЗАГОЛОВКЕ СЕКЦИИ: git различает его ровно наполовину.
+ *
+ * Имена секций и ключей git считает без учёта регистра, **имя подсекции — с
+ * учётом**: `[remote "ORIGIN"]` для него отдельный remote, а не `origin`.
+ * Резолвер это правило знал комментарием и нарушал кодом — одна регулярка с
+ * флагом `i` накрывала и то, и другое (`tasker:BASER2-39`).
+ *
+ * Раскладка экзотическая: нужно, чтобы человек завёл remote в другом регистре и
+ * при этом не имел обычного `origin`. Чиним не из-за вероятности, а потому что
+ * код обязан делать то, что написано в его же комментарии: расхождение между
+ * ними живёт дольше и обходится дороже самой ошибки.
+ *
+ * Обе пробы проверены на красноту против кода ДО фикса: первая давала
+ * `other-devbox` вместо `fresh-devbox`.
+ */
+describe('РЕГИСТР: слово секции git не различает, имя remote — различает', () => {
+  /** Репозиторий с самодельным `.git/config` и без манифеста. */
+  function withGitConfig(repoName, config) {
+    consumer = installConsumer({
+      repoName,
+      manifest: null,
+      config: consumerConfig(),
+      tuning: tuning({ presets: ['omnifield'] }),
+    });
+    consumer.write('.git/config', config);
+    return consumer;
+  }
+
+  it('[remote "ORIGIN"] — ДРУГОЙ remote: origin нет, имя приходит от каталога', async () => {
+    // Ущерб, если принять его за `origin`, — не подпись контейнера, а сетевой
+    // алиас: обещание соседям, данное по ЧУЖОМУ адресу.
+    const box = withGitConfig(
+      'fresh',
+      '[core]\n\trepositoryformatversion = 0\n[remote "ORIGIN"]\n\turl = https://github.com/чужой/other.git\n',
+    );
+
+    const result = await run({ command: 'apply', cwd: box.root });
+
+    expect(result.status).toBe('applied');
+    expect(parseJsonc(box.read(LIVE)).name).toBe('fresh-devbox');
+    expect(alias(parseJsonc(box.read(LIVE)))).toBe('fresh');
+  });
+
+  it('[REMOTE "origin"] — тот же origin: слово секции регистр не различает', async () => {
+    // Обратный конец того же правила. Без него починка свелась бы к «сверять
+    // весь заголовок точно» — и перестала бы находить законный origin.
+    const box = withGitConfig(
+      'fresh',
+      '[core]\n\trepositoryformatversion = 0\n[REMOTE "origin"]\n\turl = https://github.com/omnifield/weber.git\n',
+    );
+
+    const result = await run({ command: 'apply', cwd: box.root });
+
+    expect(result.status).toBe('applied');
+    expect(parseJsonc(box.read(LIVE)).name).toBe('weber-devbox');
+    expect(alias(parseJsonc(box.read(LIVE)))).toBe('weber');
   });
 });
 

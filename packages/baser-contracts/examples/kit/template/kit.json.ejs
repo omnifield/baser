@@ -1,0 +1,21 @@
+<%
+// Слой «настройки» собирается здесь, чтобы ниже читался готовый артефакт, а не
+// сборка значений. Внутри тега — обычный JavaScript: локальные переменные,
+// стрелочные функции, JSON.stringify (§5в доки зоны).
+const quoted = (items) => items.map((item) => JSON.stringify(item)).join(', ');
+-%>
+{
+  "name": "<%- name %>",
+  "stamp": "<%- stamp %>",
+  "retries": <%- retries %>,
+  "labels": [<%- quoted(labels) %>],
+<% if (store) { -%>
+  "mounts": [<%- quoted([`${store}:/work/cache`]) %>],
+<% } -%>
+<% if (strict) { -%>
+  "onFailure": "stop",
+<% } else { -%>
+  "onFailure": "continue",
+<% } -%>
+  "command": <%- JSON.stringify(command) %>
+}

@@ -1,0 +1,77 @@
+{
+  "name": "@fixture/kit",
+  "version": "1.0.0",
+  "baser": {
+    "formVersion": 2,
+
+    "source": {
+      "id": "fixture/kit",
+      "title": "Фикстура: обвес, у которого есть все слова формы",
+      "contentRoot": "template"
+    },
+
+    "settings": {
+      "name": {
+        "title": "Имя набора",
+        "description": "Считается из имени репозитория — пользователь не вводит ничего.",
+        "type": "string",
+        "defaultFrom": "./defaults.mjs#nameFromRepo"
+      },
+      "stamp": {
+        "title": "Отметка выпуска",
+        "description": "Личность и версия обвеса. Версия приезжает из манифеста пакета и бывает отсутствующей.",
+        "type": "string",
+        "defaultFrom": "./defaults.mjs#sourceStamp"
+      },
+      "command": {
+        "title": "Команда прогона",
+        "description": "Внутри есть кавычка — на ней видно, что подстановка не экранирует.",
+        "type": "string",
+        "default": "pnpm exec fixture --scope \"*\""
+      },
+      "retries": {
+        "title": "Сколько раз повторить",
+        "type": "number",
+        "default": 2
+      },
+      "labels": {
+        "title": "Метки набора",
+        "type": "list",
+        "default": ["form", "probe"]
+      },
+      "store": {
+        "title": "Том под кэш прогона",
+        "description": "Не задано — блок с томами не разворачивается вовсе.",
+        "type": "string",
+        "default": null
+      },
+      "strict": {
+        "title": "Останавливаться на первой ошибке",
+        "type": "boolean",
+        "default": false
+      }
+    },
+
+    "presets": {
+      "shared": {
+        "title": "Общий прогон: том под кэш и остановка на первой ошибке",
+        "values": {
+          "store": "fixture-store",
+          "strict": true
+        }
+      }
+    },
+
+    "layout": [
+      {
+        "src": "kit.json.ejs",
+        "dest": "fixture/kit.json"
+      },
+      {
+        "src": "kit.lock.json",
+        "dest": "fixture/kit.lock.json",
+        "render": false
+      }
+    ]
+  }
+}

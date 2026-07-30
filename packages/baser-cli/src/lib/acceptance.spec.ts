@@ -22,6 +22,25 @@
  * равно телу шаблона, владение читается из записи сбоку. Цель итерации —
  * «поставил пакет → позвал команду → `.devcontainer` лёг» — впервые
  * проверяется целиком (`tasker:BASER2-18`).
+ *
+ * ── ЧТО ИЗМЕНИЛОСЬ ЕЩЁ РАЗ (`tasker:BASER2-26`) ─────────────────────────────
+ *
+ * Под приёмкой сменились ОБА основания, и оба в одну сторону — в сторону
+ * настоящего.
+ *
+ * 1. **Обвес.** Ставится тарбол пакета `@omnifield/baser-devbox`, а не копия
+ *    примера из чужой зоны. Копия успела разъехаться с пакетом, и разъезд был
+ *    невидим: обе стороны зеленели, потому что каждая проверяла свою половину.
+ *
+ * 2. **Эталон.** Живой `.devcontainer` этого репозитория больше НЕ написан
+ *    руками — его кладёт тот же станок (догфуд, коммит «baser садится на
+ *    собственный станок»). Утверждения про рукописную вторую строку здесь
+ *    больше нет — не подкручено, а снято вместе со своей причиной.
+ *
+ * От этого сверка не ослабла, а стала сильнее: раньше она означала «совпало с
+ * тем, что человек написал, кроме заранее прощённых строк», теперь — **«этот
+ * репозиторий действительно живёт на своём же станке»**, и совпадение полное,
+ * байт в байт, без единого исключения.
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -30,9 +49,13 @@ import { join } from 'node:path';
 import {
   installDevbox,
   liveArtifact,
+  liveTuning,
   manifestOf,
   soleRun,
+  BUMPED_RESOLVERS,
   DEVBOX_PACKAGE,
+  MOVED_NODE,
+  PINNED_NODE,
   type Consumer,
 } from './devbox.fixture.js';
 import { run } from './run.js';
@@ -98,8 +121,57 @@ describe('ЦЕЛЬ ИТЕРАЦИИ: поставил пакет → позва�
   });
 });
 
+describe('СВЕРКА С ЖИВЫМ РЕПОЗИТОРИЕМ: baser стоит на своём же станке', () => {
+  /**
+   * Тот же обвес и ТЕ ЖЕ настройки, на которых живёт этот репозиторий.
+   *
+   * Оба конца берутся живыми: пакет — тарболом, значения — из
+   * `.omnifield/omnifield-devbox.yaml`. Пресета здесь нет намеренно: живой
+   * репозиторий выбрал значения поимённо, и проба обязана повторять его выбор,
+   * а не свой.
+   */
+  function asLive(): Consumer {
+    consumer = installDevbox({
+      config: CONFIG,
+      tuning: { [DEVBOX_ID]: liveTuning(DEVBOX_ID) },
+    });
+    return consumer;
+  }
+
+  it('оба артефакта совпадают с живыми БАЙТ В БАЙТ, без единого исключения', async () => {
+    const box = asLive();
+
+    const result = await run({ command: 'apply', cwd: box.root });
+
+    expect(result.status).toBe('applied');
+    // Ни `withoutLine`, ни списка прощённых строк: пока живой файл был
+    // рукописным, исключения были честной ценой сверки. Файл кладёт станок —
+    // цена исчезла вместе с причиной, и утверждение стало полным.
+    expect(box.read(LIVE)).toBe(liveArtifact(LIVE));
+    expect(box.read(LOCK)).toBe(liveArtifact(LOCK));
+  });
+
+  it('живой файл ВЕДЁТ станок — это сказано паспортом укладки, а не верой', async () => {
+    // Байтовое совпадение само по себе не отличает «репозиторий на станке» от
+    // «человек аккуратно переписал вывод руками». Отличает запись сбоку: она
+    // существует в живом репозитории и называет владельца.
+    const lock = JSON.parse(liveArtifact('baser.lock.json')) as {
+      artifacts: { dest: string; source: string; class: string }[];
+    };
+    const record = lock.artifacts.find((item) => item.dest === LIVE);
+
+    expect(record?.source).toBe(DEVBOX_ID);
+    expect(record?.class).toBe('regenerated');
+    // И обвес объявлен поставленным — то есть станок сюда доедет и завтра.
+    expect(
+      (JSON.parse(liveArtifact('baser.json')) as { sources: unknown[] })
+        .sources,
+    ).toContainEqual({ use: DEVBOX_PACKAGE });
+  });
+});
+
 describe('переход: чистое дерево → обвес разложен', () => {
-  it('артефакт лёг на ДИСК, записан в манифест и сходится с живым эталоном', async () => {
+  it('артефакт лёг на ДИСК и записан в манифест', async () => {
     const box = clean();
 
     const result = await run({ command: 'apply', cwd: box.root });
@@ -117,15 +189,6 @@ describe('переход: чистое дерево → обвес разлож�
         source: 'omnifield/devbox',
       }),
     );
-
-    // Сверка с ЖИВЫМ файлом этого репозитория — теперь ПРЯМАЯ, снимать с
-    // артефакта нечего. Единственное расхождение то же, что назвала проба
-    // формы: во второй строке живого файла руками написано «baser devbox», а
-    // обвес подставляет туда настройку `name`.
-    const landed = box.read(LIVE) as string;
-    expect(withoutLine(landed, 2)).toBe(withoutLine(liveArtifact(LIVE), 2));
-    expect(landed.split('\n')[1]).toContain('baser-devbox');
-    expect(liveArtifact(LIVE).split('\n')[1]).toContain('baser devbox');
   });
 
   it('подстановка не экранирует под HTML — кавычка осталась кавычкой', async () => {
@@ -179,32 +242,41 @@ describe('переход: пресет убран из файла настрое
 });
 
 describe('переход: обвес обновился, дефолт поднялся', () => {
-  const BUMPED = `
-export function repoName(ctx) { return ctx.repo.name; }
-export function devboxName(ctx) { return \`\${ctx.repo.name}-devbox\`; }
-export function latestStableNode() { return '24'; }
-`;
+  it('ДЕФОЛТ ВЫПУСКА: незаполненная версия — та, что пришпилена обвесом', async () => {
+    // Единственное место, где число рантайма утверждается прямо. Выпустится
+    // обвес с другим пином — покраснеет эта проба и назовёт причину, а не
+    // восемь чужих ожиданий, каждое из которых выглядит самостоятельным.
+    const box = clean();
+
+    const result = await run({ command: 'plan', cwd: box.root });
+
+    const runtime = soleRun(result).settings.find(
+      (setting) => setting.key === 'runtimeVersion',
+    );
+    expect(runtime?.value).toBe(PINNED_NODE);
+    expect(runtime?.ours).toBe(true);
+  });
 
   it('движение названо ДО применения, и артефакт догоняет эталон', async () => {
     const box = clean();
     await run({ command: 'apply', cwd: box.root });
-    expect(box.read(LIVE)).toContain('typescript-node:22');
+    expect(box.read(LIVE)).toContain(`typescript-node:${PINNED_NODE}`);
 
-    box.updateResolvers(BUMPED);
+    box.updateResolvers(BUMPED_RESOLVERS);
 
     // Сначала ПЛАН: движение обязано быть названо до того, как что-то поедет.
     const plan = await run({ command: 'plan', cwd: box.root });
     const runtime = soleRun(plan).settings.find(
       (setting) => setting.key === 'runtimeVersion',
     );
-    expect(runtime?.value).toBe('24');
+    expect(runtime?.value).toBe(MOVED_NODE);
     expect(runtime?.ours).toBe(true);
     expect(soleRun(plan).plan?.steps[0].reason).toBe('diverged');
     // Названо — и не применено: команда `plan` дерева не трогает.
-    expect(box.read(LIVE)).toContain('typescript-node:22');
+    expect(box.read(LIVE)).toContain(`typescript-node:${PINNED_NODE}`);
 
     await run({ command: 'apply', cwd: box.root });
-    expect(box.read(LIVE)).toContain('typescript-node:24');
+    expect(box.read(LIVE)).toContain(`typescript-node:${MOVED_NODE}`);
   });
 
   it('заполненное пользователем переживает обновление обвеса', async () => {
@@ -219,10 +291,10 @@ export function latestStableNode() { return '24'; }
     });
     await run({ command: 'apply', cwd: consumer.root });
 
-    consumer.updateResolvers(BUMPED);
+    consumer.updateResolvers(BUMPED_RESOLVERS);
     await run({ command: 'apply', cwd: consumer.root });
 
-    // Дефолт под ним уехал на 24 — значение осталось: подниматься неоткуда,
+    // Дефолт под ним уехал вперёд — значение осталось: подниматься неоткуда,
     // движок в конфиг пользователя не пишет.
     expect(consumer.read(LIVE)).toContain('typescript-node:20');
   });
@@ -602,9 +674,3 @@ describe('ПЕРВАЯ УСТАНОВКА В НЕПУСТОЙ РЕПОЗИТОР
     expect(box.exists('baser.json')).toBe(false);
   });
 });
-
-function withoutLine(text: string, line: number): string {
-  const lines = text.split('\n');
-  lines.splice(line - 1, 1);
-  return lines.join('\n');
-}

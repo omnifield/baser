@@ -5,6 +5,7 @@ import {
   readSourceDeclaration,
 } from './declaration.js';
 import { codesOf, declarationBlock } from './form.fixture.js';
+import { CONSUMER_CONFIG_PATH } from './paths.js';
 import { FORM_VERSION, MIN_FORM_VERSION } from './version.js';
 
 /** Разбор, который обязан пройти, — чтобы отказы ниже читались как отличие. */
@@ -494,6 +495,58 @@ describe('объявление обвеса', () => {
       expect(
         codesOf(refusals({ layout: [{ src: 'a', dest: '../соседний/a' }] })),
       ).toEqual(['invalid-path @ baser.layout[0].dest']);
+    });
+
+    describe('артефакт поверх перечня поставленного', () => {
+      it('НАЗЫВАЕТ ОТДЕЛЬНОЙ ПРИЧИНОЙ, а не общим «путь непригоден»', () => {
+        // Обвес, кладущий файл поверх baser.json, снёс бы перечень, по которому
+        // его самого и нашли. Причина у отказа своя, значит и код свой
+        // (`tasker:BASER2-25`).
+        const problems = refusals({
+          layout: [{ src: 'a.json', dest: CONSUMER_CONFIG_PATH }],
+        });
+        expect(codesOf(problems)).toEqual([
+          'artifact-over-consumer-config @ baser.layout[0].dest',
+        ]);
+        expect(problems[0].message).toContain(CONSUMER_CONFIG_PATH);
+        expect(problems[0].message).toContain('перечень поставленного');
+      });
+
+      it('ловит и написание, которое нормализация сводит к тому же адресу', () => {
+        // `dest` — ключ владения и сравнивается уже нормализованным: иначе
+        // правило обходилось бы точкой и слешем.
+        expect(
+          codesOf(
+            refusals({
+              layout: [{ src: 'a.json', dest: `./${CONSUMER_CONFIG_PATH}` }],
+            }),
+          ),
+        ).toEqual(['artifact-over-consumer-config @ baser.layout[0].dest']);
+      });
+
+      it('СОСЕДНЯЯ ЗАПИСЬ РАЗБИРАЕТСЯ КАК ОБЫЧНО: непригодна запись, не обвес', () => {
+        const problems = refusals({
+          layout: [
+            { src: 'a.json.ejs', dest: 'tool/a.json' },
+            { src: 'config.json', dest: CONSUMER_CONFIG_PATH },
+            { src: 'b.bin', dest: 'tool/b.bin', render: false },
+          ],
+        });
+        // Ровно один отказ и ровно по второй записи — про первую и третью
+        // разбору сказать нечего.
+        expect(codesOf(problems)).toEqual([
+          'artifact-over-consumer-config @ baser.layout[1].dest',
+        ]);
+      });
+
+      it('ПАСПОРТ УКЛАДКИ ФОРМА НЕ ЗАЩИЩАЕТ: его имя — слово движка', () => {
+        // Третьей правды об этом событии не заводим: `dest`, целящийся в паспорт,
+        // ловит движок (`dest-is-manifest`) — он им и владеет.
+        const result = parse({
+          layout: [{ src: 'a.json', dest: 'baser.lock.json' }],
+        });
+        expect(result.ok).toBe(true);
+      });
     });
   });
 

@@ -1,5 +1,5 @@
 {
-  // baser devbox — Ф2 (kb:ADR-16 volume-workspace, kb:FUND-4 containers-only).
+  // baser-devbox — Ф2 (kb:ADR-16 volume-workspace, kb:FUND-4 containers-only).
   // ГРИНФИЛД на стандартном Dev Containers (adopt-not-invent, kb:ADR-20): upstream-образ +
   // features + native "Clone Repository in Container Volume". БЕЗ skeleton-скриптов
   // (devbox.sh/-manifest/-session/-services) и БЕЗ biome/GH-Packages — это devopser-legacy.
@@ -44,7 +44,7 @@
 
   "customizations": {
     "vscode": {
-      // baser-стек = prettier + Nx (НЕ biome). Дополняет .vscode/extensions.json репо.
+      // Расширения и форматтер — настройки обвеса. Дополняют .vscode/extensions.json репо.
       "extensions": ["esbenp.prettier-vscode", "nrwl.angular-console"],
       "settings": {
         "editor.formatOnSave": true,
@@ -58,6 +58,6 @@
   // (kb:FUND-4 — исполнение/ассистент живут В контейнере, не на хосте).
   "onCreateCommand": "sudo corepack enable && npm install -g @anthropic-ai/claude-code@latest",
 
-  // Репо-зависимая настройка: права на общие тома, seed claude-онбординга, install по lock.
+  // Репо-зависимая настройка: права на общие тома, seed claude-онбординга, установка зависимостей.
   "postCreateCommand": "sudo chown -R node:node /home/node/.secrets /home/node/.local/share/pnpm/store && mkdir -p \"$CLAUDE_CONFIG_DIR\" && { [ -f \"$CLAUDE_CONFIG_DIR/.claude.json\" ] || printf '%s\\n' '{\"hasCompletedOnboarding\":true,\"hasTrustDialogAccepted\":true,\"theme\":\"dark\"}' > \"$CLAUDE_CONFIG_DIR/.claude.json\"; } && pnpm install --frozen-lockfile"
 }

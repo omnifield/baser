@@ -1,0 +1,9 @@
+{
+  "fixtures": {
+    "kit": {
+      "version": "1.0.0",
+      "resolved": "sha256:9c1f3b0a5e7d4c28b6a1f0e93d5c7b2a4f8e6d1c0b9a8f7e6d5c4b3a2f1e0d9c",
+      "integrity": "sha256:9c1f3b0a5e7d4c28b6a1f0e93d5c7b2a4f8e6d1c0b9a8f7e6d5c4b3a2f1e0d9c"
+    }
+  }
+}
