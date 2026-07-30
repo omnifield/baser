@@ -33,6 +33,51 @@ if (secretsVolume) mounts.push(`source=${secretsVolume},target=${home}/.secrets,
 if (pnpmStoreVolume) mounts.push(`source=${pnpmStoreVolume},target=${home}/.local/share/pnpm/store,type=volume`);
 const mountTargets = mounts.map((m) => m.split(',')[1].slice('target='.length));
 
+// ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ КОНТЕЙНЕРА: три источника и один запрет.
+//
+// Считанное обвесом (секрет-модель от `secretsVolume`, адрес стора от
+// `pnpmStoreVolume`) продуктовым слоем НЕ перекрывается: значения выведены из
+// других настроек, и «победил последний» здесь означал бы девбокс, у которого
+// креды ищутся не там, где лежат. Столкновение — названный отказ (tasker:BASER2-107).
+const env = new Map();
+if (secretsVolume) {
+  env.set('CLAUDE_CONFIG_DIR', `${home}/.secrets/claude`);
+  env.set('GIT_CONFIG_GLOBAL', `${home}/.secrets/gitconfig`);
+  env.set('GH_CONFIG_DIR', `${home}/.secrets/gh`);
+  env.set('NPM_CONFIG_USERCONFIG', `${home}/.secrets/npmrc`);
+}
+
+const computedEnv = new Set(env.keys());
+const source = (key) => (key.endsWith('_STORE_DIR') ? 'pnpmStoreVolume' : 'secretsVolume');
+for (const raw of extraContainerEnv ?? []) {
+  const at = JSON.stringify(raw);
+  const cut = typeof raw === 'string' ? raw.indexOf('=') : -1;
+  if (cut < 1) {
+    refuse(
+      `настройка extraContainerEnv: строка ${at} не в форме КЛЮЧ=значение — ` +
+        'у формы нет карты, поэтому переменная выражается одной строкой со знаком равенства',
+    );
+  }
+  const key = raw.slice(0, cut);
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    refuse(
+      `настройка extraContainerEnv: "${key}" не годится в имя переменной окружения ` +
+        '(буквы, цифры и подчёркивание; первым символом не цифра)',
+    );
+  }
+  if (computedEnv.has(key)) {
+    refuse(
+      `настройка extraContainerEnv переопределяет ${key}, а его обвес считает сам ` +
+        `от настройки ${source(key)} (${env.get(key)}). Продуктовым слоем это значение не ` +
+        'перекрывается: убери строку из extraContainerEnv или сними настройку, которая его задаёт',
+    );
+  }
+  if (env.has(key)) {
+    refuse(`настройка extraContainerEnv: ${key} задан дважды — какое из значений верное, обвес не решает`);
+  }
+  env.set(key, raw.slice(cut + 1));
+}
+
 const runArgs = [];
 if (network) runArgs.push(`--network=${network}`, `--network-alias=${networkAlias}`);
 runArgs.push('--add-host=host.docker.internal:host-gateway', '--restart=unless-stopped');
@@ -223,6 +268,11 @@ postWhat.push('установка зависимостей');
 const list = (items) => items.map((v) => `    ${JSON.stringify(v)}`).join(',\n');
 const pairs = (entries) =>
   entries.map(([key, value]) => `    ${JSON.stringify(key)}: ${JSON.stringify(value)}`).join(',\n');
+
+// Комментарий над блоком переменных собирается из тех же частей, что и сам блок.
+const envWhat = [];
+if (secretsVolume) envWhat.push('секрет-модель');
+if (env.size > computedEnv.size) envWhat.push('продуктовые переменные');
 -%>
 {
   // <%- name %> — Ф2 (kb:ADR-16 volume-workspace, kb:FUND-4 containers-only).
@@ -246,14 +296,14 @@ const pairs = (entries) =>
 <%- list(runArgs) %>
   ],
 
+<% if (env.size) { -%>
+  // Переменные окружения контейнера: <%- envWhat.join(', ') %>.
 <% if (secretsVolume) { -%>
   // Секрет-модель (kb:FUND-4): креды/кэши — в named-volume'ах, ENV указывает в <%- home %>/.secrets.
   // Ничего не хардкодим в образ/репо; тома переживают recreate.
+<% } -%>
   "containerEnv": {
-    "CLAUDE_CONFIG_DIR": "<%- home %>/.secrets/claude",
-    "GIT_CONFIG_GLOBAL": "<%- home %>/.secrets/gitconfig",
-    "GH_CONFIG_DIR": "<%- home %>/.secrets/gh",
-    "NPM_CONFIG_USERCONFIG": "<%- home %>/.secrets/npmrc"
+<%- pairs([...env]) %>
   },
 
 <% } -%>
