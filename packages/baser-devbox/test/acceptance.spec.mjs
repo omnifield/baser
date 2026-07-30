@@ -223,7 +223,7 @@ const AS_WEBER = tuning({
   settings: {
     editorExtensions: ['biomejs.biome', 'nrwl.angular-console'],
     editorFormatter: 'biomejs.biome',
-    privateScope: '@omnifield',
+    npmScope: '@omnifield',
     installCommand: 'pnpm install',
   },
 });

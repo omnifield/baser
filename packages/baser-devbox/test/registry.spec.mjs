@@ -47,18 +47,18 @@ afterEach(() => {
 });
 
 /**
- * Кладёт обвес с заданным `privateScope` и вырезает из артефакта ШАГ ПРОВЕРКИ.
+ * Кладёт обвес с заданным `npmScope` и вырезает из артефакта ШАГ ПРОВЕРКИ.
  *
  * Профиль минимальный намеренно: без томов и ассистента шагов ровно два — проверка и
  * установка, — поэтому шаг отрезается по хвосту, а не выкусывается регуляркой. Заодно
  * это и есть доказательство порядка: проверка стоит ПЕРЕД установкой, иначе она
  * рассказывала бы про уже случившийся невнятный отказ.
  */
-function checkStep(privateScope = SCOPE) {
+function checkStep(npmScope = SCOPE) {
   consumer = installConsumer({
     repoName: 'weber',
     config: consumerConfig(),
-    tuning: tuning({ settings: { privateScope } }),
+    tuning: tuning({ settings: { npmScope } }),
   });
   return run({ command: 'apply', cwd: consumer.root }).then(() => {
     const post = parseJsonc(consumer.read(LIVE)).postCreateCommand;
@@ -190,7 +190,7 @@ describe('стена без указателя: проверка ловит об
       config: consumerConfig(),
       tuning: tuning({
         presets: ['omnifield'],
-        settings: { privateScope: SCOPE, installAssistant: false },
+        settings: { npmScope: SCOPE, installAssistant: false },
       }),
     });
     await run({ command: 'apply', cwd: consumer.root });
@@ -327,11 +327,140 @@ describe('внешнему потребителю приватный реест�
     const result = await run({ command: 'apply', cwd: consumer.root });
 
     const scope = soleRun(result).settings.find(
-      (setting) => setting.key === 'privateScope',
+      (setting) => setting.key === 'npmScope',
     );
     expect(scope.value).toBe(null);
     expect(scope.origin.kind).toBe('default');
     expect(consumer.read(LIVE)).not.toContain('npm whoami');
+  });
+});
+
+/**
+ * ТРИ СОСТОЯНИЯ SCOPE, И КАЖДОЕ ВЫРАЖЕНО ЗНАЧЕНИЕМ.
+ *
+ * Заявка weber с первой живой установки (`tasker:BASER2-103` пункт 4,
+ * `tasker:BASER2-105`), и требование к форме — их, дословно: «состояние обязано
+ * выражаться ЗНАЧЕНИЕМ настройки, а не её отсутствием, иначе по конфигу не
+ * отличить „скоуп публичный“ от „про скоуп забыли“, и гейт теряет смысл в обе
+ * стороны».
+ *
+ * | состояние            | `npmScope`    | `npmScopeIsPrivate` | проверка |
+ * | -------------------- | ------------- | ------------------- | -------- |
+ * | про scope не сказали | `null`        | (не значит ничего)  | нет      |
+ * | приватный            | `@omnifield`  | `true`              | ЕСТЬ     |
+ * | публичный            | `@omnifield`  | `false`             | нет      |
+ *
+ * Различает их КОНФИГ, а не артефакт: у второго и третьего состояний артефакт
+ * одинаковый — и это правильно, потому что делать в публичном случае нечего.
+ * Раньше третьего состояния не существовало вовсе.
+ */
+describe('scope публичный — сказано ЗНАЧЕНИЕМ, а не умолчанием', () => {
+  /** Раскладывает обвес и отдаёт артефакт вместе с настройками прогона. */
+  async function withScope(settings) {
+    consumer = installConsumer({
+      repoName: 'weber',
+      config: consumerConfig(),
+      tuning: tuning({ settings }),
+    });
+    const result = await run({ command: 'apply', cwd: consumer.root });
+    const value = (key) =>
+      soleRun(result).settings.find((setting) => setting.key === key);
+    return { text: consumer.read(LIVE), value };
+  }
+
+  it('публичный scope: проверки в артефакте нет, а в конфиге scope НАЗВАН', async () => {
+    const { text, value } = await withScope({
+      npmScope: SCOPE,
+      npmScopeIsPrivate: false,
+    });
+
+    // Артефакт — как у того, кто про реестр вообще не говорил: делать нечего.
+    expect(text).not.toContain('npm whoami');
+    expect(text).not.toContain('_authToken');
+    expect(parseJsonc(text).postCreateCommand).toBe(INSTALL);
+
+    // А конфиг говорит РОВНО ТО, ЧТО ЕСТЬ: scope такой-то, и он публичный.
+    // Оба значения заполнены человеком — «подумали» видно по origin, а не по
+    // догадке читателя.
+    expect(value('npmScope').value).toBe(SCOPE);
+    expect(value('npmScope').ours).toBe(false);
+    expect(value('npmScopeIsPrivate').value).toBe(false);
+    expect(value('npmScopeIsPrivate').ours).toBe(false);
+  });
+
+  it('«публичный» и «про scope забыли» РАЗЛИЧИМЫ, хотя артефакт один', async () => {
+    const publicScope = await withScope({
+      npmScope: SCOPE,
+      npmScopeIsPrivate: false,
+    });
+    const publicText = publicScope.text;
+    const named = publicScope.value('npmScope').value;
+    consumer.cleanup();
+    consumer = null;
+
+    const silent = await withScope({});
+
+    // Артефакты совпадают по существу — в обоих нет ни строки про реестр.
+    expect(parseJsonc(silent.text).postCreateCommand).toBe(
+      parseJsonc(publicText).postCreateCommand,
+    );
+    // А состояния разные, и разница читается значением, а не отсутствием:
+    // там scope назван, здесь его нет вовсе. Ровно то, чего просил потребитель.
+    expect(named).toBe(SCOPE);
+    expect(silent.value('npmScope').value).toBe(null);
+    expect(silent.value('npmScope').ours).toBe(true);
+  });
+
+  it('ДЕНЬ ADR-19: публичный scope не встаёт стеной там, где приватный встаёт', async () => {
+    // Живой сценарий заявки, исполняемый: `@omnifield/*` стал публичным, пин в
+    // user-конфиге больше не нужен, `npm config get` возвращает `undefined`.
+    // Приватный профиль в этом окружении ОСТАНАВЛИВАЕТ установку — и правильно
+    // делает. Публичный обязан пройти, и проходит он не потому, что проверка
+    // смолчала, а потому, что её в артефакте нет вовсе.
+    const step = await checkStep();
+    const env = npmrc();
+    expect(
+      (await sh(step, env)).code,
+      'приватный профиль обязан вставать стеной',
+    ).toBe(1);
+    consumer.cleanup();
+    consumer = null;
+
+    const { text } = await withScope({
+      npmScope: SCOPE,
+      npmScopeIsPrivate: false,
+    });
+    const post = parseJsonc(text).postCreateCommand;
+    const before = post.endsWith(INSTALL)
+      ? post.slice(0, -INSTALL.length).replace(/ && $/, '')
+      : post;
+
+    // Всё, что публичный профиль делает до установки, — ничто. Исполняем это
+    // ничто в том же окружении: отказу взяться неоткуда.
+    expect(before).toBe('');
+    expect((await sh(before || 'true', env)).code).toBe(0);
+  });
+
+  it('приватность по умолчанию: заполнил только scope — проверка ЕСТЬ', async () => {
+    // Дефолт `true` выбран не по симметрии. Заполняет `npmScope` тот, у кого
+    // scope есть, а публичный scope регулировки не требует вовсе — значит
+    // умолчание обязано сохранять сегодняшнее поведение. Потерять гейт молча
+    // дороже, чем получить его громко: гейт говорит, чем чинить, а его молчание
+    // не говорит ничего.
+    const { text, value } = await withScope({ npmScope: SCOPE });
+
+    expect(value('npmScopeIsPrivate').value).toBe(true);
+    expect(value('npmScopeIsPrivate').ours).toBe(true);
+    expect(text).toContain('npm whoami');
+  });
+
+  it('без scope булева не значит ничего — проверке нечего проверять', async () => {
+    // Комбинация «приватность есть, scope нет» законна и инертна: настройки
+    // отвечают на разные вопросы и совпадать не обязаны. Артефакт молчит.
+    const { text } = await withScope({ npmScopeIsPrivate: true });
+
+    expect(parseJsonc(text).postCreateCommand).toBe(INSTALL);
+    expect(text).not.toContain('registry');
   });
 });
 
@@ -342,7 +471,7 @@ describe('проверка стоит ПЕРЕД установкой, а не �
       config: consumerConfig(),
       tuning: tuning({
         presets: ['omnifield'],
-        settings: { privateScope: SCOPE },
+        settings: { npmScope: SCOPE },
       }),
     });
     await run({ command: 'apply', cwd: consumer.root });

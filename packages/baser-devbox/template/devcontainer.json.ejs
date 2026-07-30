@@ -74,20 +74,28 @@ const npmrc = secretsVolume
 // Проверка доступа к приватному реестру ДО установки зависимостей.
 // Без неё npm идёт в npmjs.org и отвечает «404, пакета нет» — человек идёт искать
 // несуществующий пакет вместо своих кредов. Стена без указателя.
-// Внешнему потребителю не нужна вовсе: scope не задан — в артефакте нет ни строки.
+//
+// УСЛОВИЙ ДВА, И ОНИ ПРО РАЗНОЕ: есть ли у репозитория scope (`npmScope`) и лежит
+// ли он в приватном реестре (`npmScopeIsPrivate`). Раньше состояние было одно —
+// «scope задан» — и «публичный scope» выражался ОТСУТСТВИЕМ значения, то есть
+// неотличимо от «про scope забыли» (`tasker:BASER2-105`). Цена этой неразличимости
+// назначена: в день, когда @omnifield станет публичным (`kb:ADR-19`), пин в
+// user-конфиге перестанет быть нужен, `npm config get` вернёт `undefined` — и
+// проверка уронила бы ПРАВИЛЬНО настроенный девбокс, прочитав это как «реестр не
+// настроен». У всех сразу.
 const say = (...args) => `printf '%s\\n' ${args.join(' ')} >&2`;
 const q = (line) => `'[devbox] ${line}'`;
-const registryCheck = privateScope && [
+const registryCheck = npmScope && npmScopeIsPrivate && [
   '(',
-  `reg=$(npm config get ${privateScope}:registry);`,
+  `reg=$(npm config get ${npmScope}:registry);`,
   'case "$reg" in',
   'http*) ;;',
   '*)',
   say(
-    q(`Пакеты ${privateScope}/* тянутся из приватного реестра, а он не настроен.`),
+    q(`Пакеты ${npmScope}/* тянутся из приватного реестра, а он не настроен.`),
     q('Установка пойдёт в npmjs.org и ответит «404, пакета нет» — хотя пакет есть, нет доступа.'),
     q(`Настрой доступ в ${npmrc}:`),
-    q(`  npm config set ${privateScope}:registry <адрес-реестра> --location=user`),
+    q(`  npm config set ${npmScope}:registry <адрес-реестра> --location=user`),
     q('  npm config set //<хост-реестра>/:_authToken <токен> --location=user'),
   ),
   '; exit 1;;',
@@ -96,7 +104,7 @@ const registryCheck = privateScope && [
   'npm whoami --registry="$reg" --fetch-retries=0 >/dev/null 2>&1 ||',
   '{',
   say(
-    q(`Реестр для ${privateScope} настроен, а доступа к нему нет: токен не положен или протух.`),
+    q(`Реестр для ${npmScope} настроен, а доступа к нему нет: токен не положен или протух.`),
     '"[devbox]   реестр: $reg"',
     '"[devbox]   проверка руками: npm whoami --registry=$reg"',
     q(`Положи токен в ${npmrc}:`),
