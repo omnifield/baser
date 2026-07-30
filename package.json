@@ -2,7 +2,9 @@
   "name": "@omnifield/baser-source",
   "version": "0.0.0",
   "license": "MIT",
-  "scripts": {},
+  "scripts": {
+    "verify": "nx run-many -t test typecheck build --skip-nx-cache"
+  },
   "private": true,
   "dependencies": {},
   "devDependencies": {
