@@ -32,11 +32,27 @@ const BLOCK = declarationBlock({
     },
     network: { title: 'Сеть', type: 'string', default: null },
     installAssistant: { title: 'Ассистент', type: 'boolean', default: false },
+    features: {
+      title: 'Фичи и их опции',
+      type: 'map',
+      of: 'map',
+      default: { 'ghcr.io/фикстура/gh:1': {} },
+    },
+    extraEnv: {
+      title: 'Переменные окружения',
+      type: 'map',
+      of: 'string',
+      default: {},
+    },
   },
   presets: {
     omnifield: {
       title: 'Раскладка omnifield',
-      values: { network: 'omnifield-gateway', installAssistant: true },
+      values: {
+        network: 'omnifield-gateway',
+        installAssistant: true,
+        features: { 'ghcr.io/фикстура/uv:1': { version: '0.11' } },
+      },
     },
   },
 });
@@ -86,6 +102,8 @@ describe('разрешение значений', () => {
       installCommand: 'pnpm install',
       network: null,
       installAssistant: false,
+      features: { 'ghcr.io/фикстура/gh:1': {} },
+      extraEnv: {},
     });
     expect(result.value.origins['name']).toEqual({
       kind: 'computed',
@@ -168,6 +186,110 @@ describe('разрешение значений', () => {
     expect(codesOf(result.problems)).toEqual([
       `value-type-mismatch @ ${MINE}.settings.installAssistant`,
     ]);
+  });
+
+  describe('составной тип — карта', () => {
+    it('ПРЕСЕТ ЗАМЕНЯЕТ КАРТУ ЦЕЛИКОМ, а не сливает её с дефолтом', () => {
+      const result = resolve({ presets: ['omnifield'] });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      // Ключа дефолта в разрешённом значении НЕТ: слейся карты, убрать его было
+      // бы нечем — только надгробием, то есть словарём внутри значения.
+      expect(result.value.values['features']).toEqual({
+        'ghcr.io/фикстура/uv:1': { version: '0.11' },
+      });
+      // Происхождение осталось ОДНИМ — на нём стоит рассказ двери про движение.
+      expect(result.value.origins['features']).toEqual({
+        kind: 'preset',
+        preset: 'omnifield',
+      });
+    });
+
+    it('заполненное бьёт пресет тем же правилом — картой целиком', () => {
+      const result = resolve({
+        presets: ['omnifield'],
+        settings: { features: {} },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      // Пустая карта — это сказанное «фич нет», а не «не заполнено».
+      expect(result.value.values['features']).toEqual({});
+      expect(result.value.origins['features']).toEqual({ kind: 'filled' });
+    });
+
+    it('ОБЪЯВЛЕНА КАРТА, ЗАПОЛНЕН СПИСОК: отказ показывает, ЧТО ДЕЛАТЬ', () => {
+      // Так выглядит переход у двух живых потребителей (`tasker:BASER2-116`):
+      // вчера настройка была списком ссылок, и человек написал не опечатку.
+      const result = resolve({
+        settings: { features: ['ghcr.io/фикстура/uv:1'] },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+
+      expect(codesOf(result.problems)).toEqual([
+        `value-type-mismatch @ ${MINE}.settings.features`,
+      ]);
+      const [{ message }] = result.problems;
+      // Тип назван полностью: «просто карта» не сказала бы, чем её заполнять.
+      expect(message).toContain('map «ключ → map»');
+      // Правка показана строкой ЧЕЛОВЕКА, а не абстрактной «ссылкой».
+      expect(message).toContain(
+        '"- ghcr.io/фикстура/uv:1" замени на "ghcr.io/фикстура/uv:1: {}"',
+      );
+      expect(message).toContain('опции пиши под ней с отступом');
+    });
+
+    it('у карты скаляров подсказка своя — пара «ключ=значение» разбирается', () => {
+      const result = resolve({ settings: { extraEnv: ['TZ=UTC'] } });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.problems[0].message).toContain(
+        '"- TZ=UTC" замени на "TZ: UTC"',
+      );
+    });
+
+    it('ВТОРОЙ ЭТАЖ ПРОВЕРЯЕТСЯ: of: "map" ждёт карту опций, а не скаляр', () => {
+      // Ссылка без опций пишется как `{}`, а не как строка: у ключа карты
+      // обязано быть значение, и `of` говорит, какое именно.
+      const result = resolve({
+        settings: { features: { 'ghcr.io/фикстура/uv:1': '0.11' } },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(codesOf(result.problems)).toEqual([
+        `value-type-mismatch @ ${MINE}.settings.features`,
+      ]);
+      expect(result.problems[0].message).toContain('map «ключ → map»');
+    });
+
+    it('третий этаж не доезжает даже до сверки с объявлением', () => {
+      // Разбор файла настроек судит ФОРМУ значения и знать объявление для этого
+      // не обязан: третьего этажа нет ни при каком `of`, поэтому отказ приходит
+      // раньше — от чтения конфига, а не от сверки пары.
+      const parsed = parseSourceConfig(
+        {
+          [SOURCE_CONFIG_KEY]: {
+            settings: { features: { ссылка: { опции: { глубже: 'некуда' } } } },
+          },
+        },
+        CONFIG_AT,
+      );
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(codesOf(parsed.problems)).toEqual([
+        `wrong-type @ ${MINE}.settings.features`,
+      ]);
+    });
+
+    it('карта скаляров не принимает карту значением — of назван не зря', () => {
+      const result = resolve({
+        settings: { extraEnv: { TZ: { значение: 'UTC' } } },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.problems[0].message).toContain('map «ключ → string»');
+    });
   });
 
   describe('вычисляемый дефолт', () => {

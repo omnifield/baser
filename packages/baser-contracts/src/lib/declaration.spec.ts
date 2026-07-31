@@ -99,8 +99,19 @@ describe('объявление обвеса', () => {
     });
 
     it('первая форма — уже не самая старая разбираемая', () => {
-      expect(MIN_FORM_VERSION).toBe(FORM_VERSION);
       expect(MIN_FORM_VERSION).toBeGreaterThan(1);
+      expect(MIN_FORM_VERSION).toBeLessThanOrEqual(FORM_VERSION);
+    });
+
+    it('ФОРМА 2 РАЗБИРАЕТСЯ ТРЕТЬЕЙ: третья только добавила тип', () => {
+      // Граница разбираемого проходит там, где поля ПЕРЕЕЗЖАЛИ (1 → 2), а не на
+      // каждом подъёме номера. Иначе подъём формы требовал бы правки от каждого
+      // выпущенного обвеса ради возможности, которой он не пользуется, — и
+      // заставлял бы живых потребителей мигрировать лишний раз.
+      const прежний = parse({ formVersion: 2 });
+      expect(прежний.ok).toBe(true);
+      if (!прежний.ok) return;
+      expect(прежний.value.settings['name'].type).toBe('string');
     });
 
     it('не принимает версию строкой или дробью', () => {
@@ -258,11 +269,187 @@ describe('объявление обвеса', () => {
           .ok,
       ).toBe(true);
 
+      expect(
+        parse({
+          settings: {
+            m: { title: 'M', type: 'map', of: 'string', default: null },
+          },
+        }).ok,
+      ).toBe(true);
+
       // Выключенный флаг — это false, а не отсутствие флага.
       const problems = refusals({
         settings: { b: { title: 'B', type: 'boolean', default: null } },
       });
-      expect(problems[0].message).toContain('только для string и list');
+      expect(problems[0].message).toContain('только для string, list и map');
+    });
+
+    describe('составной тип — карта', () => {
+      it('разбирает карту и запоминает, чем бывают её значения', () => {
+        const parsed = parse({
+          settings: {
+            features: {
+              title: 'Фичи и опции',
+              type: 'map',
+              of: 'map',
+              default: { 'ghcr.io/фикстура/uv:1': { version: '0.11' } },
+            },
+          },
+        });
+        expect(parsed.ok).toBe(true);
+        if (!parsed.ok) return;
+
+        const spec = parsed.value.settings['features'];
+        expect([spec.type, spec.of]).toEqual(['map', 'map']);
+        expect(spec.default).toEqual({
+          'ghcr.io/фикстура/uv:1': { version: '0.11' },
+        });
+      });
+
+      it('ТРЕБУЕТ СЛОВО of: без него тип карты НЕПОЛОН', () => {
+        // «Просто карта» приняла бы значение любой глубины — то есть ровно то,
+        // от чего форма уводит. Отказ поэтому свой, а не общий «нет поля».
+        const problems = refusals({
+          settings: {
+            features: { title: 'Фичи', type: 'map', default: {} },
+          },
+        });
+        expect(codesOf(problems)).toEqual([
+          'map-value-type @ baser.settings.features.of',
+        ]);
+        expect(problems[0].message).toContain(
+          'string | number | boolean | map',
+        );
+      });
+
+      it('СЛОВАРЬ ЗАКРЫТ: of — слово, а не выражение типа', () => {
+        const problems = refusals({
+          settings: {
+            features: {
+              title: 'Фичи',
+              type: 'map',
+              of: 'map(string)',
+              default: {},
+            },
+          },
+        });
+        expect(codesOf(problems)).toEqual([
+          'map-value-type @ baser.settings.features.of',
+        ]);
+        expect(problems[0].message).toContain('вложить его само в себя нечем');
+      });
+
+      it('of у не-карты называется вслух, а не пропускается', () => {
+        const problems = refusals({
+          settings: {
+            name: { title: 'Имя', type: 'string', of: 'string', default: 'x' },
+          },
+        });
+        expect(codesOf(problems)).toEqual([
+          'map-value-type @ baser.settings.name.of',
+        ]);
+      });
+
+      it('сверяет дефолт с ОБОИМИ этажами объявленного типа', () => {
+        // Значение не того типа, что обещало `of`.
+        expect(
+          codesOf(
+            refusals({
+              settings: {
+                env: {
+                  title: 'Переменные',
+                  type: 'map',
+                  of: 'string',
+                  default: { TZ: 42 },
+                },
+              },
+            }),
+          ),
+        ).toEqual(['value-type-mismatch @ baser.settings.env.default']);
+
+        // Третий этаж: опции обязаны быть плоскими скалярами, и это граница
+        // самой целевой спеки, а не наше «двух хватит».
+        expect(
+          codesOf(
+            refusals({
+              settings: {
+                features: {
+                  title: 'Фичи',
+                  type: 'map',
+                  of: 'map',
+                  default: { ссылка: { опции: { глубже: 'некуда' } } },
+                },
+              },
+            }),
+          ),
+        ).toEqual(['value-type-mismatch @ baser.settings.features.default']);
+      });
+
+      it('ОПЦИИ ОДНОЙ ССЫЛКИ РАЗНОРОДНЫ — так их объявляет чужая спека', () => {
+        // `{"version": "3.10", "pip": false}` — строка и флаг в одной карте.
+        // Однородной её сделать значило бы не выразить то, ради чего тип заведён.
+        expect(
+          parse({
+            settings: {
+              features: {
+                title: 'Фичи',
+                type: 'map',
+                of: 'map',
+                default: {
+                  'ghcr.io/ф/python:1': { version: '3.10', pip: false },
+                },
+              },
+            },
+          }).ok,
+        ).toBe(true);
+      });
+
+      it('null и {} — разные состояния, и оба законны', () => {
+        const parsed = parse({
+          settings: {
+            нет: {
+              title: 'Не задано',
+              type: 'map',
+              of: 'string',
+              default: null,
+            },
+            пусто: { title: 'Пусто', type: 'map', of: 'string', default: {} },
+          },
+        });
+        expect(parsed.ok).toBe(true);
+        if (!parsed.ok) return;
+        expect(parsed.value.settings['нет'].default).toBeNull();
+        expect(parsed.value.settings['пусто'].default).toEqual({});
+      });
+
+      it('ФОРМА 2 СОСТАВНОГО ТИПА НЕ ЗНАЛА — сказано, что поднять', () => {
+        const problems = refusals({
+          formVersion: 2,
+          settings: {
+            features: { title: 'Фичи', type: 'map', of: 'map', default: {} },
+          },
+        });
+        expect(codesOf(problems)).toEqual([
+          'form-version-unsupported @ baser.settings.features.type',
+        ]);
+        expect(problems[0].message).toContain('подними "formVersion" до 3');
+      });
+
+      it('и словарь типов в отказе — по ОБЪЯВЛЕННОЙ форме, а не по текущей', () => {
+        // Советовать формой 2 тип, который этот же разбор следующей строкой
+        // отвергнет, значит послать человека по кругу.
+        const [старый] = refusals({
+          formVersion: 2,
+          settings: { x: { title: 'X', type: 'карта', default: null } },
+        });
+        expect(старый.message).toContain('string · number · boolean · list,');
+        expect(старый.message).not.toContain('· map');
+
+        const [новый] = refusals({
+          settings: { x: { title: 'X', type: 'карта', default: null } },
+        });
+        expect(новый.message).toContain('list · map');
+      });
     });
 
     it('требует имя настройки для человека', () => {

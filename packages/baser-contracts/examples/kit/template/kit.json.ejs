@@ -3,12 +3,33 @@
 // сборка значений. Внутри тега — обычный JavaScript: локальные переменные,
 // стрелочные функции, JSON.stringify (§5в доки зоны).
 const quoted = (items) => items.map((item) => JSON.stringify(item)).join(', ');
+// Карта в артефакт едет картой — целевая спека её такой и ждёт. Разворачивать
+// её из списка в шаблоне больше не надо, и проверять уникальность ключа тоже:
+// повтор ловит сам формат, ещё при чтении файла настроек.
+const inline = (map) => {
+  const pairs = Object.entries(map).map(
+    ([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)}`,
+  );
+  return pairs.length ? `{ ${pairs.join(', ')} }` : '{}';
+};
+// Верхний этаж — по строке на ключ: артефакт читает человек, а ссылок бывает
+// много. Нижний остаётся в строке — опции по спеке плоские и короткие.
+const block = (map, indent) =>
+  Object.entries(map)
+    .map(([key, value]) => `${indent}${JSON.stringify(key)}: ${inline(value)}`)
+    .join(',\n');
 -%>
 {
   "name": "<%- name %>",
   "stamp": "<%- stamp %>",
   "retries": <%- retries %>,
   "labels": [<%- quoted(labels) %>],
+  "tools": {
+<%- block(tools, '    ') %>
+  },
+<% if (env) { -%>
+  "env": <%- inline(env) %>,
+<% } -%>
 <% if (store) { -%>
   "mounts": [<%- quoted([`${store}:/work/cache`]) %>],
 <% } -%>

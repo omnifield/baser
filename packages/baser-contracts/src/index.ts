@@ -15,7 +15,11 @@
  * который держит только соседняя зона, — не инвариант.
  */
 
-export { FORM_VERSION, MIN_FORM_VERSION } from './lib/version.js';
+export {
+  FORM_VERSION,
+  MAP_TYPE_SINCE,
+  MIN_FORM_VERSION,
+} from './lib/version.js';
 export type { FormVersion } from './lib/version.js';
 
 export { describeProblems, ProblemLog } from './lib/problems.js';
@@ -29,12 +33,25 @@ export { byBytes, checkPath, PATH_PROBLEM } from './lib/paths.js';
 export type { CheckedPath, PathProblem } from './lib/paths.js';
 
 export {
+  describeShape,
   describeValue,
+  isMapValueType,
+  isPossibleSettingValue,
   isSettingType,
+  MAP_VALUE_TYPES,
   matchesType,
   SETTING_TYPES,
+  typeMismatchHint,
 } from './lib/values.js';
-export type { SettingType, SettingValue } from './lib/values.js';
+export type {
+  MapValueType,
+  ScalarMap,
+  ScalarValue,
+  SettingMap,
+  SettingType,
+  SettingValue,
+  ValueShape,
+} from './lib/values.js';
 
 export {
   DECLARATION_BLOCK,

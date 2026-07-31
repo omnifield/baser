@@ -247,12 +247,35 @@ describe('файл настроек обвеса — КАК НАСТРОЕНО',
   });
 
   it('отказывает значению настройки, которое значением быть не может', () => {
-    const result = tuning({ settings: { a: { вложенный: 'объект' } } });
+    // Третий этаж — не значение настройки ни при каком объявлении: словарь `of`
+    // закрыт, и вложить карту в карту в карту нечем (`values.ts`).
+    const result = tuning({
+      settings: { a: { фича: { опции: { глубже: 'некуда' } } } },
+    });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(codesOf(result.problems)).toEqual([
       `wrong-type @ ${CONFIG_AT}.${SOURCE_CONFIG_KEY}.settings.a`,
     ]);
+    expect(result.problems[0].message).toContain('ПЛОСКАЯ карта опций');
+  });
+
+  it('КАРТА — ЗАКОННОЕ ЗНАЧЕНИЕ, и оба её этажа разбираются', () => {
+    // Разбор потребителя объявления ещё не видел: он судит не тип, а ФОРМУ
+    // значения. Сверка с объявленным типом — дальше и в другом месте.
+    const result = tuning({
+      settings: {
+        features: { 'ghcr.io/фикстура/uv:1': { version: '0.11', pip: false } },
+        env: { TZ: 'UTC' },
+        пусто: {},
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.settings['features']).toEqual({
+      'ghcr.io/фикстура/uv:1': { version: '0.11', pip: false },
+    });
+    expect(result.value.settings['пусто']).toEqual({});
   });
 
   it('называет повторённый пресет — порядок пресетов значим', () => {
