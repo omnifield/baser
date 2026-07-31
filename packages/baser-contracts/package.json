@@ -13,6 +13,12 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./locate": {
+      "@omnifield/baser-source": "./src/locate.ts",
+      "types": "./dist/locate.d.ts",
+      "import": "./dist/locate.js",
+      "default": "./dist/locate.js"
     }
   },
   "files": [
