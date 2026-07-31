@@ -40,9 +40,11 @@ import {
   LIVE,
   parseJsonc,
   tuning,
+  tuningPath,
 } from './packed.mjs';
 
 const GITHUB_CLI = 'ghcr.io/devcontainers/features/github-cli:1';
+const UV = 'ghcr.io/va-h/devcontainers-features/uv:1';
 
 let consumer = null;
 let boxes = [];
@@ -129,17 +131,48 @@ describe('МЕХАНИКА: список фич выражается настр�
     const { json } = await materialize();
 
     expect(Object.keys(json.features)).toEqual([GITHUB_CLI]);
-    // Опции у фичи по умолчанию: карты в форме настроек нет, и список строк это
-    // ровно то, что он есть, — ссылка без опций.
+    // Пустые опции — это ЗНАЧЕНИЕ, а не отсутствие: «опций у фичи нет» сказано
+    // картой, а не умолчанием формы.
     expect(json.features[GITHUB_CLI]).toEqual({});
+  });
+
+  it('ВЕРСИЯ ИНСТРУМЕНТА выражается опцией — ради этого форма и поднялась', async () => {
+    // Живой случай `tasker:BASER2-116`: brainer пинует uv (`>=0.11,<0.12`), а
+    // фича без опций привозит latest. Инструмент появился бы, а каденс не ожил —
+    // просто с другим сообщением. Тег в ссылке это версия ФИЧИ, не того, что она
+    // ставит; версия инструмента живёт ровно здесь.
+    const { json } = await materialize({
+      devcontainerFeatures: {
+        [GITHUB_CLI]: {},
+        [UV]: { version: '0.11' },
+      },
+    });
+
+    expect(json.features[UV]).toEqual({ version: '0.11' });
+  });
+
+  it('опции РАЗНОРОДНЫ — так их объявляет чужая спека, и мы её не переписываем', async () => {
+    const { json } = await materialize({
+      devcontainerFeatures: {
+        'ghcr.io/devcontainers/features/python:1': {
+          version: '3.12',
+          installTools: false,
+        },
+      },
+    });
+
+    expect(json.features['ghcr.io/devcontainers/features/python:1']).toEqual({
+      version: '3.12',
+      installTools: false,
+    });
   });
 
   it('полиглот добавляет свой тулчейн НАСТРОЙКОЙ, а не форком обвеса', async () => {
     const { json } = await materialize({
-      devcontainerFeatures: [
-        GITHUB_CLI,
-        'ghcr.io/devcontainers/features/python:1',
-      ],
+      devcontainerFeatures: {
+        [GITHUB_CLI]: {},
+        'ghcr.io/devcontainers/features/python:1': {},
+      },
     });
 
     expect(Object.keys(json.features)).toEqual([
@@ -148,13 +181,13 @@ describe('МЕХАНИКА: список фич выражается настр�
     ]);
   });
 
-  it('список ЗАМЕНЯЕТ дефолт целиком — обвес не дописывает своё молча', async () => {
+  it('карта ЗАМЕНЯЕТ дефолт целиком — обвес не дописывает своё молча', async () => {
     // Дописывать github-cli к чужому списку значило бы, что снять его нельзя
     // вовсе. Форматтер обвес в список добавляет, и это НЕ противоречие: там
     // «форматтер задан» и «расширение стоит» — одно утверждение, а здесь два
     // разных инструмента.
     const { json } = await materialize({
-      devcontainerFeatures: ['ghcr.io/devcontainers/features/go:1'],
+      devcontainerFeatures: { 'ghcr.io/devcontainers/features/go:1': {} },
     });
 
     expect(Object.keys(json.features)).toEqual([
@@ -162,8 +195,8 @@ describe('МЕХАНИКА: список фич выражается настр�
     ]);
   });
 
-  it('пустой список — блока features в артефакте нет вовсе', async () => {
-    const { json, text } = await materialize({ devcontainerFeatures: [] });
+  it('пустая карта — блока features в артефакте нет вовсе', async () => {
+    const { json, text } = await materialize({ devcontainerFeatures: {} });
 
     expect(json.features).toBeUndefined();
     expect(text).not.toContain('"features"');
@@ -171,16 +204,39 @@ describe('МЕХАНИКА: список фич выражается настр�
     expect(json.image).toContain('typescript-node');
   });
 
-  it('дубль в списке — НАЗВАННЫЙ отказ: в артефакте это один ключ', async () => {
+  it('СПИСОК вчерашнего дня — отказ, который ПОКАЗЫВАЕТ правку', async () => {
+    // Ломающее названо, а не оставлено на догадку: двое живых потребителей
+    // держат эту настройку списком, и отказ обязан быть минутной правкой, а не
+    // походом в доку. Пример берётся из строки САМОГО человека.
     const { result, text } = await materialize({
-      devcontainerFeatures: [GITHUB_CLI, GITHUB_CLI],
+      devcontainerFeatures: [GITHUB_CLI, UV],
     });
 
     expect(text).toBe(null);
+    const said = result.problems.map((problem) => problem.message).join('\n');
     expect(result.problems.map((problem) => problem.code)).toContain(
-      'render-failed',
+      'value-type-mismatch',
     );
-    expect(JSON.stringify(result.problems)).toContain('названа дважды');
+    expect(said).toContain(`"- ${GITHUB_CLI}" замени на "${GITHUB_CLI}: {}"`);
+    expect(said).toContain('опции пиши под ней с отступом');
+  });
+
+  it('повтор ссылки ловит сама форма — ручной проверки больше нет', async () => {
+    // Она была ценой того, что форма не выражала предмет: в списке повтор
+    // возможен, в карте — нет, и отвергает его разборщик YAML, а не мы.
+    consumer = installConsumer({
+      repoName: 'brainer',
+      config: consumerConfig(),
+    });
+    consumer.write(
+      tuningPath(),
+      `baser:\n  settings:\n    devcontainerFeatures:\n      ${JSON.stringify(GITHUB_CLI)}: {}\n      ${JSON.stringify(GITHUB_CLI)}: {}\n`,
+    );
+
+    const result = await run({ command: 'apply', cwd: consumer.root });
+
+    expect(result.status).toBe('refused');
+    expect(JSON.stringify(result.problems)).toMatch(/uniq|повтор|duplicate/i);
   });
 });
 
@@ -292,10 +348,10 @@ describe('НЕ МОЛЧАТЬ: тулчейн, объявленный репоз
     // Поэтому «починил» здесь не декларация, а появившиеся команды — ровно то,
     // что делает с контейнером добавленная фича.
     const { json } = await materialize({
-      devcontainerFeatures: [
-        GITHUB_CLI,
-        'ghcr.io/devcontainers/features/python:1',
-      ],
+      devcontainerFeatures: {
+        [GITHUB_CLI]: {},
+        'ghcr.io/devcontainers/features/python:1': {},
+      },
     });
 
     const result = await sh(
@@ -341,7 +397,7 @@ describe('НЕ МОЛЧАТЬ: тулчейн, объявленный репоз
 });
 
 describe('план называет значение настройки до применения', () => {
-  it('список фич виден в ответе двери как НАШ, пока его не заполнили', async () => {
+  it('карта фич видна в ответе двери как НАША, пока её не заполнили', async () => {
     consumer = installConsumer({
       repoName: 'brainer',
       config: consumerConfig(),
@@ -352,7 +408,7 @@ describe('план называет значение настройки до п�
     const features = soleRun(result).settings.find(
       (setting) => setting.key === 'devcontainerFeatures',
     );
-    expect(features.value).toEqual([GITHUB_CLI]);
+    expect(features.value).toEqual({ [GITHUB_CLI]: {} });
     expect(features.ours).toBe(true);
   });
 });

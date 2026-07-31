@@ -31,7 +31,7 @@ import { run } from './run.js';
 import { renderText } from './report.js';
 import type { DoorResult, SourceRun } from './result.js';
 import { MANIFEST_PATH } from '@omnifield/baser-materialize';
-import { sourceConfigPath } from '@omnifield/baser-contracts';
+import { sourceConfigPath, FORM_VERSION } from '@omnifield/baser-contracts';
 
 const DEVBOX_ID = 'omnifield/devbox';
 const AGENTS_ID = 'omnifield/agent-harness';
@@ -229,7 +229,10 @@ describe('ЦЕЛЬ: два инструмента ставятся ОДНОЙ к
         sources: { use: string }[];
       },
     ).toEqual({
-      formVersion: 2,
+      // Числом здесь было `2`, и оно устарело молча: версию в засеянный конфиг
+      // ставит дверь, а не проба. Утверждается ФАКТ — «дверь проштамповала свою
+      // форму», — и следующий её подъём эту пробу не тронет.
+      formVersion: FORM_VERSION,
       sources: [{ use: DEVBOX_PACKAGE }, { use: AGENTS_PACKAGE }],
     });
     expect(consumer.exists(DEVCONTAINER)).toBe(true);

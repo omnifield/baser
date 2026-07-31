@@ -56,6 +56,7 @@ import type { Tree } from '@nx/devkit';
 import { parse, stringify } from 'yaml';
 import {
   sourceConfigPath,
+  FORM_VERSION,
   SOURCE_CONFIG_KEY,
 } from '@omnifield/baser-contracts';
 import {
@@ -443,7 +444,12 @@ function installExtraSource(
         // поля нет.
         ...(spec.version === null ? {} : { version: spec.version ?? '0.1.0' }),
         baser: {
-          formVersion: 2,
+          // Форма НЫНЕШНЯЯ, а не число: второй обвес изображает живой
+          // инструмент, а не выпущенный вчера. Числом здесь стояла `2`, и с
+          // подъёмом формы (`tasker:BASER2-116`) оно молча стало означать
+          // «обвес прошлой формы» — то есть проверяло бы совместимость там, где
+          // проба про неё не говорит ни слова.
+          formVersion: FORM_VERSION,
           source: {
             id: spec.id,
             title: spec.title ?? spec.id,

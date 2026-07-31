@@ -53,6 +53,7 @@ import {
   type FormResult,
   type ResolverContext,
   type ResolverRef,
+  type SettingMap,
   type SettingOrigin,
   type SettingType,
   type SettingValue,
@@ -312,14 +313,61 @@ function assertAgreesWithContracts(
   }
 }
 
+/**
+ * Одно ли это значение — ПО СОДЕРЖИМОМУ, а не по ссылке (`tasker:BASER2-118`).
+ *
+ * Составное значение — карта и список — приезжает сюда двумя дорогами: одно
+ * читали контракты, другое дверь. Совпадать они обязаны содержимым; требовать
+ * при этом ОДИН И ТОТ ЖЕ объект значило бы проверять не то, что написано в
+ * `assertAgreesWithContracts`, а случайность реализации: сегодня обе дороги
+ * ведут к одному объекту, завтра любая из них отдаст свою копию — и дверь
+ * назовёт расхождением значение, которое ни на йоту не менялось.
+ *
+ * Глубина ровно та, что есть у формы, и не глубже (`kb:BASER2-23`): карта
+ * настройки — два этажа, `имя → скаляр либо плоская карта опций`. Общего
+ * глубокого сравнения здесь нет намеренно — оно приняло бы за значение то, чего
+ * форма выразить не может, и молча.
+ */
 function sameValue(left: SettingValue, right: SettingValue): boolean {
-  if (Array.isArray(left) && Array.isArray(right)) {
+  if (Array.isArray(left) || Array.isArray(right)) {
     return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
       left.length === right.length &&
       left.every((item, index) => item === right[index])
     );
   }
+  if (isMap(left) || isMap(right)) {
+    return isMap(left) && isMap(right) && sameMap(left, right);
+  }
   return left === right;
+}
+
+/**
+ * Карта поэлементно: те же ключи, и у каждого то же значение.
+ *
+ * Вложенная карта опций разбирается той же функцией — не ради общности, а
+ * потому что это ТА ЖЕ форма: `of: "map"` означает плоскую карту скаляров, и
+ * третьего этажа в грамматике нет. Рекурсия здесь кончается на форме, а не на
+ * счётчике глубины.
+ */
+function sameMap(left: SettingMap, right: SettingMap): boolean {
+  const keys = Object.keys(left);
+  if (keys.length !== Object.keys(right).length) {
+    return false;
+  }
+  return keys.every((key) => {
+    const ours = left[key];
+    const theirs = right[key];
+    if (isMap(ours) || isMap(theirs)) {
+      return isMap(ours) && isMap(theirs) && sameMap(ours, theirs);
+    }
+    return ours === theirs;
+  });
+}
+
+function isMap(value: unknown): value is SettingMap {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

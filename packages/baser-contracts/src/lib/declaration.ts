@@ -25,14 +25,19 @@ import {
 } from './paths.js';
 import { ProblemLog, type FormResult } from './problems.js';
 import {
+  describeShape,
   describeValue,
+  isMapValueType,
   isSettingType,
+  MAP_VALUE_TYPES,
   matchesType,
   SETTING_TYPES,
+  typeMismatchHint,
+  type MapValueType,
   type SettingType,
   type SettingValue,
 } from './values.js';
-import { FORM_VERSION, MIN_FORM_VERSION } from './version.js';
+import { FORM_VERSION, MAP_TYPE_SINCE, MIN_FORM_VERSION } from './version.js';
 
 /** Ключ блока самообъявления в `package.json` обвеса. */
 export const DECLARATION_BLOCK = 'baser';
@@ -55,6 +60,11 @@ export interface SettingSpec {
   readonly title: string;
   readonly description?: string;
   readonly type: SettingType;
+  /**
+   * Чем бывают значения карты. Только у `type: "map"`, и там ОБЯЗАТЕЛЕН: без
+   * него тип неполон, и проверять значение было бы нечем (`values.ts`).
+   */
+  readonly of?: MapValueType;
   /** Литеральный дефолт. Ровно один из `default` / `defaultFrom`. */
   readonly default?: SettingValue;
   /** Вычисляемый дефолт — функция самого обвеса. */
@@ -120,6 +130,7 @@ const SETTING_FIELDS = new Set([
   'title',
   'description',
   'type',
+  'of',
   'default',
   'defaultFrom',
 ]);
@@ -212,7 +223,12 @@ export function parseSourceDeclaration(
   namedUnknownFields(log, value, BLOCK_FIELDS, at);
 
   const source = parseSource(log, value['source'], `${at}.source`);
-  const settings = parseSettings(log, value['settings'], `${at}.settings`);
+  const settings = parseSettings(
+    log,
+    value['settings'],
+    `${at}.settings`,
+    formVersion,
+  );
   const presets = parsePresets(
     log,
     value['presets'],
@@ -341,6 +357,7 @@ function parseSettings(
   log: ProblemLog,
   value: unknown,
   at: string,
+  formVersion: number,
 ): Record<string, SettingSpec> {
   const settings: Record<string, SettingSpec> = {};
 
@@ -358,7 +375,7 @@ function parseSettings(
   }
 
   for (const key of Object.keys(value).sort(byBytes)) {
-    const spec = parseSetting(log, value[key], `${at}.${key}`);
+    const spec = parseSetting(log, value[key], `${at}.${key}`, formVersion);
     if (spec) {
       settings[key] = spec;
     }
@@ -370,6 +387,7 @@ function parseSetting(
   log: ProblemLog,
   value: unknown,
   at: string,
+  formVersion: number,
 ): SettingSpec | null {
   if (!isPlainObject(value)) {
     log.add(
@@ -405,10 +423,31 @@ function parseSetting(
     log.add(
       rawType === undefined ? 'missing-field' : 'wrong-type',
       `${at}.type`,
-      `ожидался один из типов ${SETTING_TYPES.join(' · ')}, получено ${describeValue(rawType)}`,
+      `ожидался один из типов ${typesOfForm(formVersion).join(' · ')}, ` +
+        `получено ${describeValue(rawType)}`,
     );
     return null;
   }
+
+  // Тип, которого в объявленной форме не было, — отказ, а не тихое согласие.
+  // Версия говорит, по каким правилам читать остальное; принимать по форме 2
+  // то, что приехало формой 3, значит превратить версию в украшение.
+  if (rawType === 'map' && formVersion < MAP_TYPE_SINCE) {
+    log.add(
+      'form-version-unsupported',
+      `${at}.type`,
+      `составной тип "map" приехал формой ${MAP_TYPE_SINCE}, а объявление назвалось формой ` +
+        `${formVersion} — подними "formVersion" до ${MAP_TYPE_SINCE}. ` +
+        'Форма 3 только добавила тип: остальное объявление от подъёма не меняется',
+    );
+    return null;
+  }
+
+  const of = parseMapValueType(log, value['of'], at, rawType);
+  if (rawType === 'map' && of === undefined) {
+    return null;
+  }
+  const shape = { type: rawType, of };
 
   const hasDefault = 'default' in value;
   const hasResolver = value['defaultFrom'] !== undefined;
@@ -442,20 +481,22 @@ function parseSetting(
       : {
           title,
           type: rawType,
+          ...optionalOf(of),
           defaultFrom: ref,
           ...optionalDescription(value),
         };
   }
 
   const fallback = value['default'] as SettingValue;
-  if (!matchesType(rawType, fallback)) {
+  if (!matchesType(shape, fallback)) {
     log.add(
       'value-type-mismatch',
       `${at}.default`,
-      `настройка объявлена как ${rawType}, дефолт — ${describeValue(fallback)}` +
+      `настройка объявлена как ${describeShape(shape)}, дефолт — ${describeValue(fallback)}` +
         (fallback === null
-          ? ' (null означает «не задано» и разрешён только для string и list)'
-          : ''),
+          ? ' (null означает «не задано» и разрешён только для string, list и map)'
+          : '') +
+        typeMismatchHint(shape, fallback),
     );
     return null;
   }
@@ -463,9 +504,66 @@ function parseSetting(
   return {
     title,
     type: rawType,
+    ...optionalOf(of),
     default: fallback,
     ...optionalDescription(value),
   };
+}
+
+/**
+ * Слово `of` — тип значений карты.
+ *
+ * Проверяется ЗДЕСЬ, а не при сверке значения, потому что это часть объявления:
+ * карта без `of` непригодна сама по себе, независимо от того, что в неё потом
+ * заполнят.
+ *
+ * @returns слово либо `undefined`; у карты `undefined` означает названный отказ
+ */
+function parseMapValueType(
+  log: ProblemLog,
+  value: unknown,
+  at: string,
+  type: SettingType,
+): MapValueType | undefined {
+  if (type !== 'map') {
+    if (value !== undefined) {
+      log.add(
+        'map-value-type',
+        `${at}.of`,
+        `"of" говорит, чем бывают значения КАРТЫ, а настройка объявлена как ${type} — ` +
+          'либо убери "of", либо объяви "type": "map"',
+      );
+    }
+    return undefined;
+  }
+
+  if (value === undefined) {
+    log.add(
+      'map-value-type',
+      `${at}.of`,
+      'карта не сказала, чем бывают её значения — добавь "of": ' +
+        `${MAP_VALUE_TYPES.join(' | ')}. Без него тип неполон: «просто карта» приняла бы ` +
+        'значение любой глубины, то есть ровно то, от чего форма уводит',
+    );
+    return undefined;
+  }
+
+  if (!isMapValueType(value)) {
+    log.add(
+      'map-value-type',
+      `${at}.of`,
+      `ожидалось одно из ${MAP_VALUE_TYPES.join(' · ')}, получено ${describeValue(value)}. ` +
+        'Словарь закрыт: "of" — это слово, а не выражение типа, и вложить его само в себя нечем. ' +
+        'Значения карты — скаляры либо ПЛОСКАЯ карта опций, и глубже целевые спеки не ходят',
+    );
+    return undefined;
+  }
+
+  return value;
+}
+
+function optionalOf(of: MapValueType | undefined): { of?: MapValueType } {
+  return of === undefined ? {} : { of };
 }
 
 function optionalDescription(value: Record<string, unknown>): {
@@ -599,11 +697,12 @@ function parsePreset(
       continue;
     }
     const raw = rawValues[key] as SettingValue;
-    if (!matchesType(spec.type, raw)) {
+    if (!matchesType(spec, raw)) {
       log.add(
         'value-type-mismatch',
         `${at}.values.${key}`,
-        `настройка объявлена как ${spec.type}, пресет даёт ${describeValue(raw)}`,
+        `настройка объявлена как ${describeShape(spec)}, пресет даёт ${describeValue(raw)}` +
+          typeMismatchHint(spec, raw),
       );
       continue;
     }
@@ -817,6 +916,19 @@ function refuse<T>(
   message: string,
 ): FormResult<T> {
   return { ok: false, problems: [{ code, at, message }] };
+}
+
+/**
+ * Словарь типов ОБЪЯВЛЕННОЙ формы, а не текущей.
+ *
+ * Форма 2 составного типа не знала, и предлагать его в отказе по объявлению
+ * формы 2 значило бы посоветовать то, что этот же разбор следующей строкой
+ * отвергнет.
+ */
+function typesOfForm(formVersion: number): readonly SettingType[] {
+  return formVersion >= MAP_TYPE_SINCE
+    ? SETTING_TYPES
+    : SETTING_TYPES.filter((type) => type !== 'map');
 }
 
 export function isPlainObject(

@@ -2,7 +2,7 @@
   "name": "@fixture/kit",
   "version": "1.0.0",
   "baser": {
-    "formVersion": 2,
+    "formVersion": 3,
 
     "source": {
       "id": "fixture/kit",
@@ -39,6 +39,20 @@
         "type": "list",
         "default": ["form", "probe"]
       },
+      "tools": {
+        "title": "Инструменты прогона и их опции",
+        "description": "Карта «ссылка → опции». Опции плоские и скалярные — глубже целевые спеки не ходят, поэтому и форма не ходит.",
+        "type": "map",
+        "of": "map",
+        "default": { "fixture/lint": {} }
+      },
+      "env": {
+        "title": "Переменные окружения прогона",
+        "description": "Не задано (null) — блока в артефакте нет вовсе. Пустая карта ({}) — это «переменных нет», сказанное значением, а не умолчанием.",
+        "type": "map",
+        "of": "string",
+        "default": null
+      },
       "store": {
         "title": "Том под кэш прогона",
         "description": "Не задано — блок с томами не разворачивается вовсе.",
@@ -54,10 +68,14 @@
 
     "presets": {
       "shared": {
-        "title": "Общий прогон: том под кэш и остановка на первой ошибке",
+        "title": "Общий прогон: том под кэш, свои инструменты и остановка на первой ошибке",
         "values": {
           "store": "fixture-store",
-          "strict": true
+          "strict": true,
+          "tools": {
+            "fixture/lint": { "strict": true },
+            "fixture/probe": { "version": "0.11" }
+          }
         }
       }
     },

@@ -57,7 +57,7 @@ describe('минимум из README §0 — первый обвес чужог�
       version: '0.1.0',
       files: ['template', 'defaults.js'],
       baser: {
-        formVersion: 2,
+        formVersion: 3,
         source: {
           id: 'brainer/agent-harness',
           title: 'Плагин агентов брайнера',
@@ -139,6 +139,20 @@ describe('объявление обвеса: что обязательно', () 
       'setting-two-defaults',
     ],
     [
+      'settings[].of у карты',
+      { settings: { m: { title: 'Карта', type: 'map', default: {} } } },
+      'map-value-type',
+    ],
+    [
+      'settings[].of ТОЛЬКО у карты',
+      {
+        settings: {
+          s: { title: 'Строка', type: 'string', of: 'string', default: 'x' },
+        },
+      },
+      'map-value-type',
+    ],
+    [
       'presets[].title',
       { presets: { omnifield: { values: { name: 'x' } } } },
       'missing-field',
@@ -175,6 +189,15 @@ describe('объявление обвеса: что НЕобязательно',
     expect(разбирается({ layout: [ЗАПИСЬ] }).layout[0].class).toBe(
       'regenerated',
     );
+  });
+
+  it('ОБЪЯВЛЕНИЕ ФОРМЫ 2 РАЗБИРАЕТСЯ КАК ЕСТЬ — подъём до 3 его не трогает', () => {
+    // Сводка §0 обещает разбор с MIN_FORM_VERSION, а не с текущей: форма 3
+    // только ДОБАВИЛА тип, ничего не сдвинув, и живой обвес формы 2 обязан
+    // ехать без единой правки.
+    const decl = разбирается({ formVersion: 2 });
+    expect(decl.formVersion).toBe(2);
+    expect(decl.settings['name'].type).toBe('string');
   });
 
   it('пресет с одним значением законен — это не «все настройки сразу»', () => {

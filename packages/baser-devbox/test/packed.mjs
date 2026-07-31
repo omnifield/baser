@@ -306,7 +306,12 @@ function entries(value, indent) {
   );
 }
 
-function line(key, value, indent) {
+function line(rawKey, value, indent) {
+  // Ключ печатается В КАВЫЧКАХ, и это не украшение: ключами карты бывают ссылки
+  // на фичи (`ghcr.io/devcontainers/features/github-cli:1`), а двоеточие внутри
+  // голого ключа YAML читает как разделитель. JSON — подмножество YAML, поэтому
+  // закавыченный ключ читается однозначно каким угодно разборщиком.
+  const key = JSON.stringify(rawKey);
   if (Array.isArray(value)) {
     return value.length === 0
       ? [`${indent}${key}: []`]

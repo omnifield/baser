@@ -20,7 +20,13 @@ import {
 } from './config.js';
 import { byBytes } from './paths.js';
 import { ProblemLog, type FormResult } from './problems.js';
-import { describeValue, matchesType, type SettingValue } from './values.js';
+import {
+  describeShape,
+  describeValue,
+  matchesType,
+  typeMismatchHint,
+  type SettingValue,
+} from './values.js';
 
 /**
  * Что резолвер получает на вход.
@@ -145,11 +151,13 @@ export function resolveSettings(
         `${at}.settings.${key}.defaultFrom`,
       );
       if (computed.ok) {
-        if (!matchesType(spec.type, computed.value)) {
+        if (!matchesType(spec, computed.value)) {
           log.add(
             'value-type-mismatch',
             `${at}.settings.${key}.defaultFrom`,
-            `настройка объявлена как ${spec.type}, резолвер вернул ${describeValue(computed.value)}`,
+            `настройка объявлена как ${describeShape(spec)}, ` +
+              `резолвер вернул ${describeValue(computed.value)}` +
+              typeMismatchHint(spec, computed.value),
           );
           continue;
         }
@@ -163,6 +171,23 @@ export function resolveSettings(
   }
 
   // ── 2. Пресеты, в порядке перечисления: следующий бьёт предыдущего.
+  //
+  // КАРТА ЗАМЕНЯЕТСЯ ЦЕЛИКОМ, А НЕ СЛИВАЕТСЯ, — и это решение, а не наследство
+  // от списка (`tasker:BASER2-116`). Рынок наслоения конфигов здесь против нас:
+  // compose и helm карты именно сливают. Отказались по двум причинам, и обе не
+  // про удобство:
+  //
+  //   · СЛИЯНИЕМ НЕЛЬЗЯ УБРАТЬ. Пресет поставил фичу — снять её человек может
+  //     только надгробием («ключ: null» = «удалить»), то есть словарём внутри
+  //     значения, который мы себе запретили ровно так же, как «ref?version=…».
+  //   · СЛИЯНИЕ ДЕЛАЕТ ВРАНЬЁМ ПРОИСХОЖДЕНИЕ. У значения ровно один `origins`, и
+  //     на нём стоит весь рассказ двери «подниму версию с 22 на 24». После
+  //     слияния происхождения нет — есть половинки от пресета и от человека, и
+  //     одной строкой это не рассказать.
+  //
+  // Третья причина — целостность правила: «заполненное бьёт всё» либо верно для
+  // всех пяти типов, либо не правило. Цена названа честно: пресет задал карту, а
+  // человек хочет дописать своё — он переписывает карту целиком.
   config.presets.forEach((name, index) => {
     const preset = declaration.presets[name];
     if (!preset) {
@@ -197,11 +222,15 @@ export function resolveSettings(
       continue;
     }
     const raw = config.settings[key];
-    if (!matchesType(spec.type, raw)) {
+    if (!matchesType(spec, raw)) {
+      // Здесь отказ читает ЧЕЛОВЕК, а не автор обвеса, и читает он его в своём
+      // файле настроек — поэтому подсказка обязательна, а не желательна: он
+      // написал не опечатку, а ровно то, что работало вчера (`values.ts`).
       log.add(
         'value-type-mismatch',
         `${mine}.settings.${key}`,
-        `настройка объявлена как ${spec.type}, заполнено ${describeValue(raw)}`,
+        `настройка объявлена как ${describeShape(spec)}, заполнено ${describeValue(raw)}` +
+          typeMismatchHint(spec, raw),
       );
       continue;
     }

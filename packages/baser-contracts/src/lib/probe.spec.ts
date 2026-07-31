@@ -302,7 +302,114 @@ describe('проба формы: два обвеса-фикстуры сразу
       labels: ['form', 'probe'],
       store: 'fixture-store',
       strict: true,
+      // Составной тип разрешается тем же порядком, что и остальные: пресет бьёт
+      // дефолт, и опции инструмента приезжают вместе со ссылкой на него.
+      tools: {
+        'fixture/lint': { strict: true },
+        'fixture/probe': { version: '0.11' },
+      },
+      env: null,
     });
+  });
+
+  it('СОСТАВНОЙ ТИП: ссылка и её опции выражаются объявлением', () => {
+    // То, ради чего форма поднялась до 3 (`tasker:BASER2-116`): рыночная спека
+    // принимает опции инструмента ОБЪЕКТОМ, и списком строк это не выражается
+    // никак, кроме изобретения словаря внутри строки.
+    const spec = declaration('kit').settings['tools'];
+    expect([spec.type, spec.of]).toEqual(['map', 'map']);
+
+    const parsed = JSON.parse(
+      materialize('kit', resolved('kit'))['fixture/kit.json'],
+    ) as { tools: Record<string, Record<string, unknown>> };
+
+    // Опции одной ссылки разнородны — так их объявляет чужая спека, и однородной
+    // картой это не выражалось бы.
+    expect(parsed.tools['fixture/lint']).toEqual({ strict: true });
+    expect(parsed.tools['fixture/probe']).toEqual({ version: '0.11' });
+  });
+
+  it('ГЛУБИНА УПИРАЕТСЯ В ДВА ЭТАЖА — и это замер спеки, а не «двух хватит»', () => {
+    // Третий этаж не выражается ни объявлением, ни заполненным значением: `of`
+    // — слово из закрытого словаря, а не выражение типа.
+    const третий = readSourceDeclaration({
+      baser: declarationBlock({
+        settings: {
+          deep: {
+            title: 'Глубже спеки',
+            type: 'map',
+            of: 'map',
+            default: { ссылка: { опции: { глубже: 'некуда' } } },
+          },
+        },
+      }),
+    });
+    expect(третий.ok).toBe(false);
+    if (третий.ok) return;
+    expect(codesOf(третий.problems)).toEqual([
+      'value-type-mismatch @ package.json.baser.settings.deep.default',
+    ]);
+
+    // И слово `of` вложить само в себя нечем: словарь закрыт четырьмя.
+    const выражение = readSourceDeclaration({
+      baser: declarationBlock({
+        settings: {
+          deep: {
+            title: 'Тип выражением',
+            type: 'map',
+            of: 'map(map)',
+            default: {},
+          },
+        },
+      }),
+    });
+    expect(выражение.ok).toBe(false);
+    if (выражение.ok) return;
+    expect(codesOf(выражение.problems)).toEqual([
+      'map-value-type @ package.json.baser.settings.deep.of',
+    ]);
+  });
+
+  it('НЕ ЗАДАНО (null) И ЗАДАНО ПУСТЫМ ({}) — РАЗНЫЕ СОСТОЯНИЯ', () => {
+    // Дефолт `env` — null: блока в артефакте нет вовсе, как у тома при `store`.
+    const молчит = materialize('kit', resolved('kit'))['fixture/kit.json'];
+    expect(молчит).not.toContain('"env"');
+
+    // Пустая карта — это СКАЗАННОЕ «переменных нет», и блок разворачивается.
+    const сказано = materialize(
+      'kit',
+      resolved('kit', { settings: { env: {} } }),
+    )['fixture/kit.json'];
+    expect(сказано).toContain('"env": {}');
+    expect(JSON.parse(сказано)['env']).toEqual({});
+  });
+
+  it('ПРЕСЕТ ЗАМЕНЯЕТ КАРТУ ЦЕЛИКОМ, А НЕ СЛИВАЕТ ЕЁ С ДЕФОЛТОМ', () => {
+    // Дефолт обвеса — одна ссылка без опций; пресет объявляет свои две. Слейся
+    // они, у ключа дефолта остались бы пустые опции, и убрать его человек не мог
+    // бы иначе как надгробием — синтаксисом внутри значения, который запрещён.
+    expect(declaration('kit').settings['tools'].default).toEqual({
+      'fixture/lint': {},
+    });
+    expect(Object.keys(resolved('kit')['tools'] as object)).toEqual([
+      'fixture/lint',
+      'fixture/probe',
+    ]);
+    expect(
+      (resolved('kit')['tools'] as Record<string, unknown>)['fixture/lint'],
+    ).toEqual({ strict: true });
+
+    // И заполненное бьёт пресет тем же правилом: карта целиком, а не по ключам.
+    expect(resolved('kit', { settings: { tools: {} } })['tools']).toEqual({});
+  });
+
+  it('ФОРМА 2 И ФОРМА 3 ЖИВУТ РЯДОМ: подъём не требует правки от соседа', () => {
+    // Набор поднялся до 3 ради составного типа, заготовка осталась на 2 — и обе
+    // разбираются одним и тем же baser'ом. Ровно это и обещает MIN_FORM_VERSION:
+    // граница двигается за ПЕРЕЕЗДОМ полей, а не за номером.
+    expect(declaration('kit').formVersion).toBe(FORM_VERSION);
+    expect(declaration('seed').formVersion).toBe(2);
+    expect(declaration('seed').settings['areas'].type).toBe('list');
   });
 
   it('СВЕРКА НЕ ПРОЩАЕТ НИЧЕГО: уложенное сходится с эталоном байт в байт', () => {
@@ -438,6 +545,47 @@ describe('проба отказов: каждый случай называет�
     expect(() => resolved('kit', { settings: { retires: 5 } })).toThrow(
       /unknown-setting/,
     );
+  });
+
+  it('ОБЪЯВЛЕНА КАРТА, ЗАПОЛНЕН СПИСОК: отказ показывает, ЧТО ДЕЛАТЬ', () => {
+    // Живой случай перехода, а не выдуманный: два потребителя держат ссылки на
+    // инструменты заполненными СПИСКОМ, и после перевода настройки на карту
+    // отказ увидят оба (`tasker:BASER2-116`). Сказать им «ожидалась карта» —
+    // значит отправить читать доку там, где правка занимает минуту.
+    let message = '';
+    try {
+      resolved('kit', { settings: { tools: ['fixture/lint'] } });
+    } catch (cause) {
+      message = cause instanceof Error ? cause.message : String(cause);
+    }
+
+    expect(message).toContain('value-type-mismatch');
+    // Тип назван полностью — «просто карта» не сказала бы главного.
+    expect(message).toContain('map «ключ → map»');
+    // И показана сама правка, СТРОКОЙ ЧЕЛОВЕКА, а не абстрактной «ссылкой».
+    expect(message).toContain('"- fixture/lint" замени на "fixture/lint: {}"');
+  });
+
+  it('СОСТАВНОЙ ТИП В ОБЪЯВЛЕНИИ ФОРМЫ 2: сказано, что поднять', () => {
+    // Старый baser сказал бы «такого типа не знаю» и отправил искать опечатку
+    // там, где её нет. Этот говорит про версию — ради этого она и поднята.
+    const block = manifest('kit')['baser'] as Record<string, unknown>;
+    const прежний = readSourceDeclaration({
+      ...manifest('kit'),
+      baser: { ...block, formVersion: 2 },
+    });
+
+    expect(прежний.ok).toBe(false);
+    if (прежний.ok) return;
+    expect(codesOf(прежний.problems)).toEqual([
+      'form-version-unsupported @ package.json.baser.settings.env.type',
+      'form-version-unsupported @ package.json.baser.settings.tools.type',
+      // Настройка не разобралась — значит пресет выставляет то, чего в этом
+      // объявлении нет. Отказ каскадный и это честно: копилка называет всё, что
+      // видит, а не первый пункт, и объявление уже отказ целиком.
+      'unknown-setting @ package.json.baser.presets.shared.values.tools',
+    ]);
+    expect(прежний.problems[0].message).toContain('подними "formVersion" до 3');
   });
 
   it('обвес без дефолта у настройки', () => {

@@ -3,6 +3,10 @@
   "stamp": "fixture/kit@1.0.0",
   "retries": 2,
   "labels": ["form", "probe"],
+  "tools": {
+    "fixture/lint": { "strict": true },
+    "fixture/probe": { "version": "0.11" }
+  },
   "mounts": ["fixture-store:/work/cache"],
   "onFailure": "stop",
   "command": "pnpm exec fixture --scope \"*\""

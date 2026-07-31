@@ -33,7 +33,11 @@
 
 import { byBytes, CONSUMER_CONFIG_PATH } from './paths.js';
 import { ProblemLog, type FormResult } from './problems.js';
-import { describeValue, type SettingValue } from './values.js';
+import {
+  describeValue,
+  isPossibleSettingValue,
+  type SettingValue,
+} from './values.js';
 import { isPlainObject } from './declaration.js';
 import { FORM_VERSION, MIN_FORM_VERSION } from './version.js';
 
@@ -454,25 +458,17 @@ function parseFilledValues(
 
   for (const key of Object.keys(value).sort(byBytes)) {
     const raw = value[key];
-    if (!isSettingValue(raw)) {
+    if (!isPossibleSettingValue(raw)) {
       log.add(
         'wrong-type',
         `${at}.${key}`,
-        `значением настройки бывает строка, число, true/false, список строк или null; получено ${describeValue(raw)}`,
+        'значением настройки бывает строка, число, true/false, список строк, ' +
+          'карта «ключ → значение» (значением карты — скаляр или ПЛОСКАЯ карта опций) ' +
+          `или null; получено ${describeValue(raw)}`,
       );
       continue;
     }
     filled[key] = raw;
   }
   return filled;
-}
-
-function isSettingValue(value: unknown): value is SettingValue {
-  return (
-    value === null ||
-    typeof value === 'string' ||
-    typeof value === 'boolean' ||
-    (typeof value === 'number' && Number.isFinite(value)) ||
-    (Array.isArray(value) && value.every((item) => typeof item === 'string'))
-  );
 }
