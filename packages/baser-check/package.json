@@ -1,6 +1,6 @@
 {
   "name": "@omnifield/baser-check",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Проверка «обвес подходит посадочному месту»: форма объявления обвеса и его поставка",
   "license": "MIT",
   "type": "module",
