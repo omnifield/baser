@@ -96,18 +96,18 @@ if (storeDir) {
   env.set('PNPM_CONFIG_STORE_DIR', storeDir);
 }
 
+// Продуктовые переменные приезжают КАРТОЙ (форма 3, kb:BASER2-23), и разбирать
+// здесь больше нечего: пара «имя → значение» это и есть предмет настройки, а не
+// строка, которую надо резать по первому знаку равенства. Вместе с разбором ушли
+// два отказа, которые он же и порождал: «строка не в форме КЛЮЧ=значение» (форма
+// такого значения теперь не принимает вовсе) и «ключ задан дважды» (повтор ключа
+// отвергает разборщик YAML — карта ловит его даром).
 const computedEnv = new Set(env.keys());
 const source = (key) => (key.endsWith('_STORE_DIR') ? 'pnpmStoreVolume' : 'secretsVolume');
-for (const raw of extraContainerEnv ?? []) {
-  const at = JSON.stringify(raw);
-  const cut = typeof raw === 'string' ? raw.indexOf('=') : -1;
-  if (cut < 1) {
-    refuse(
-      `настройка extraContainerEnv: строка ${at} не в форме КЛЮЧ=значение — ` +
-        'у формы нет карты, поэтому переменная выражается одной строкой со знаком равенства',
-    );
-  }
-  const key = raw.slice(0, cut);
+for (const [key, value] of Object.entries(extraContainerEnv ?? {})) {
+  // Имя переменной формой не проверяется и проверяться не может: ключ карты это
+  // строка, а годность её в имя переменной окружения — знание шелла, то есть
+  // наше. `2FA=on` контейнер бы не принял, и узнать об этом лучше здесь.
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
     refuse(
       `настройка extraContainerEnv: "${key}" не годится в имя переменной окружения ` +
@@ -118,13 +118,10 @@ for (const raw of extraContainerEnv ?? []) {
     refuse(
       `настройка extraContainerEnv переопределяет ${key}, а его обвес считает сам ` +
         `от настройки ${source(key)} (${env.get(key)}). Продуктовым слоем это значение не ` +
-        'перекрывается: убери строку из extraContainerEnv или сними настройку, которая его задаёт',
+        'перекрывается: убери ключ из extraContainerEnv или сними настройку, которая его задаёт',
     );
   }
-  if (env.has(key)) {
-    refuse(`настройка extraContainerEnv: ${key} задан дважды — какое из значений верное, обвес не решает`);
-  }
-  env.set(key, raw.slice(cut + 1));
+  env.set(key, value);
 }
 
 const runArgs = [];
@@ -171,16 +168,18 @@ const extensions = injectedFormatter ? [...editorExtensions, editorFormatter] : 
 // тот дефект шаблона, что и прибитый форматтер: отсутствие регулировки под
 // ходовую нужду — наш брак, а не выбор пользователя (kb:BASER2-7).
 //
-// Форма — список строк: опции фичи (карта) ею невыразимы намеренно, по одному
-// примеру форму не расширяем. Фича приезжает с опциями по умолчанию, и это
-// сказано в описании настройки, а не подразумевается.
-const features = devcontainerFeatures ?? [];
-for (const [index, ref] of features.entries()) {
-  if (typeof ref !== 'string' || ref.trim() === '') {
-    refuse(`настройка devcontainerFeatures: ${JSON.stringify(ref)} — не ссылка на фичу`);
-  }
-  if (features.indexOf(ref) !== index) {
-    refuse(`настройка devcontainerFeatures: ${JSON.stringify(ref)} названа дважды — в артефакте это один ключ, и второй молча съел бы первый`);
+// Форма — КАРТА «ссылка → опции» (форма 3, kb:BASER2-23), и это второй заход:
+// списком строк опции фичи не выражались никак, кроме изобретения словаря внутри
+// строки (`ref?version=0.11`). Цена была живой — brainer пинует uv, а фича без
+// опций привозит latest: инструмент появился бы, а каденс не ожил (BASER2-116).
+//
+// Ушла вместе со списком и проверка повтора: у карты одинаковых ключей не бывает
+// по построению — разборщик YAML отвергает их сам. Ручная проверка была ценой
+// того, что форма не выражала предмет; предмет выражен — цена не нужна.
+const features = devcontainerFeatures ?? {};
+for (const ref of Object.keys(features)) {
+  if (ref.trim() === '') {
+    refuse('настройка devcontainerFeatures: пустой ключ — ссылка на фичу это адрес, а не пустое место');
   }
 }
 
@@ -385,13 +384,13 @@ if (env.size > computedEnv.size) envWhat.push('продуктовые перем
   },
 
 <% } -%>
-<% if (features.length) { -%>
+<% if (Object.keys(features).length) { -%>
   // Фичи Dev Containers — настройка devcontainerFeatures. Базовый образ несёт node/pnpm/git
   // (версия pnpm — из пина самого репозитория через corepack; образ = тонкая оболочка),
   // остальные тулчейны приезжают сюда: чего тут нет, того в девбоксе нет, и постсоздание
   // говорит об этом вслух, если репозиторий тулчейн объявил.
   "features": {
-<%- pairs(features.map((ref) => [ref, {}])) %>
+<%- pairs(Object.entries(features)) %>
   },
 
 <% } -%>
