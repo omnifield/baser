@@ -159,6 +159,105 @@ describe('класс артефакта доезжает до движка', () 
   });
 });
 
+/**
+ * ЦЕНА ПОДТВЕРЖДЕНИЯ НАЗЫВАЕТСЯ ПО КЛАССУ (`tasker:BASER2-123`).
+ *
+ * Текст обещал перезапись на оба класса сразу, а для `placed-once`
+ * подтверждение делает другое: регистрирует артефакт в паспорте, не трогая
+ * содержимое. Первый чужой обвес по этому тексту готовился потерять заполненный
+ * руками `harness.yaml` — снял контрольную сумму, держал наготове откат через
+ * git (`tasker:BASER2-121`, Н3).
+ *
+ * Проба берёт ЕГО случай целиком: файл заполнен руками, записи нет, дверь
+ * отказывает. Проверяется не формулировка сама по себе, а обещание вместе с его
+ * исполнением — текст и байты на диске в одном прогоне. Текст, проверенный
+ * отдельно от поведения, ровно так и разъезжается с ним.
+ */
+describe('отказ называет, что подтверждение сделает с содержимым', () => {
+  /** Заполненный руками конфиг — то, что человек боится потерять. */
+  const MINE = 'product: brainer\nzones:\n  cli: [packages/brainer-cli]\n';
+
+  /** Репозиторий, где файлы уже лежат, а baser здесь никогда не был. */
+  function occupied(existing: Readonly<Record<string, string>>): Consumer {
+    consumer = installDevbox({ declareDependency: false, existing });
+    consumer.installSource(AGENTS);
+    return consumer;
+  }
+
+  function firstInstall(result: DoorResult): string {
+    return (
+      result.problems.find((problem) => problem.code === 'first-install')
+        ?.message ?? ''
+    );
+  }
+
+  it('ТОЛЬКО placed-once: обещано не трогать содержимое — и оно цело', async () => {
+    const box = occupied({ [HARNESS]: MINE });
+
+    const blocked = await run({ command: 'plan', cwd: box.root });
+    const message = firstInstall(blocked);
+
+    expect(blocked.status).toBe('blocked');
+    // Главное, ради чего заход: обещание перезаписи снято там, где перезаписи
+    // не будет. Испуг тут стоит человеку либо отката, которого не потребуется,
+    // либо застревания на конфликте навсегда.
+    expect(message).toContain('СОДЕРЖИМОЕ НЕ ИЗМЕНИТСЯ');
+    expect(message).toContain('паспорт укладки');
+    expect(message).not.toContain('заменена целиком');
+    expect(message).not.toContain('СБОРКОЙ ОТ ДЕФОЛТОВ');
+    // И про сборку от дефолтов не говорится тоже: собирать тут нечего, а
+    // названная цена, которой нет, пугает ровно так же, как настоящая.
+    expect(message).not.toContain('не попадает НИЧЕГО');
+
+    // Обещание в тексте — такой же контракт, как код: исполняем его тем же
+    // прогоном, а не верим на слово.
+    const fixed = await run({
+      command: 'apply',
+      cwd: box.root,
+      confirm: [HARNESS],
+    });
+
+    expect(fixed.status).toBe('applied');
+    // Байт в байт: у заявителя эта проверка была контрольной суммой руками.
+    expect(box.read(HARNESS)).toBe(MINE);
+    // Владение при этом перешло — иначе следующий прогон отказал бы снова.
+    expect(recordOf(box, HARNESS)?.class).toBe('placed-once');
+    expect((await run({ command: 'plan', cwd: box.root })).status).toBe(
+      'converged',
+    );
+  });
+
+  it('ОБА класса разом: цена названа поимённо, а не средним по больнице', async () => {
+    const box = occupied({ [HARNESS]: MINE, [POLICY]: '# моя рамка\n' });
+
+    const blocked = await run({ command: 'plan', cwd: box.root });
+    const message = firstInstall(blocked);
+
+    // Подтверждают поимённо — значит и цена обязана быть поимённой: «часть
+    // заменится, часть нет» без списка оставляет человека там же, откуда он
+    // пришёл.
+    expect(message).toContain(HARNESS);
+    expect(message).toContain(POLICY);
+    expect(message).toContain('СОДЕРЖИМОЕ НЕ ИЗМЕНИТСЯ');
+    expect(message).toContain('заменена целиком');
+    // И сборка от дефолтов названа адресно: она про перегенерируемые, а не про
+    // всё, во что целится обвес.
+    expect(message).toContain('на месте перегенерируемых');
+
+    const fixed = await run({
+      command: 'apply',
+      cwd: box.root,
+      confirm: [HARNESS, POLICY],
+    });
+
+    expect(fixed.status).toBe('applied');
+    expect(box.read(HARNESS)).toBe(MINE);
+    // А перегенерируемый действительно заменён — обещание работает в обе
+    // стороны, и вторая тут так же важна, как первая.
+    expect(box.read(POLICY)).toBe(POLICY_BODY);
+  });
+});
+
 describe('версия обвеса доезжает до паспорта укладки', () => {
   it('версия из манифеста пакета ложится в запись', async () => {
     const box = withAgents({ ...AGENTS, version: '1.4.2' });

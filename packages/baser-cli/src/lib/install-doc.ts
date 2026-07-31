@@ -1,6 +1,47 @@
 import { basename } from 'node:path';
 import { sourceConfigPath } from '@omnifield/baser-contracts';
-import type { PackReport } from '@omnifield/baser-pack';
+import type { PackReport, PayloadArtifact } from '@omnifield/baser-pack';
+
+/**
+ * ЦЕНА ПОДТВЕРЖДЕНИЯ — по классам из ОПИСИ, а не одним обещанием на оба.
+ *
+ * Дока обещала «подтверждённый файл заменяется целиком», и для `placed-once`
+ * это неправда: подтверждение регистрирует такой артефакт в паспорте укладки,
+ * не трогая содержимое (`tasker:BASER2-123`, находка первого чужого обвеса).
+ * Читающий буквально либо не решается подтвердить и застревает на конфликте,
+ * либо подтверждает, готовясь потерять свой файл. Оба исхода от одной строки.
+ *
+ * Класс берётся из ОПИСИ — она и существует для того, чтобы узнавать груз, не
+ * вскрывая его (`baser-pack`, `manifest.ts`). Заглядывать за неё в объявление
+ * обвеса значило бы завести вторую правду о том же грузе.
+ */
+function confirmationPrice(artifacts: readonly PayloadArtifact[]): string {
+  const once = artifacts.filter((item) => item.class === 'placed-once');
+  const regenerated = artifacts.filter((item) => item.class !== 'placed-once');
+
+  const replaced =
+    'файл заменяется целиком и дальше ведётся обвесом — правки руками в нём не ' +
+    'переживут следующего обновления';
+  const adopted =
+    '**содержимое не изменится** — обвес объявил такой файл человеческим, и ' +
+    'подтверждение только записывает его в паспорт укладки: ни этот прогон, ни ' +
+    'следующие в него не пишут';
+
+  if (once.length === 0) {
+    return `- **regenerated** (все артефакты этого обвеса): ${replaced}.`;
+  }
+  if (regenerated.length === 0) {
+    return `- **placed-once** (все артефакты этого обвеса): ${adopted}.`;
+  }
+  return [
+    `- **regenerated** (${list(regenerated)}): ${replaced};`,
+    `- **placed-once** (${list(once)}): ${adopted}.`,
+  ].join('\n');
+}
+
+function list(artifacts: readonly PayloadArtifact[]): string {
+  return artifacts.map((item) => `\`${item.dest}\``).join(', ');
+}
 
 /**
  * `INSTALL.md` — инструкция под КОНКРЕТНЫЙ обвес, а не шаблон с плейсхолдерами.
@@ -178,10 +219,17 @@ ${inContainer('--confirm', someArtifact)}
 `
 }
 Подтверждение поимённое: согласие на один файл не становится согласием на
-соседний. Подтверждённый файл заменяется целиком и дальше ведётся обвесом —
-правки руками в нём не переживут следующего обновления. Хочешь оставить своё —
-просто не подтверждай.
+соседний. Хочешь оставить своё — просто не подтверждай.
+${
+  artifacts.length === 0
+    ? ''
+    : `
+Подтверждение отдаёт файл во ВЛАДЕНИЕ обвесу. Что при этом станет с
+содержимым, решает класс, которым обвес держит артефакт:
 
+${confirmationPrice(artifacts)}
+`
+}
 ## Что коммитить, а что нет
 
 | Путь | Куда |

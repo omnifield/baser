@@ -54,9 +54,20 @@ function packedAgents(): PackReport {
         title: 'Плагин агент-харнесса',
         package: { name: '@omnifield/brain-harness', version: '0.3.0' },
       },
+      // Классы — как в настоящей описи (`PayloadArtifact.class`): роль-модель
+      // продукта заполняет человек, рамка ролей наша. Опись без классов
+      // проверяла бы доку на грузе, которого упаковка не выдаёт.
       artifacts: [
-        { dest: '.omnifield/harness.yaml', src: 'harness.yaml.ejs' },
-        { dest: '.claude/agents/shared-policy.md', src: 'shared-policy.md' },
+        {
+          dest: '.omnifield/harness.yaml',
+          src: 'harness.yaml.ejs',
+          class: 'placed-once',
+        },
+        {
+          dest: '.claude/agents/shared-policy.md',
+          src: 'shared-policy.md',
+          class: 'regenerated',
+        },
       ],
       files: [],
     },
@@ -145,6 +156,43 @@ describe('INSTALL.md не описывает того, чего нет', () => {
     expect(doc).not.toContain('--confirm undefined');
     expect(doc).not.toMatch(/--confirm\s*\n/);
   });
+
+  it('цена подтверждения названа по КЛАССУ каждого артефакта', () => {
+    const doc = installDoc(packedAgents(), '/выдача/agents-bundle');
+
+    // Дока обещала «подтверждённый файл заменяется целиком» на оба класса
+    // сразу, и для `placed-once` это неправда (`tasker:BASER2-123`). У этого
+    // обвеса классы разные — значит и цена обязана быть названа врозь, с
+    // путями: подтверждают тоже поимённо.
+    expect(doc).toContain('regenerated');
+    expect(doc).toContain('placed-once');
+    expect(doc).toContain('содержимое не изменится');
+    expect(doc).toContain('заменяется целиком');
+    // Каждая цена стоит рядом со СВОИМ путём, а не сама по себе.
+    const once = doc.indexOf('.omnifield/harness.yaml`): **содержимое');
+    expect(once).toBeGreaterThan(-1);
+  });
+
+  it('обвес без артефактов не рассказывает про цену подтверждения', () => {
+    const empty = {
+      ok: true,
+      manifest: {
+        source: {
+          id: 'omnifield/пусто',
+          title: 'Ничего не кладёт',
+          package: { name: '@omnifield/пусто', version: '0.0.1' },
+        },
+        artifacts: [],
+        files: [],
+      },
+    } as unknown as PackReport;
+
+    // Цена без единого артефакта — рассказ про класс того, чего нет. Ветка «все
+    // артефакты этого обвеса» соврала бы про пустое множество.
+    expect(installDoc(empty, '/выдача/пусто')).not.toContain(
+      'все артефакты этого обвеса',
+    );
+  });
 });
 
 describe('флаг, не относящийся к команде, отказывает', () => {
@@ -200,6 +248,17 @@ describe('словарь — тот, что в каноне', () => {
       expect(text).not.toMatch(/патрон/i);
     }
     expect(USAGE).toContain('посадочному месту');
+  });
+
+  it('справка про --confirm не обещает перезаписи, а называет оба класса', () => {
+    // Одна строка справки стоила первому чужому обвесу подготовки к потере
+    // заполненного руками файла (`tasker:BASER2-123`). Поведение было верным —
+    // врал текст, поэтому проба стоит на тексте.
+    expect(USAGE).not.toMatch(/--confirm.*перезапис/);
+    expect(USAGE).toContain('во владение');
+    expect(USAGE).toContain('regenerated');
+    expect(USAGE).toContain('placed-once');
+    expect(USAGE).toContain('содержимое не трогается');
   });
 });
 
