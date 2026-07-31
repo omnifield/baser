@@ -20,7 +20,12 @@ import { describePlan } from '@omnifield/baser-materialize';
 import type { CheckReport } from '@omnifield/baser-check';
 import type { PackReport } from '@omnifield/baser-pack';
 import type { BundleReport } from './bundle.js';
-import type { DoorResult, SourceRun } from './result.js';
+import type {
+  DoorCommand,
+  DoorResult,
+  SourceConfigReport,
+  SourceRun,
+} from './result.js';
 import type { SettingLink, SettingMovement } from './values.js';
 
 const STATUS_LINE: Record<DoorResult['status'], string> = {
@@ -114,13 +119,12 @@ function renderRun(run: SourceRun, command: DoorResult['command']): string[] {
     // Файл настроек печатается ВСЕГДА, а не только при рождении: человек,
     // которому надо что-то подкрутить, обязан узнать адрес из вывода, а не из
     // доки. Правило именования он на память не считает, да и не должен.
-    `  настройки ${run.config.path}${
-      run.config.creates
-        ? command === 'apply'
-          ? ' — создан с дефолтами в комментариях, значений в нём нет'
-          : ' — будет создан с дефолтами в комментариях, значений в нём нет'
-        : ''
-    }`,
+    //
+    // Адрес называется и тогда, когда файла нет и не будет: он говорит, ГДЕ
+    // регулировка появится, когда обвес её объявит. Но молчать при этом нельзя —
+    // адрес без объяснения читается как «файл где-то потерялся»
+    // (`tasker:BASER2-124`).
+    `  настройки ${run.config.path}${describeSourceConfig(run.config, command)}`,
   ];
 
   if (run.settings.length > 0) {
@@ -133,6 +137,33 @@ function renderRun(run: SourceRun, command: DoorResult['command']): string[] {
   }
 
   return lines;
+}
+
+/**
+ * Что сказано про файл настроек рядом с его адресом.
+ *
+ * Три состояния, и молчание годится только для одного — «файл лежит, дверь в
+ * него не пишет». Рождение называется временем команды: у `plan` это намерение,
+ * у `apply` — состоявшийся факт. Отсутствие называется ПРИЧИНОЙ: обвес не
+ * объявил ни настроек, ни пресетов, и файла не будет, пока не объявит
+ * (`tasker:BASER2-124`).
+ *
+ * `tunable: null` — до вопроса прогон не дошёл, и говорить тут нечего: отказ уже
+ * назван своим кодом выше.
+ */
+function describeSourceConfig(
+  config: SourceConfigReport,
+  command: DoorCommand,
+): string {
+  if (config.creates) {
+    return command === 'apply'
+      ? ' — создан с дефолтами в комментариях, значений в нём нет'
+      : ' — будет создан с дефолтами в комментариях, значений в нём нет';
+  }
+  if (!config.existed && config.tunable === false) {
+    return ' — файла нет: обвес не объявил ни настроек, ни пресетов. Появится в том выпуске, где появится первая регулировка';
+  }
+  return '';
 }
 
 /**

@@ -112,7 +112,11 @@ import {
   renderLayout,
   type RenderedLayout,
 } from './render.js';
-import { readSourceConfig, renderSourceConfig } from './settings.js';
+import {
+  declaresTuning,
+  readSourceConfig,
+  renderSourceConfig,
+} from './settings.js';
 import { recoverPlacedValues, type PlacedValue } from './previous.js';
 import { loadDefaults, resolveValues, type SettingMovement } from './values.js';
 import type {
@@ -673,13 +677,19 @@ async function prepare(
     () => readSourceConfig(repo, declaration, log),
     { source },
   );
+  const tunable = declaresTuning(declaration);
   draft.config = {
     path: state.path,
     existed: state.existed,
-    // Рождение — ровно один раз, когда файла нет. Существующий не трогается
-    // никогда, поэтому «creates» и «existed» здесь взаимоисключающи по
-    // построению, а не по дисциплине вызывающего.
-    creates: !state.existed,
+    tunable,
+    // Рождение — ровно один раз, когда файла нет И обвесу есть что в него
+    // положить. Существующий не трогается никогда, поэтому «creates» и «existed»
+    // здесь взаимоисключающи по построению, а не по дисциплине вызывающего.
+    //
+    // Второй множитель — заход `tasker:BASER2-124`: пустой файл не документирует
+    // ничего, кроме собственной пустоты. Обвес объявит настройку следующим
+    // выпуском — файл родится тогда же, и это ровно тот момент, когда он нужен.
+    creates: !state.existed && tunable,
   };
   if (state.config === null) {
     return null;
@@ -1193,7 +1203,16 @@ function refused(
  * который идти, вместо пустого места в ответе.
  */
 function blankSourceConfig(sourceId: string): SourceConfigReport {
-  return { path: sourceConfigPath(sourceId), existed: false, creates: false };
+  return {
+    path: sourceConfigPath(sourceId),
+    existed: false,
+    // Заготовка до чтения объявления: про регулировки ещё НЕ СПРАШИВАЛИ, и
+    // `null` говорит именно это. Поставить сюда `false` значило бы утверждать
+    // «регулировать нечего», не заглянув в объявление, — а прогон, отказавший
+    // раньше разбора, доезжает до ответа с этой заготовкой как есть.
+    tunable: null,
+    creates: false,
+  };
 }
 
 function blankConfig(): ConfigReport {
