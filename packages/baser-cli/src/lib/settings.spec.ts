@@ -200,6 +200,9 @@ describe('рождение: один раз, если файла нет', () => 
     expect(soleRun(planned).config).toEqual({
       path: TUNING,
       existed: false,
+      // Регулировать есть что — оба множителя рождения названы данными, а не
+      // только его итог (`tasker:BASER2-124`).
+      tunable: true,
       creates: true,
     });
     // `plan` не пишет ничего — включая файл, который он назвал.
@@ -313,35 +316,6 @@ describe('рождение: один раз, если файла нет', () => 
     expect(soleRun(filled).plan?.steps).toEqual([]);
   });
 
-  it('обвес без настроек и пресетов рождает файл, который тоже разбирается', async () => {
-    const empty: SourceSpec = {
-      packageName: '@omnifield/brain-harness',
-      id: 'omnifield/agent-harness',
-      title: 'Плагин агент-харнесса',
-      layout: [{ src: 'policy.md', dest: '.claude/policy.md', render: false }],
-      templates: { 'policy.md': '# policy\n' },
-    };
-    const box = install({
-      config: {
-        formVersion: 2,
-        sources: [{ use: DEVBOX_PACKAGE }, { use: empty.packageName }],
-      },
-    });
-    box.installSource(empty);
-
-    const result = await run({ command: 'apply', cwd: box.root });
-
-    expect(result.status).toBe('applied');
-    const text = box.read(sourceConfigPath(empty.id)) as string;
-    expect(text).toContain('# Пресетов обвес не объявлял.');
-    expect(text).toContain('# Настроек обвес не объявлял');
-    // Вырожденный файл — всё ещё файл: разбирается и означает «ничего не выбрано».
-    expect(parse(text)).toEqual({ [SOURCE_CONFIG_KEY]: null });
-    expect((await run({ command: 'apply', cwd: box.root })).status).toBe(
-      'converged',
-    );
-  });
-
   it('отказавший прогон файла не оставляет: рождение едет тем же сбросом', async () => {
     const box = install({
       existing: { [LIVE]: '{\n  "name": "мой старый девбокс"\n}\n' },
@@ -371,6 +345,164 @@ describe('рождение: один раз, если файла нет', () => 
   });
 });
 
+/**
+ * ФАЙЛА НЕТ, ПОКА ОБЪЯВЛЯТЬ НЕЧЕГО (`tasker:BASER2-124`).
+ *
+ * Обвес вправе не объявлять ни настроек, ни пресетов — форма это прямо
+ * разрешает, и первый чужой обвес именно таков (`tasker:BASER2-121`, Н4). Дверь
+ * всё равно рождала файл с текстом «регулировать здесь нечего»: честный и
+ * ничего не документирующий, кроме собственной пустоты.
+ *
+ * Проверяются ОБЕ стороны решения, и вторая важнее первой: не родить — легко,
+ * не тронуть существующее — вот где ошибка стоит человеку файла. Удалять чужое
+ * дверь не вправе никогда, каким бы пустым оно ей ни казалось.
+ */
+describe('пустой файл настроек не рождается вовсе', () => {
+  const AGENTS_PACKAGE = '@omnifield/brain-harness';
+  const AGENTS_ID = 'omnifield/agent-harness';
+  const AGENTS_TUNING = sourceConfigPath(AGENTS_ID);
+
+  /** Обвес, которому регулировать нечего, — ни настроек, ни пресетов. */
+  const SILENT: SourceSpec = {
+    packageName: AGENTS_PACKAGE,
+    id: AGENTS_ID,
+    title: 'Плагин агент-харнесса',
+    layout: [{ src: 'policy.md', dest: '.claude/policy.md', render: false }],
+    templates: { 'policy.md': '# policy\n' },
+  };
+
+  function withSilent(
+    options: Parameters<typeof installDevbox>[0] = {},
+  ): Consumer {
+    const box = install({
+      config: {
+        formVersion: 2,
+        sources: [{ use: DEVBOX_PACKAGE }, { use: SILENT.packageName }],
+      },
+      ...options,
+    });
+    box.installSource(SILENT);
+    return box;
+  }
+
+  function runOf(result: Awaited<ReturnType<typeof run>>) {
+    const found = result.runs.find((item) => item.source.id === AGENTS_ID);
+    if (found === undefined) {
+      throw new Error('прогона плагина агентов в ответе нет');
+    }
+    return found;
+  }
+
+  it('нечего объявлять — файла нет ни у plan, ни у apply', async () => {
+    const box = withSilent();
+
+    const planned = await run({ command: 'plan', cwd: box.root });
+
+    expect(runOf(planned).config).toEqual({
+      path: AGENTS_TUNING,
+      existed: false,
+      // Причина названа ДАННЫМИ, а не только текстом: потребитель, ветвящийся по
+      // ответу, иначе увидел бы адрес, за которым ничего нет, и никакого «почему».
+      tunable: false,
+      creates: false,
+    });
+
+    const applied = await run({ command: 'apply', cwd: box.root });
+
+    expect(applied.status).toBe('applied');
+    expect(box.exists(AGENTS_TUNING)).toBe(false);
+    expect(applied.writes.map((write) => write.path)).not.toContain(
+      AGENTS_TUNING,
+    );
+    // И это не «отложилось до следующего раза»: прогон сходится, а сходимость
+    // на несозданном файле — то же самое утверждение, только машинное.
+    expect((await run({ command: 'apply', cwd: box.root })).status).toBe(
+      'converged',
+    );
+  });
+
+  it('адрес всё равно назван, и назван с ПРИЧИНОЙ, а не молча', async () => {
+    const box = withSilent();
+
+    const text = renderText(await run({ command: 'plan', cwd: box.root }));
+
+    // Адрес говорит, ГДЕ регулировка появится, когда обвес её объявит. Без
+    // объяснения он читается как «файл где-то потерялся» — ровно то, на что
+    // жаловался заявитель, только с другого конца.
+    expect(text).toContain(AGENTS_TUNING);
+    expect(text).toContain('обвес не объявил ни настроек, ни пресетов');
+    // А у соседа по тому же прогону файл есть — правило адресное, а не «дверь
+    // перестала рождать файлы».
+    expect(text).toContain(TUNING);
+  });
+
+  it('СУЩЕСТВУЮЩИЙ файл дверь не трогает и не удаляет', async () => {
+    // Человек мог написать его руками, а обвес — объявлять настройки прежним
+    // выпуском. Удалять чужое дверь не вправе, и пустота файла тут ничего не
+    // меняет: это конфиг человека, а не наш артефакт.
+    const MINE = '# мой файл\nbaser: {}\nхуки: [свои]\n';
+    const box = withSilent();
+    box.write(AGENTS_TUNING, MINE);
+
+    const result = await run({ command: 'apply', cwd: box.root });
+
+    expect(result.status).toBe('applied');
+    expect(box.read(AGENTS_TUNING)).toBe(MINE);
+    expect(result.writes.map((write) => write.path)).not.toContain(
+      AGENTS_TUNING,
+    );
+    expect(runOf(result).config).toEqual({
+      path: AGENTS_TUNING,
+      existed: true,
+      tunable: false,
+      creates: false,
+    });
+  });
+
+  it('обвес объявил настройку — файл появляется тем же прогоном', async () => {
+    // Тот самый момент, ради которого рождение и откладывалось: файл приезжает
+    // тогда, когда в нём есть что читать, а не заранее и пустым.
+    const box = withSilent();
+    await run({ command: 'apply', cwd: box.root });
+    expect(box.exists(AGENTS_TUNING)).toBe(false);
+
+    box.installSource({
+      ...SILENT,
+      settings: {
+        product: { title: 'Имя продукта', type: 'string', default: 'baser' },
+      },
+    });
+
+    const result = await run({ command: 'apply', cwd: box.root });
+
+    expect(box.exists(AGENTS_TUNING)).toBe(true);
+    expect(runOf(result).config.creates).toBe(true);
+    expect(box.read(AGENTS_TUNING)).toContain('# Имя продукта');
+  });
+
+  it('объявлены ОДНИ ПРЕСЕТЫ — файл рождается тоже', async () => {
+    // Выбор пресета это регулировка, и обвес, объявивший пресеты без
+    // собственных настроек, человеку регулировать даёт. Считать «настройки
+    // главнее» значило бы оставить его без единственного места для выбора.
+    const box = withSilent();
+    box.installSource({
+      ...SILENT,
+      presets: { тихий: { title: 'Ничего не спрашивать', values: {} } },
+    });
+
+    const result = await run({ command: 'apply', cwd: box.root });
+
+    expect(runOf(result).config.creates).toBe(true);
+    const text = box.read(AGENTS_TUNING) as string;
+    expect(text).toContain('тихий — Ничего не спрашивать');
+    // Настроек у него нет, и файл называет это не «регулировать нечего» — тут
+    // как раз есть чем: выбором выше.
+    expect(text).toContain('регулируй выбором пресета');
+    // Разбирается он так же, как любой родившийся: значений в нём нет.
+    expect(parse(text)).toEqual({ [SOURCE_CONFIG_KEY]: null });
+  });
+});
+
 describe('после рождения дверь в файл НЕ ПИШЕТ', () => {
   it('второй прогон не трогает файл ни на байт', async () => {
     const box = install();
@@ -385,6 +517,7 @@ describe('после рождения дверь в файл НЕ ПИШЕТ', (
     expect(soleRun(again).config).toEqual({
       path: TUNING,
       existed: true,
+      tunable: true,
       creates: false,
     });
   });
@@ -409,8 +542,7 @@ describe('после рождения дверь в файл НЕ ПИШЕТ', (
     expect(box.read(TUNING)).toBe(born);
     expect(result.writes.map((write) => write.path)).not.toContain(TUNING);
     expect(
-      soleRun(result).settings.find((item) => item.key === 'imageTag')
-        ?.value,
+      soleRun(result).settings.find((item) => item.key === 'imageTag')?.value,
     ).toBe(MOVED_NODE);
   });
 
@@ -474,10 +606,7 @@ describe('зарезервирован ровно один ключ — baser', 
 describe('файл есть, но непригоден', () => {
   it('битый YAML — код ДВЕРИ, и она не делает вид, что ничего не выбрано', async () => {
     const box = install();
-    box.write(
-      TUNING,
-      'baser:\n  settings:\n   imageTag: "20"\n  \tтаб\n',
-    );
+    box.write(TUNING, 'baser:\n  settings:\n   imageTag: "20"\n  \tтаб\n');
 
     const result = await run({ command: 'plan', cwd: box.root });
 
@@ -504,6 +633,9 @@ describe('файл есть, но непригоден', () => {
     expect(soleRun(result).config).toEqual({
       path: TUNING,
       existed: true,
+      // Про регулировки спросили ДО отказа на разборе файла: объявление обвеса
+      // читается раньше, и `null` тут был бы неправдой.
+      tunable: true,
       creates: false,
     });
   });
