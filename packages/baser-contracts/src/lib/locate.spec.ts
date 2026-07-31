@@ -18,6 +18,7 @@
  */
 
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -27,7 +28,8 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { locateSource, locateSourceContent } from './locate.js';
+import { locatePackage, locateSource, locateSourceContent } from './locate.js';
+import { readSourceDeclaration } from './declaration.js';
 import { codesOf } from './form.fixture.js';
 import { FORM_VERSION } from './version.js';
 
@@ -39,6 +41,14 @@ let работа: string;
 let репо: string;
 /** Второй репозиторий: тот же обвес поднят к родителю (hoisting). */
 let поднято: string;
+/**
+ * Каталог БЕЗ перечня поставленного, из которого пакет всё равно резолвится.
+ *
+ * Он же родитель поднятой раскладки: `node_modules` тут есть, `baser.json` нет.
+ */
+let безПеречня: string;
+/** Корни пакетов-фикстур — то, ЧТО обязан найти резолв по имени. */
+const корень: Record<string, string> = {};
 
 function пакет(
   корень: string,
@@ -94,6 +104,7 @@ beforeAll(() => {
   );
 
   const kit = пакет(репо, '@fixture/kit', объявление('fixture/kit'));
+  корень['@fixture/kit'] = kit;
   файл(join(kit, 'template', 'settings.hooks.json'), МЕТКА);
   файл(join(kit, 'template', 'вложенно', 'схема.json'), `${МЕТКА} (вложенно)`);
 
@@ -101,14 +112,30 @@ beforeAll(() => {
   const closed = пакет(репо, '@fixture/closed', объявление('fixture/closed'), {
     exports: { '.': './index.js' },
   });
+  корень['@fixture/closed'] = closed;
   файл(join(closed, 'index.js'), 'module.exports = {};\n');
   файл(join(closed, 'template', 'эталон.json'), `${МЕТКА} (exports закрыт)`);
+
+  // Тот же обход вверх, но с ловушкой: точка входа лежит ГЛУБЖЕ корня, а рядом
+  // с ней — чужой `package.json` без имени. Так подписывают тип модуля целые
+  // каталоги, и подъём до ПЕРВОГО попавшегося манифеста прочитал бы его.
+  const deep = пакет(репо, '@fixture/deep', объявление('fixture/deep'), {
+    exports: { '.': './dist/index.js' },
+  });
+  корень['@fixture/deep'] = deep;
+  файл(join(deep, 'dist', 'index.js'), 'module.exports = {};\n');
+  файл(
+    join(deep, 'dist', 'package.json'),
+    JSON.stringify({ type: 'commonjs' }),
+  );
+  файл(join(deep, 'template', 'эталон.json'), `${МЕТКА} (вход глубже корня)`);
 
   // Подкаталог: хук запускают не только из корня.
   mkdirSync(join(репо, 'packages', 'глубоко'), { recursive: true });
 
   // ── Раскладка 2: тот же обвес поднят к родителю репозитория.
   const родитель = join(работа, 'поднято');
+  безПеречня = родитель;
   поднято = join(родитель, 'репозиторий');
   mkdirSync(поднято, { recursive: true });
   файл(join(поднято, 'package.json'), JSON.stringify({ name: 'потребитель' }));
@@ -117,6 +144,7 @@ beforeAll(() => {
     JSON.stringify({ sources: [{ use: '@fixture/kit' }] }),
   );
   const поднятый = пакет(родитель, '@fixture/kit', объявление('fixture/kit'));
+  корень['поднятый'] = поднятый;
   файл(join(поднятый, 'template', 'settings.hooks.json'), МЕТКА);
 });
 
@@ -189,6 +217,119 @@ describe('обвес находит собственное содержимое 
     expect(найден.value.contentRoot.startsWith(найден.value.packageRoot)).toBe(
       true,
     );
+  });
+});
+
+/**
+ * РЕЗОЛВ ПО ИМЕНИ — тот же слой, другой вопрос сверху (`tasker:BASER2-127`).
+ *
+ * Судится не «одинаков ли код с дверью» (кода двери здесь нет и быть не
+ * должно), а то, ради чего факт отдан наружу: **по имени пакета возвращается
+ * его корень и разобранный манифест**, и возвращается на тех раскладках, где
+ * ответ вообще может разойтись. Каждая из них — тонкая ветка одной из двух
+ * бывших копий.
+ */
+describe('пакет находится ПО ИМЕНИ, а не только по личности', () => {
+  it('ШТАТНАЯ РАСКЛАДКА: корень пакета и манифест, годный для разбора', () => {
+    const найден = locatePackage('@fixture/kit', репо);
+    expect(найден.ok).toBe(true);
+    if (!найден.ok) return;
+
+    expect(найден.value.root).toBe(корень['@fixture/kit']);
+    expect(найден.value.packageName).toBe('@fixture/kit');
+    expect(найден.value.version).toBe('1.2.3');
+
+    // Манифест отдан сырым, и это не полуфабрикат: объявление из него достаёт
+    // тот же разбор, которым пользуется дверь. Своей проверки вход не заводит.
+    const объявлено = readSourceDeclaration(
+      найден.value.manifest,
+      '@fixture/kit/package.json',
+    );
+    expect(объявлено.ok).toBe(true);
+    if (!объявлено.ok) return;
+    expect(объявлено.value.source.id).toBe('fixture/kit');
+  });
+
+  it('ПОДНЯТАЯ РАСКЛАДКА: пакета в дереве нет вовсе, резолв уходит вверх', () => {
+    // Сторона, считающая от себя, нашла бы здесь свою копию — а их тут две.
+    const найден = locatePackage('@fixture/kit', поднято);
+    expect(найден.ok).toBe(true);
+    if (!найден.ok) return;
+    expect(найден.value.root).toBe(корень['поднятый']);
+  });
+
+  it('ЗАКРЫТ ./package.json В EXPORTS — манифест берётся обходом вверх', () => {
+    const найден = locatePackage('@fixture/closed', репо);
+    expect(найден.ok).toBe(true);
+    if (!найден.ok) return;
+    expect(найден.value.root).toBe(корень['@fixture/closed']);
+  });
+
+  it('ОБХОД ВВЕРХ БЕРЁТ МАНИФЕСТ С ТЕМ ЖЕ ИМЕНЕМ, а не первый попавшийся', () => {
+    // Самая тонкая ветка обеих бывших копий. Точка входа лежит в `dist`, рядом
+    // с ней — `package.json` без имени: подъём до первого попавшегося вернул бы
+    // ЕГО, и объявление обвеса читалось бы не из того файла.
+    const найден = locatePackage('@fixture/deep', репо);
+    expect(найден.ok).toBe(true);
+    if (!найден.ok) return;
+
+    expect(найден.value.root).toBe(корень['@fixture/deep']);
+    const объявлено = readSourceDeclaration(
+      найден.value.manifest,
+      '@fixture/deep/package.json',
+    );
+    expect(объявлено.ok).toBe(true);
+    if (!объявлено.ok) return;
+    expect(объявлено.value.source.id).toBe('fixture/deep');
+  });
+
+  it('ПЕРЕЧНЯ ПОСТАВЛЕННОГО ЭТОТ ВОПРОС НЕ ТРЕБУЕТ', () => {
+    // `baser.json` в этом каталоге нет — и правильно, что нет: «где лежит пакет»
+    // факт файловой системы, а не следствие перечня. Дверь зовёт резолв как раз
+    // тогда, когда перечня ещё не существует: она рождает его, разглядывая уже
+    // поставленные зависимости.
+    expect(existsSync(join(безПеречня, 'baser.json'))).toBe(false);
+
+    const найден = locatePackage('@fixture/kit', безПеречня);
+    expect(найден.ok).toBe(true);
+    if (!найден.ok) return;
+    expect(найден.value.root).toBe(корень['поднятый']);
+  });
+
+  it('ПАКЕТА НЕТ — назван и он сам, и место, откуда искали', () => {
+    const ответ = locatePackage('@fixture/нет-такого', репо);
+    expect(ответ.ok).toBe(false);
+    if (ответ.ok) return;
+
+    expect(codesOf(ответ.problems)).toEqual([
+      `package-not-installed @ ${репо}`,
+    ]);
+    expect(ответ.problems[0].message).toContain('@fixture/нет-такого');
+  });
+
+  it('МАНИФЕСТ НЕПРИГОДЕН — это НЕ «пакет не поставлен»', () => {
+    // Резолвер Node отказывает на битом манифесте так же, как на отсутствующем
+    // пакете, — и без разбора его кода отказа единственным ответом было бы «не
+    // поставлен» про пакет, который лежит на диске. Чинится это правкой файла, а
+    // не установкой, поэтому и код другой.
+    const битый = mkdtempSync(join(tmpdir(), 'baser-манифест-'));
+    try {
+      файл(
+        join(битый, 'node_modules', '@fixture', 'сломан', 'package.json'),
+        '{ "name": ',
+      );
+
+      const ответ = locatePackage('@fixture/сломан', битый);
+      expect(ответ.ok).toBe(false);
+      if (ответ.ok) return;
+
+      expect(ответ.problems[0].code).toBe('package-manifest-unreadable');
+      // В тексте назван сам файл — человек его открывает, а не догадывается.
+      expect(ответ.problems[0].message).toContain('package.json');
+      expect(ответ.problems[0].message).toContain('правкой этого файла');
+    } finally {
+      rmSync(битый, { recursive: true, force: true });
+    }
   });
 });
 

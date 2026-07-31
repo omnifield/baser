@@ -49,6 +49,22 @@
  * не быть, личность может не совпасть, файл может не приехать. Каждый случай
  * назван своим кодом и своим текстом, потому что чинятся они по-разному, а
  * сырой бросок из `node:fs` не сказал бы ни одному из них правильного слова.
+ *
+ * ── ДВА ВОПРОСА СВЕРХУ, ОДИН ФАКТ ПОД НИМИ ──────────────────────────────────
+ *
+ * Отсюда наружу уходят ДВА резолва, и разница между ними — не в глубине, а в
+ * том, чем спрашивают:
+ *
+ *   `locateSource` / `locateSourceContent` — по ЛИЧНОСТИ. Спрашивает код самого
+ *                                            обвеса: «где моё содержимое»;
+ *   `locatePackage`                        — по ИМЕНИ ПАКЕТА. Спрашивает тот,
+ *                                            кто имя уже знает: дверь по
+ *                                            перечню поставленного, кто угодно
+ *                                            по зависимостям манифеста.
+ *
+ * Личность против имени живёт ЭТАЖОМ ВЫШЕ, у вызывающих. Слой под обоими один:
+ * «по имени пакета — где он у потребителя и что в его манифесте», и он здесь в
+ * единственном экземпляре (`tasker:BASER2-127`).
  */
 
 import { createRequire } from 'node:module';
@@ -62,7 +78,11 @@ import {
   CONSUMER_CONFIG_PATH,
   PATH_PROBLEM,
 } from './paths.js';
-import { ProblemLog, type FormResult } from './problems.js';
+import {
+  ProblemLog,
+  type FormProblemCode,
+  type FormResult,
+} from './problems.js';
 
 /** Откуда искать репозиторий потребителя. */
 export interface LocateOptions {
@@ -75,6 +95,31 @@ export interface LocateOptions {
    * Корнем считается ближайший каталог вверх, где лежит перечень поставленного.
    */
   readonly from?: string;
+}
+
+/** Найденный у потребителя ПАКЕТ: где лежит и что в его манифесте. */
+export interface LocatedPackage {
+  /** Имя, по которому искали, — оно же `name` в манифесте пакета. */
+  readonly packageName: string;
+  /**
+   * Версия из манифеста пакета — единственное место, где версия обвеса живёт.
+   *
+   * `null` — версии в манифесте нет, и это НАЗВАННОЕ отсутствие: подставить
+   * вместо неё `0.0.0` значило бы сделать за обвес утверждение, которого он не
+   * делал (`tasker:BASER2-69`).
+   */
+  readonly version: string | null;
+  /** Абсолютный корень пакета — каталог, где лежит его `package.json`. */
+  readonly root: string;
+  /**
+   * Разобранный `package.json` КАК ЕСТЬ — без единой нашей проверки.
+   *
+   * Пригодность объявления называет `readSourceDeclaration`, и повторять её
+   * здесь значило бы завести вторую правду об одном факте. Тип `unknown`
+   * поэтому же: чужой манифест — чужой документ, и притворяться, что мы знаем
+   * его форму, нечем.
+   */
+  readonly manifest: unknown;
 }
 
 /** Найденный обвес у потребителя — всё абсолютными путями. */
@@ -146,9 +191,11 @@ export function locateSource(
   const skipped: string[] = [];
 
   for (const entry of config.value.sources) {
-    const installed = resolvePackage(entry.use, repoRoot);
+    const installed = locatePackage(entry.use, repoRoot);
     if (!installed.ok) {
-      skipped.push(`${entry.use} — ${installed.detail}`);
+      // Отказ уже назван словами того резолва — пересказывать его своими
+      // значило бы завести второе описание одного события.
+      skipped.push(installed.problems[0].message);
       continue;
     }
 
@@ -156,7 +203,7 @@ export function locateSource(
     // повод обрывать поиск: искомый обвес может лежать следующим. Непригодность
     // назовёт разбор того обвеса, а не этот вход.
     const declared = readSourceDeclaration(
-      installed.manifest,
+      installed.value.manifest,
       `${entry.use}/package.json`,
     );
     if (!declared.ok) {
@@ -170,7 +217,7 @@ export function locateSource(
       continue;
     }
 
-    const contentRoot = resolve(installed.root, source.contentRoot);
+    const contentRoot = resolve(installed.value.root, source.contentRoot);
     if (!isDirectory(contentRoot)) {
       log.add(
         'content-missing',
@@ -187,9 +234,9 @@ export function locateSource(
       value: {
         id: source.id,
         packageName: entry.use,
-        version: versionOf(installed.manifest),
+        version: installed.value.version,
         repoRoot,
-        packageRoot: installed.root,
+        packageRoot: installed.value.root,
         contentRoot,
       },
     };
@@ -233,37 +280,55 @@ export function locateSourceContent(
 
   const checked = checkPath(path);
   if (!checked.ok) {
-    return {
-      ok: false,
-      problems: [
-        {
-          code: 'invalid-path',
-          at: path,
-          message:
-            `${PATH_PROBLEM[checked.problem]} — путь отсчитывается от contentRoot обвеса ` +
-            'и за его пределы не выходит',
-        },
-      ],
-    };
+    return one(
+      'invalid-path',
+      path,
+      `${PATH_PROBLEM[checked.problem]} — путь отсчитывается от contentRoot обвеса ` +
+        'и за его пределы не выходит',
+    );
   }
 
   const file = join(located.value.contentRoot, checked.path);
   if (!existsSync(file)) {
-    return {
-      ok: false,
-      problems: [
-        {
-          code: 'content-missing',
-          at: file,
-          message:
-            `обвес "${sourceId}" поставлен (${located.value.packageName}), но файла ` +
-            `"${checked.path}" в его содержимом нет — либо он не уехал в пакет, либо имя другое`,
-        },
-      ],
-    };
+    return one(
+      'content-missing',
+      file,
+      `обвес "${sourceId}" поставлен (${located.value.packageName}), но файла ` +
+        `"${checked.path}" в его содержимом нет — либо он не уехал в пакет, либо имя другое`,
+    );
   }
 
   return { ok: true, value: file };
+}
+
+/**
+ * Отказ этого входа — ровно один, данными.
+ *
+ * Копилка (`ProblemLog`) здесь не нужна: она заведена там, где отказов копится
+ * несколько за один разбор, а «пакета нет» и «манифест непригоден» — события
+ * поодиночке, после которых продолжать нечем.
+ */
+function one(
+  code: FormProblemCode,
+  at: string,
+  message: string,
+): FormResult<never> {
+  return { ok: false, problems: [{ code, at, message }] };
+}
+
+/**
+ * Отказ резолвера Node про НЕПРИГОДНЫЙ МАНИФЕСТ, а не про отсутствие пакета.
+ *
+ * Код публичный (`ERR_INVALID_PACKAGE_CONFIG`, документирован в `node:errors`),
+ * и держаться за него мы вправе — в отличие от текста сообщения, который меняют
+ * от версии к версии. Сам текст при этом уходит в отказ как есть: в нём назван
+ * файл, который человеку открывать.
+ */
+function invalidPackageConfig(cause: unknown): boolean {
+  return (
+    cause instanceof Error &&
+    (cause as NodeJS.ErrnoException).code === 'ERR_INVALID_PACKAGE_CONFIG'
+  );
 }
 
 /**
@@ -285,50 +350,107 @@ function findRepoRoot(from: string): string | null {
   }
 }
 
-interface ResolvedPackage {
-  readonly ok: true;
-  readonly root: string;
-  readonly manifest: unknown;
-}
-
 /**
- * Находит пакет так же, как его нашёл бы сам репозиторий потребителя.
+ * Находит пакет ПО ИМЕНИ так же, как его нашёл бы сам репозиторий потребителя.
  *
- * Резолв ведётся ОТ КОРНЯ ПОТРЕБИТЕЛЯ, а не от каталога вызывающего: обвес
+ * ```js
+ * const пакет = locatePackage('@omnifield/baser-devbox', repoRoot);
+ * if (!пакет.ok) { console.error(describeProblems(пакет.problems)); return; }
+ * readSourceDeclaration(пакет.value.manifest, `${пакет.value.packageName}/package.json`);
+ * ```
+ *
+ * **Резолв ведётся ОТ КОРНЯ ПОТРЕБИТЕЛЯ**, а не от каталога вызывающего: обвес
  * поставлен пользователю, и его раскладка на диске (плоская, симлинки pnpm,
- * hoisting) — свойство его репозитория.
+ * hoisting) — свойство его репозитория. Сторона, считающая от себя, нашла бы
+ * свою копию пакета вместо пользовательской.
  *
- * **Тот же резолв держит у себя дверь** (`baser-cli`, `installed.ts`): ей он
- * нужен был раньше, чем появился этот вход, и зависеть от неё контракты не
- * могут — стрелка идёт в другую сторону. Два места для одного факта названы
- * вслух, чтобы разъехаться молча они не могли; сводить их — заход зоны двери.
+ * **Корень здесь ЯВНЫЙ, а не найденный обходом вверх**, в отличие от
+ * `locateSource`. Причина не в удобстве: перечень поставленного к этому факту
+ * отношения не имеет, и требовать его наличия значило бы объявить «где лежит
+ * пакет» вопросом, на который нельзя ответить, пока не появился `baser.json`. А
+ * он появляется не всегда первым — дверь рождает его, разглядывая уже
+ * поставленные зависимости.
+ *
+ * ── ПОЧЕМУ ЭТОТ СЛОЙ ОТДАЁТСЯ НАРУЖУ ────────────────────────────────────────
+ *
+ * Тот же резолв дверь держала у себя (`baser-cli`, `installed.ts`) — целиком,
+ * вместе с обходом вверх, — и разобрала шов со своей стороны
+ * (`tasker:BASER2-122`, заход `tasker:BASER2-127`). Правило `kb:BASER2-2`
+ * («дублировать словарь дешевле, чем связывать зоны, но дубль обязан быть
+ * громким») этот случай не покрывает по обоим концам:
+ *
+ *   · дублировался не словарь, а ПОВЕДЕНИЕ. У словаря громкость встроена —
+ *     незнакомое слово даёт названный отказ на первом прогоне. У резолва её нет:
+ *     разъехавшиеся копии обе отработают успешно, просто найдут разные пакеты, и
+ *     дверь разложит артефакты из одного, а хук обвеса прочитает свой эталон из
+ *     другого. Молча;
+ *   · «дешевле, чем связывать зоны» не считается: зоны УЖЕ связаны —
+ *     `baser-cli` зависит от `baser-contracts`, стрелка идёт в нужную сторону, и
+ *     нового ребра сведение не заводит.
+ *
+ * Дверь переходит на этот вход СЛЕДУЮЩИМ ЗАХОДОМ, и до перехода её копия жива;
+ * гейт, который держит обе стороны на одном ответе, стоит в её зоне и снимает
+ * его её владелец.
  */
-function resolvePackage(
+export function locatePackage(
   packageName: string,
   repoRoot: string,
-): ResolvedPackage | { readonly ok: false; readonly detail: string } {
-  const require = createRequire(join(repoRoot, 'package.json'));
+): FormResult<LocatedPackage> {
+  const root = resolve(repoRoot);
+  const require = createRequire(join(root, 'package.json'));
 
+  // Прямой путь — `exports` пакета обязан отдавать свой манифест (наши отдают).
+  // Пакеты, закрывшие его, разбираются обходом вверх: манифест нужен по
+  // построению, в нём лежит объявление обвеса.
   let manifestPath: string | null = null;
+  let denied: unknown = null;
   try {
     manifestPath = require.resolve(`${packageName}/package.json`);
-  } catch {
+  } catch (cause) {
+    denied = cause;
     manifestPath = manifestByWalkingUp(require, packageName);
   }
 
   if (manifestPath === null) {
-    return { ok: false, detail: 'пакет не резолвится, то есть не поставлен' };
+    // Резолвер Node отказывает ОДИНАКОВО на отсутствующем пакете и на пакете с
+    // непригодным манифестом, а чинится это разным: установкой против правки
+    // файла. Отличаем по его же коду отказа — сказать «не поставлен» про пакет,
+    // лежащий на диске, значит дать правдоподобно неверный ответ.
+    return invalidPackageConfig(denied)
+      ? one(
+          'package-manifest-unreadable',
+          root,
+          `резолв пакета "${packageName}" упёрся в непригодный манифест: ${describe(denied)} ` +
+            'Чинится правкой этого файла, а не установкой',
+        )
+      : one(
+          'package-not-installed',
+          root,
+          `пакет "${packageName}" не резолвится отсюда ни прямо, ни обходом ` +
+            'вверх — среди поставленных у потребителя его нет',
+        );
   }
 
+  let manifest: unknown;
   try {
-    return {
-      ok: true,
-      root: dirname(manifestPath),
-      manifest: JSON.parse(readFileSync(manifestPath, 'utf-8')),
-    };
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
   } catch (cause) {
-    return { ok: false, detail: `манифест не читается: ${describe(cause)}` };
+    return one(
+      'package-manifest-unreadable',
+      manifestPath,
+      `манифест пакета "${packageName}" не разбирается как JSON: ${describe(cause)}`,
+    );
   }
+
+  return {
+    ok: true,
+    value: {
+      packageName,
+      version: versionOf(manifest),
+      root: dirname(manifestPath),
+      manifest,
+    },
+  };
 }
 
 /**
