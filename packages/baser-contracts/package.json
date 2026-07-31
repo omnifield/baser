@@ -1,6 +1,6 @@
 {
   "name": "@omnifield/baser-contracts",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "Хвостовик baser: форма, которой обвес объявляет себя станку — раскладка, класс артефакта, настройки и пресеты",
   "type": "module",
   "main": "./dist/index.js",
