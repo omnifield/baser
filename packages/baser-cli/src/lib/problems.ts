@@ -33,14 +33,21 @@ import type { EngineProblemCode } from '@omnifield/baser-materialize';
  * `dest`; `cross-source-dest` движка — когда путь уже числится за соседом в
  * паспорте укладки. Своего кода дверь сюда не заводит: сказать про столкновение
  * есть кому.
+ *
+ * **Снято вместе с копией резолва: `package-not-found` и
+ * `package-manifest-unreadable`** (`tasker:BASER2-128`). Резолв по имени уехал в
+ * контракты, и оба случая называет теперь он сам — `package-not-installed` и
+ * `package-manifest-unreadable` кодами формы. Своё имя тому же событию дверь не
+ * оставляет: это ровно та вторая правда о чужом факте, которую верхний абзац
+ * запрещает. `package-manifest-unreadable` из ответа не пропал — он приходит из
+ * `FormProblemCode` и живёт в `ProblemCode` как прежде; `package-not-found`
+ * заменён на `package-not-installed`, и это ЛОМАЮЩЕЕ изменение поверхности:
+ * потребитель, ветвившийся по старому коду, обязан узнать об этом красным, а не
+ * молчаливым «условие больше не срабатывает».
  */
 export type DoorProblemCode =
   /** `baser.json` есть, но это не JSON. */
   | 'config-unreadable'
-  /** Манифест пакета обвеса не читается или не JSON. */
-  | 'package-manifest-unreadable'
-  /** Пакет, названный в `use`, не резолвится из репозитория потребителя. */
-  | 'package-not-found'
   /**
    * Служебной записи `baser.lock.json` нет, а конфиг потребителя есть — значит
    * раскладка здесь скорее всего уже была, а запись пропала.

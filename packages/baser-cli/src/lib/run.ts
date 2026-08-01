@@ -75,6 +75,10 @@ import {
   type SourceDeclaration,
 } from '@omnifield/baser-contracts';
 import {
+  locatePackage,
+  type LocatedPackage,
+} from '@omnifield/baser-contracts/locate';
+import {
   applyPlan,
   BaserMaterializeError,
   computePlan,
@@ -95,12 +99,7 @@ import {
   type DoorProblem,
   type ProblemCode,
 } from './problems.js';
-import {
-  locateContentRoot,
-  resolveInstalledPackage,
-  type InstalledPackage,
-  type SourceLocation,
-} from './installed.js';
+import { locateContentRoot, type SourceLocation } from './installed.js';
 import {
   readConsumerConfig,
   readRepo,
@@ -278,7 +277,7 @@ function handoverOrder(
 /** Обвес, доведённый до входа в движок: объявление, содержимое, черновик. */
 interface Prepared {
   readonly declaration: SourceDeclaration;
-  readonly pkg: InstalledPackage;
+  readonly pkg: LocatedPackage;
   readonly location: SourceLocation;
   readonly rendered: RenderedLayout;
   /**
@@ -592,7 +591,7 @@ async function runInRepo(
 /** Объявление обвеса плюс то, где физически лежит его содержимое. */
 interface DeclaredSource {
   readonly declaration: SourceDeclaration;
-  readonly pkg: InstalledPackage;
+  readonly pkg: LocatedPackage;
   readonly location: SourceLocation;
 }
 
@@ -614,15 +613,14 @@ function readDeclarations(
 
   for (const [index, entry] of entries.entries()) {
     const at = `${configPath}.sources[${index}].use`;
-    const installed = resolveInstalledPackage(entry.use, repo.root);
+    const installed = locatePackage(entry.use, repo.root);
     if (!installed.ok) {
-      log.add(
-        installed.failure.reason === 'not-found'
-          ? 'package-not-found'
-          : 'package-manifest-unreadable',
-        at,
-        installed.failure.detail,
-      );
+      // Код и слова — резолва, адрес — двери. Пересказать чужой отказ своими
+      // словами значило бы завести второе описание одного события; а вот адрес
+      // у двери свой и он точнее: отказ несёт ИНДЕКС записи конфига, иначе при
+      // двух одинаковых кодах непонятно, какую из них чинить
+      // (`tasker:BASER2-55`). Файл, который правят, назван в самом тексте.
+      log.addAll(installed.problems.map((problem) => ({ ...problem, at })));
       continue;
     }
 
@@ -868,7 +866,7 @@ function freeze(drafts: readonly DraftRun[]): readonly SourceRun[] {
 function engineInput(
   declaration: SourceDeclaration,
   location: SourceLocation,
-  pkg: InstalledPackage,
+  pkg: LocatedPackage,
 ): Declaration {
   return {
     source: {
@@ -1134,7 +1132,7 @@ function dests(entries: readonly LayoutEntry[]): string {
 
 function describeSource(
   declaration: SourceDeclaration,
-  pkg: InstalledPackage,
+  pkg: LocatedPackage,
   location: SourceLocation,
 ): SourceReport {
   return {

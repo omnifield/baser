@@ -32,10 +32,8 @@ import {
   FORM_VERSION,
   readSourceDeclaration,
 } from '../../baser-contracts/src/index.ts';
-import {
-  locateContentRoot,
-  resolveInstalledPackage,
-} from '../../baser-cli/src/index.ts';
+import { locatePackage } from '../../baser-contracts/src/locate.ts';
+import { locateContentRoot } from '../../baser-cli/src/index.ts';
 import { run } from '../../baser-cli/src/index.ts';
 import {
   consumerConfig,
@@ -248,7 +246,7 @@ describe('дверь находит пакет так же, как его наш
     try {
       // `./package.json` в `exports` — несущая часть объявления, а не деталь:
       // закрыв его, обвес перестал бы находиться вовсе.
-      const installed = resolveInstalledPackage(DEVBOX_PACKAGE, consumer.root);
+      const installed = locatePackage(DEVBOX_PACKAGE, consumer.root);
       expect(installed.ok).toBe(true);
       expect(installed.value.packageName).toBe(DEVBOX_PACKAGE);
       expect(installed.value.version).toBe(packedManifest().version);

@@ -31,9 +31,9 @@ import {
   type SettingValue,
   type SourceDeclaration,
 } from '@omnifield/baser-contracts';
+import type { LocatedPackage } from '@omnifield/baser-contracts/locate';
 import { toRepoPath, type CanonSource } from '@omnifield/baser-materialize';
 import { DoorProblemLog, type DoorProblem } from './problems.js';
-import type { InstalledPackage } from './installed.js';
 
 export interface RenderedLayout {
   /**
@@ -74,7 +74,7 @@ export interface RenderedLayout {
  */
 export function renderLayout(
   declaration: SourceDeclaration,
-  pkg: InstalledPackage,
+  pkg: LocatedPackage,
   values: Readonly<Record<string, SettingValue>>,
 ): RenderedLayout {
   const log = new DoorProblemLog();
@@ -160,7 +160,7 @@ export function renderLayout(
 export function createDoorSource(
   rendered: RenderedLayout,
   declaration: SourceDeclaration,
-  pkg: InstalledPackage,
+  pkg: LocatedPackage,
 ): CanonSource {
   return {
     read(src) {

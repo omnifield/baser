@@ -70,12 +70,11 @@ export {
 } from './lib/repo.js';
 export type { ConsumerConfigState, Repo } from './lib/repo.js';
 
-export { locateContentRoot, resolveInstalledPackage } from './lib/installed.js';
-export type {
-  InstalledPackage,
-  InstalledResult,
-  SourceLocation,
-} from './lib/installed.js';
+// Резолв пакета ПО ИМЕНИ отсюда ушёл: он живёт одним экземпляром в
+// `@omnifield/baser-contracts/locate` (`locatePackage`), и второго имени у него
+// нет — реэкспорт был бы вторым именем одного факта (`tasker:BASER2-128`).
+export { locateContentRoot } from './lib/installed.js';
+export type { SourceLocation } from './lib/installed.js';
 
 export { readSourceConfig, renderSourceConfig } from './lib/settings.js';
 export type { SourceConfigState } from './lib/settings.js';
