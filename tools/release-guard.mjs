@@ -73,8 +73,32 @@ function lastReleased(name) {
   return versions.at(-1) ?? null;
 }
 
-/** Ломающие коммиты, задевшие каталог пакета, с прошлого выпуска. */
-function breakingSince(tag, dir) {
+/**
+ * Зона, названная в заголовке коммита: `feat(cli)!: …` → `cli`.
+ *
+ * Нужна потому, что заход БЫВАЕТ МНОГОЗОННЫМ: ломающее в двери и правка пробы у
+ * соседа, который за снятое имя держался, приезжают ОДНИМ сквошем, и по файлам
+ * такой коммит задевает обе зоны. Считать его ломающим для соседа значило бы
+ * требовать минор у пакета, поверхность которого не двигалась вовсе.
+ *
+ * Заголовок при этом врать не может: его форму держит отдельный гейт CI, а
+ * scope в нём — это и есть зона-владелец изменения.
+ */
+function scopeOf(subject) {
+  return /^[a-z]+\(([^)]*)\)!?:/.exec(subject)?.[1] ?? null;
+}
+
+/**
+ * Ломающие коммиты, задевшие каталог пакета, с прошлого выпуска.
+ *
+ * ГРАНИЦА, НАЗВАННАЯ ВСЛУХ: коммит с чужой зоной в заголовке для этого пакета
+ * не считается ломающим, даже если задел его файлы. Дыра здесь есть и она
+ * известна — заход, который ломает поверхность СОСЕДА, называя в заголовке свою
+ * зону, гейт пропустит. Закрывать её пришлось бы разбором самих поверхностей,
+ * а это не работа гейта версий; зато scope, не совпавший ни с одним пакетом
+ * (`repo`, `harness`), считается общим и учитывается везде.
+ */
+function breakingSince(tag, dir, zone, zones) {
   const log = git('log', `${tag}..HEAD`, '--format=%H%x1f%s%x1f%b%x1e', '--', dir);
   return log
     .split('\x1e')
@@ -84,16 +108,25 @@ function breakingSince(tag, dir) {
       const [hash, subject, body = ''] = entry.split('\x1f');
       return { hash: hash.slice(0, 7), subject, body };
     })
-    .filter(({ subject, body }) => BANG.test(subject) || FOOTER.test(body));
+    .filter(({ subject, body }) => BANG.test(subject) || FOOTER.test(body))
+    .filter(({ subject }) => {
+      const scope = scopeOf(subject);
+      return scope === null || !zones.has(scope) || scope === zone;
+    });
 }
+
+const dirs = readdirSync(PACKAGES).filter((dir) =>
+  existsSync(join(PACKAGES, dir, 'package.json')),
+);
+
+/** Зоны продукта — по именам каталогов `packages/baser-<зона>`. */
+const zones = new Set(dirs.map((dir) => dir.replace(/^baser-/, '')));
 
 const problems = [];
 const said = [];
 
-for (const dir of readdirSync(PACKAGES)) {
+for (const dir of dirs) {
   const manifestPath = join(PACKAGES, dir, 'package.json');
-  if (!existsSync(manifestPath)) continue;
-
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
   const { name, version } = manifest;
   if (!name || !version || manifest.private) continue;
@@ -118,7 +151,12 @@ for (const dir of readdirSync(PACKAGES)) {
     continue;
   }
 
-  const breaking = breakingSince(`${name}@${released.version}`, join(PACKAGES, dir));
+  const breaking = breakingSince(
+    `${name}@${released.version}`,
+    join(PACKAGES, dir),
+    dir.replace(/^baser-/, ''),
+    zones,
+  );
   if (breaking.length === 0) {
     said.push(`${name}: ${released.version} → ${version}, ломающего с прошлого выпуска нет`);
     continue;
