@@ -49,9 +49,14 @@ export const USAGE = `baser — дверь материализации и по�
   --json            отдать ответ данными (любая команда)
   --cwd <path>      корень репозитория потребителя — plan, apply
   --confirm <dest>  отдать чужой артефакт во владение обвесу, поимённо — plan, apply
+  --difference      расхождение с чужим файлом целиком, без усечения — plan, apply
   --into <path>     каталог выдачи — pack, bundle
   --version         версии схем: двери, формы, вывода движка, бандла
   --help            это сообщение
+
+Что из чужого файла не воспроизведётся, план называет построчно и БЕЗ ФЛАГА —
+--difference только снимает усечение: показанного всегда меньше найденного, и
+сколько именно, сказано счётчиком там же.
 
 --confirm отдаёт ВЛАДЕНИЕ, и что при этом станет с содержимым, решает класс,
 которым обвес держит артефакт: regenerated — твоя версия заменяется сборкой
@@ -102,6 +107,7 @@ export async function cli(
       command: parsed.command,
       cwd: parsed.cwd ?? cwd,
       confirm: parsed.confirm,
+      difference: parsed.difference,
     });
     return emit({ kind: 'door', door }, renderText(door), exitCodeOf(door));
   }
@@ -163,12 +169,15 @@ const NEEDS_INTO: readonly Command[] = ['pack', 'bundle'];
  * `--json` не перечисляется: он есть у всех и означает у всех одно.
  */
 const FLAGS_BY_COMMAND: Readonly<Record<Command, readonly string[]>> = {
-  plan: ['--cwd', '--confirm'],
-  apply: ['--cwd', '--confirm'],
+  plan: ['--cwd', '--confirm', '--difference'],
+  apply: ['--cwd', '--confirm', '--difference'],
   check: [],
   pack: ['--into'],
   bundle: ['--into'],
 };
+
+/** Флаги, которым значение не нужно: они называют не «что», а «как». */
+const WITHOUT_VALUE: readonly string[] = ['--difference'];
 
 /** Кому флаг всё-таки принадлежит — чтобы отказ показывал верную команду. */
 function ownersOf(flag: string): readonly Command[] {
@@ -184,6 +193,8 @@ type ParsedArgv =
       readonly json: boolean;
       readonly cwd: string | null;
       readonly confirm: readonly string[];
+      /** Показать расхождение с чужим файлом целиком, без усечения. */
+      readonly difference: boolean;
       /** Каталог обвеса для команд подготовки. */
       readonly target: string;
       /** Каталог выдачи для `pack` и `bundle`. */
@@ -230,8 +241,20 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
   let json = false;
   let cwd: string | null = null;
   let into: string | null = null;
+  let difference = false;
   const confirm: string[] = [];
   const positional: string[] = [];
+
+  /** Флаг знаком другой команде: для этой он ничем не лучше опечатки. */
+  const foreign = (flag: string): ParsedArgv => ({
+    ok: false,
+    stdout:
+      `флаг "${flag}" команде "${command}" не принадлежит — ` +
+      `он у ${ownersOf(flag).join(' и ')}. Молча пропустить его значило бы ` +
+      'сделать вид, что он сработал.\n\n' +
+      `${USAGE}\n`,
+    exitCode: 2,
+  });
 
   for (let index = 0; index < rest.length; index += 1) {
     const flag = rest[index];
@@ -246,18 +269,17 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
       continue;
     }
 
+    if (WITHOUT_VALUE.includes(flag)) {
+      if (!FLAGS_BY_COMMAND[command].includes(flag)) {
+        return foreign(flag);
+      }
+      difference = true;
+      continue;
+    }
+
     if (flag === '--cwd' || flag === '--confirm' || flag === '--into') {
       if (!FLAGS_BY_COMMAND[command].includes(flag)) {
-        const owners = ownersOf(flag);
-        return {
-          ok: false,
-          stdout:
-            `флаг "${flag}" команде "${command}" не принадлежит — ` +
-            `он у ${owners.join(' и ')}. Молча пропустить его значило бы ` +
-            'сделать вид, что он сработал.\n\n' +
-            `${USAGE}\n`,
-          exitCode: 2,
-        };
+        return foreign(flag);
       }
 
       const argument = rest[index + 1];
@@ -317,6 +339,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
     json,
     cwd,
     confirm,
+    difference,
     target: positional[0] ?? '',
     into: into ?? '',
   };

@@ -117,6 +117,8 @@ import {
   renderSourceConfig,
 } from './settings.js';
 import { recoverPlacedValues, type PlacedValue } from './previous.js';
+import { derivedMoves, type DerivedMove } from './derived.js';
+import { differenceOf, type ArtifactDifference } from './difference.js';
 import { loadDefaults, resolveValues, type SettingMovement } from './values.js';
 import type {
   ConfigReport,
@@ -145,6 +147,20 @@ export interface RunOptions {
    * называет сам, конфликтами с `detail.resolution === 'confirm'`.
    */
   readonly confirm?: readonly string[];
+  /**
+   * ПОСТРОЧНОЕ РАСХОЖДЕНИЕ С ЧУЖИМ ФАЙЛОМ — целиком, без усечения.
+   *
+   * По умолчанию расхождение считается всегда, а в ответ уезжает первыми
+   * `SHOWN_LINES` строками на сторону: дифф бывает длинным, и вываливать чужой
+   * файл целиком в лицо каждому, кто ставит обвес в живой репозиторий, значило
+   * бы сделать его нечитаемым (`tasker:BASER2-112`). Сколько строк ВСЕГО,
+   * говорят счётчики — усечение названо, а не молчаливо.
+   *
+   * Флаг снимает предел и для текста, и для машинного ответа сразу: усечение —
+   * свойство ОТВЕТА, а не рендера. Второй правды о том, сколько строк
+   * разошлось, у двери быть не должно.
+   */
+  readonly difference?: boolean;
 }
 
 /**
@@ -173,9 +189,21 @@ interface DraftRun {
   readonly source: SourceReport;
   config: SourceConfigReport;
   settings: readonly SettingMovement[];
+  derived: readonly DerivedMove[];
+  differences: readonly ArtifactDifference[];
   plan: MaterializationPlan | null;
   applied: ApplyReport | null;
 }
+
+/**
+ * Сколько строк расхождения уезжает в ответ без `--difference`.
+ *
+ * Не «сколько поместится на экран»: число выбрано так, чтобы форма потери была
+ * видна (чего лишаешься — обычно понятно по первым же строкам), а сам файл в
+ * лицо не вываливался. Остаток при этом НАЗВАН счётчиком, и способ увидеть его
+ * целиком назван тут же в тексте.
+ */
+const SHOWN_LINES = 12;
 
 /**
  * ОЧЕРЕДЬ ПРОГОНОВ: отдающий артефакт идёт раньше принимающего.
@@ -370,6 +398,8 @@ async function runInRepo(
       source: describeSource(item.declaration, item.pkg, item.location),
       config: blankSourceConfig(item.declaration.source.id),
       settings: [],
+      derived: [],
+      differences: [],
       plan: null,
       applied: null,
     });
@@ -482,6 +512,24 @@ async function runInRepo(
       'door.placed',
       () => withPlacedValues(draft.settings, plan, item),
       { source: draft.source.id, steps: plan.steps.length },
+    );
+
+    // ЦЕНА ДВИЖЕНИЯ — тем же порядком и по той же причине: последствие обязано
+    // быть названо раньше, чем что-то поедет. Считается от плана, а не от
+    // диска: оба конца содержимого несёт он сам (`tasker:BASER2-98`).
+    draft.derived = trace.span(
+      'door.derived',
+      () => withDerivedMoves(draft.settings, plan),
+      { source: draft.source.id },
+    );
+
+    // Чужой файл на пути обвеса — что из него не воспроизведётся
+    // (`tasker:BASER2-112`). Тут дверь читает дерево сама: у спорного пути шага
+    // нет вовсе, отказ на нём — конфликт, и второго конца в плане не лежит.
+    draft.differences = trace.span(
+      'door.difference',
+      () => foreignDifferences(plan, item, tree, options.difference === true),
+      { source: draft.source.id },
     );
 
     // Заблокированный прогон к дереву не применяется, а разбор идёт дальше:
@@ -803,6 +851,132 @@ function withPlacedValues(
 }
 
 /**
+ * ЧТО ПЕРЕЕДЕТ ВМЕСТЕ С НАЗВАННЫМ ЗНАЧЕНИЕМ — посчитанное от него.
+ *
+ * План говорит `imageUser "node" → "vscode"` и молчит о том, что от этой
+ * настройки СЧИТАЕТСЯ адрес тома: `omnifield-secrets` и `omnifield-pnpm-store`
+ * уезжают с `/home/node/…` на `/home/vscode/…`, а в томах лежит положенное
+ * руками (`tasker:BASER2-98`). Значение человек выбрал сам — производное от него
+ * он не выбирал и обязан прочитать вслух.
+ *
+ * Материал — те же два конца, что и у прежнего значения: лежащее содержимое
+ * (`step.previous`) и то, которое ляжет (`step.content`). Ни про тома, ни про
+ * формат дверь при этом не знает: она называет слово, которое исчезнет, и слово,
+ * которое встанет на его место, и каждое утверждение доказано подстановкой
+ * (`derived.ts`).
+ *
+ * Ищется только по НАЗВАННЫМ движениям: прежний конец, которого дверь доказать
+ * не смогла, здесь не всплывает вторым путём — молчание `previous.ts` остаётся
+ * молчанием.
+ */
+function withDerivedMoves(
+  movements: readonly SettingMovement[],
+  plan: MaterializationPlan,
+): readonly DerivedMove[] {
+  const moved = movements.flatMap((movement) =>
+    movement.placed !== undefined &&
+    typeof movement.value === 'string' &&
+    typeof movement.placed.value === 'string'
+      ? [
+          {
+            key: movement.key,
+            from: movement.placed.value,
+            to: movement.value,
+          },
+        ]
+      : [],
+  );
+  if (moved.length === 0) {
+    return [];
+  }
+
+  return plan.steps.flatMap((step) =>
+    step.reason === 'diverged' &&
+    step.previous !== null &&
+    step.content !== null
+      ? derivedMoves({
+          dest: step.dest,
+          placed: step.previous,
+          comes: step.content,
+          moved,
+        })
+      : [],
+  );
+}
+
+/**
+ * ЧТО ИЗ ЧУЖОГО ФАЙЛА НЕ ВОСПРОИЗВЕДЁТСЯ — построчно (`tasker:BASER2-112`).
+ *
+ * Чужой файл приходит к двери двумя дорогами, и обе ведут к одной потере:
+ *
+ * | что видно                          | где лежит второй конец                 |
+ * | ---------------------------------- | -------------------------------------- |
+ * | отказ `foreign-dest` (не подтверждено) | шага нет: содержимое читается из дерева |
+ * | `adopted` с подтверждением         | оба конца несёт сам шаг                |
+ *
+ * **`placed-once` сюда не попадает вовсе**, и это не оптимизация: подтверждение
+ * такого артефакта содержимое НЕ ТРОГАЕТ (`tasker:BASER2-123`), терять человеку
+ * нечего, и показать ему «вот чего ты лишишься» значило бы пугать ценой,
+ * которой нет. Класс берётся из объявления того обвеса, который в этот путь
+ * целится, — из того же места, откуда его берёт движок.
+ *
+ * Читать дерево для первой дороги дверь вправе: это ровно тот файл, про который
+ * человек прямо сейчас принимает решение, и второй правды о нём тут не заводится
+ * — она у нас единственная (движок его содержимого не отдаёт, потому что шага по
+ * нему нет).
+ */
+function foreignDifferences(
+  plan: MaterializationPlan,
+  item: Prepared,
+  tree: RepoTree,
+  whole: boolean,
+): readonly ArtifactDifference[] {
+  const limit = whole ? null : SHOWN_LINES;
+  const found: ArtifactDifference[] = [];
+
+  // Подтверждённое взятие во владение: оба конца уже в шаге. `placed-once`
+  // здесь отсеивается сам собой — у него шаг `record` без содержимого.
+  for (const step of plan.steps) {
+    if (
+      step.reason !== 'adopted' ||
+      step.content === null ||
+      step.previous === null
+    ) {
+      continue;
+    }
+    found.push(
+      differenceOf({
+        dest: step.dest,
+        placed: step.previous,
+        comes: step.content,
+        limit,
+      }),
+    );
+  }
+
+  for (const conflict of plan.conflicts) {
+    if (conflict.kind !== 'foreign-dest') {
+      continue;
+    }
+    const entry = item.declaration.layout.find(
+      (layout) => layout.dest === conflict.dest,
+    );
+    if (entry === undefined || entry.class === 'placed-once') {
+      continue;
+    }
+    const src = toRepoPath(entry.src);
+    const comes = src.ok ? item.rendered.bySrc.get(src.path) : undefined;
+    const placed = tree.read(conflict.dest, 'utf-8');
+    if (comes === undefined || typeof placed !== 'string') {
+      continue;
+    }
+    found.push(differenceOf({ dest: conflict.dest, placed, comes, limit }));
+  }
+
+  return found;
+}
+
+/**
  * Подтверждения, адресованные ИМЕННО этому обвесу.
  *
  * Подтверждение поимённо — правило движка, а он видит одну декларацию за прогон
@@ -836,6 +1010,8 @@ function freeze(drafts: readonly DraftRun[]): readonly SourceRun[] {
     source: draft.source,
     config: draft.config,
     settings: draft.settings,
+    derived: draft.derived,
+    differences: draft.differences,
     plan: draft.plan,
     applied: draft.applied,
   }));
@@ -1031,6 +1207,15 @@ function diagnoseForeignDests(
   const regenerated = claimed.filter((entry) => entry.class !== 'placed-once');
   const price = priceOfConfirmation(regenerated, once);
 
+  // Указатель на блок расхождения ставится только там, где блок есть: у
+  // `placed-once` содержимое не трогают вовсе, расхождения не считалось, и
+  // ссылка вела бы в пустое место (`tasker:BASER2-112`).
+  const named =
+    regenerated.length === 0
+      ? ''
+      : '. Что именно из лежащих файлов не воспроизведётся, названо построчно ' +
+        'блоком "чужое не воспроизведётся" выше';
+
   // Конфиг лежал на диске ДО прогона: собственный, который дверь родила бы
   // этим же прогоном, здесь не считается — иначе признак был бы всегда верен.
   //
@@ -1052,7 +1237,7 @@ function diagnoseForeignDests(
           'отказы выше. Восстанови запись из истории: это вернёт владение и ничего не ' +
           'перезапишет. А если в истории её нет — значит baser здесь ещё не раскладывал ' +
           '(конфиг написали руками), и файлы на этих местах не наши: подтверди их ' +
-          `поимённо (--confirm) — ${price}, и запись родится заново`,
+          `поимённо (--confirm) — ${price}, и запись родится заново${named}`,
       }
     : {
         code: 'first-install',
@@ -1078,7 +1263,9 @@ function diagnoseForeignDests(
               'сборку не попадает НИЧЕГО — даже совпадающее по смыслу. Регулируется ' +
               'только названное настройкой, всё остальное приезжает из шаблона как ' +
               'есть. Что настраивается, этот прогон уже назвал блоком значений — сверь ' +
-              'с ним своё ДО подтверждения: чего там нет, то не переедет. ') +
+              'с ним своё ДО подтверждения: чего там нет, то не переедет. А ЧТО ИМЕННО ' +
+              'из твоего файла не воспроизведётся, названо построчно блоком "чужое не ' +
+              'воспроизведётся" выше — сверять глазами больше не надо. ') +
           'Дальше решаешь ты. Пусть файл ведёт ' +
           `обвес — подтверди его поимённо (--confirm <путь>): ${price}. ` +
           'Оставляешь свой — сними обвес, и baser сюда больше не поцелится',

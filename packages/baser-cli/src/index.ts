@@ -87,6 +87,13 @@ export type {
   SettingMovement,
 } from './lib/values.js';
 
+// ЦЕНА ДВИЖЕНИЯ — часть ОТВЕТА, значит формы публичные: `SourceRun.derived` и
+// `SourceRun.differences` на них ссылаются. Механики (`derivedMoves`,
+// `differenceOf`) остаются внутренними по тому же правилу, что и восстановление
+// прежнего конца: наружу уезжает ответ, а не то, чем он посчитан.
+export type { DerivedMove } from './lib/derived.js';
+export type { ArtifactDifference } from './lib/difference.js';
+
 // `SettingMovement.placed` ссылается на эту форму — значит она публичная тоже.
 // Механизм восстановления (`recoverPlacedValues`) остаётся внутренним: наружу
 // уезжает ОТВЕТ, а не то, чем он посчитан.

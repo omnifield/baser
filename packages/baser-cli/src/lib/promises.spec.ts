@@ -231,6 +231,20 @@ describe('флаг, не относящийся к команде, отказы�
     expect(outcome.stdout).toContain('--into');
   });
 
+  it('`check --difference` не проглатывается молча', async () => {
+    // Флаг без значения ходит по тому же правилу, что и флаг со значением:
+    // разбор у них разный, а обещание одно — молча пропустить нельзя
+    // (`tasker:BASER2-112`).
+    const outcome = await cli(
+      ['check', 'packages/baser-devbox', '--difference'],
+      process.cwd(),
+    );
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stdout).toContain('--difference');
+    expect(outcome.stdout).toContain('check');
+  });
+
   it('свой флаг у своей команды по-прежнему работает', async () => {
     consumer = installDevbox({
       config: { formVersion: 2, sources: [{ use: DEVBOX_PACKAGE }] },
@@ -272,6 +286,15 @@ describe('словарь — тот, что в каноне', () => {
     expect(USAGE).toContain('regenerated');
     expect(USAGE).toContain('placed-once');
     expect(USAGE).toContain('содержимое не трогается');
+  });
+
+  it('справка про --difference не обещает, что без него дверь молчит', () => {
+    // Флаг снимает УСЕЧЕНИЕ, а не включает рассказ. Прочитанный как выключатель,
+    // он оставил бы человека уверенным, что расхождение надо ещё попросить, — то
+    // есть ровно в том положении, из которого он пришёл (`tasker:BASER2-112`).
+    expect(USAGE).toContain('--difference');
+    expect(USAGE).toContain('БЕЗ ФЛАГА');
+    expect(USAGE).toContain('только снимает усечение');
   });
 });
 
