@@ -34,6 +34,8 @@ import type {
   MaterializationPlan,
   TraceSpan,
 } from '@omnifield/baser-materialize';
+import type { DerivedMove } from './derived.js';
+import type { ArtifactDifference } from './difference.js';
 import type { DoorProblem } from './problems.js';
 import type { SourceLocation } from './installed.js';
 import type { SettingMovement } from './values.js';
@@ -193,6 +195,28 @@ export interface SourceRun {
    * человек обязан прочитать раньше, чем решит применять.
    */
   readonly settings: readonly SettingMovement[];
+  /**
+   * ПОСЧИТАННОЕ от переехавших значений — то, что переедет вместе с ними.
+   *
+   * Движение выше называет значение; здесь — его последствия в самом артефакте:
+   * адрес тома, посчитанный от имени пользователя образа, уезжает вместе с ним,
+   * а в томе лежит то, что человек клал руками (`tasker:BASER2-98`). Дверь при
+   * этом не знает ни про тома, ни про формат — она называет слово артефакта,
+   * которое исчезнет, и слово, которое встанет на его место (`derived.ts`).
+   */
+  readonly derived: readonly DerivedMove[];
+  /**
+   * ПОСТРОЧНОЕ РАСХОЖДЕНИЕ с чужим файлом — что из него не воспроизведётся.
+   *
+   * Только там, где на месте артефакта лежит НЕ НАШЕ: первая установка в
+   * непустой репозиторий, потерянная служебная запись, подтверждённое взятие во
+   * владение. План печатал свои значения и молчал о том, что было у человека
+   * (`tasker:BASER2-112`); здесь названы обе стороны, и формат при этом не
+   * разбирается (`difference.ts`).
+   *
+   * Пусто и у сошедшегося прогона, и у того, где чужого файла нет вовсе.
+   */
+  readonly differences: readonly ArtifactDifference[];
   /** План движка; `null` — до плана этот обвес не дошёл. */
   readonly plan: MaterializationPlan | null;
   /**
