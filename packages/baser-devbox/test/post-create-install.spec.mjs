@@ -36,6 +36,21 @@
  * флага обязаны повиснуть. Без него «вопросов не задаёт» доказывалось бы фикстурой, в
  * которой вопрос и не поднимался, — зелено и пусто.
  *
+ * ── ФИКСТУРА НЕ НАСЛЕДУЕТ ПРОГОН ────────────────────────────────────────────
+ *
+ * Ровно это с контролем и случилось — в CI, при зелёном локальном verify. Фикстура
+ * брала окружение прогона, вычищая из него `npm_config_*`; в GitHub Actions в
+ * окружении лежит `CI=true`, а pnpm с ним подтверждений не спрашивает вовсе — вопрос
+ * не поднялся, установка дошла до конца, контроль покраснел (PR #51). Он и обещал
+ * покраснеть, если раскладка перестанет поднимать вопрос, — обещание сработало.
+ *
+ * Причина, однако, не в pnpm и не в CI: **фикстура, унаследовавшая чужое окружение,
+ * перестаёт мерить то, ради чего заведена**. Постсоздание идёт в контейнере, и от
+ * раннера ему наследовать нечего. Поэтому окружение здесь СОБИРАЕТСЯ по белому списку
+ * (`env.mjs`), а контроль вдобавок гоняется ПОД ШУМОМ прогона, выставленным руками
+ * (`withRunnerNoise`): вернись наследование — красное будет сразу и локально.
+ * Зелёный локальный verify не равен зелёному CI, и цену этому мы уже заплатили.
+ *
  * ── ПОД КАКИМ pnpm ЭТО ГОНЯЕТСЯ ─────────────────────────────────────────────
  *
  * Фикстура пинует `packageManager` этого репозитория, то есть ту же pnpm, под которой
@@ -62,6 +77,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { run, soleRun } from '../../baser-cli/src/index.ts';
+import { containerEnv } from './env.mjs';
 import {
   consumerConfig,
   installConsumer,
@@ -132,17 +148,42 @@ function pinnedPnpm() {
 }
 
 /**
- * Чистка унаследованного npm-контекста (тот же приём, что в `registry.spec.mjs`).
+ * Шум прогона в окружении — НАРОЧНО, на время тела.
  *
- * Постсоздание выполняется В КОНТЕЙНЕРЕ, а не из-под прогона тестов: `npm_config_*`
- * машины сказали бы установке, куда ходить, и проба мерила бы машину. Здесь это
- * особенно дорого — стор задаётся именно так, и унаследованный адрес стёр бы разницу
- * между «поставлено снаружи» и «поставлено контейнером».
+ * Негативный контроль держится на том, что вопрос ПОДНИМЕТСЯ, и отменить его чужое
+ * окружение может двумя разными способами — оба на нас уже сработали или могли:
+ *
+ * - `CI=true` — в GitHub Actions лежит в окружении всегда, и pnpm с ним подтверждений
+ *   не спрашивает вовсе. Именно на этом контроль позеленел в CI при зелёном локальном
+ *   verify (`tasker:BASER2-125`, PR #51 красным);
+ * - `npm_config_store_dir` — унаследованный адрес стора БЬЁТ одноимённую UPPERCASE-
+ *   переменную фикстуры (тот же приоритет, что в `registry.spec.mjs`), оба прогона
+ *   уезжают в один стор, разъезда нет — и спрашивать не о чем.
+ *
+ * Поэтому контроль гоняется не «как повезёт с машиной», а под шумом, выставленным
+ * руками: вернись фикстура к наследованию — он покраснеет СРАЗУ И ЛОКАЛЬНО, а не в
+ * чужом CI через коммит. Шум пишется в `process.env` (фикстура читает оттуда) и
+ * снимается в `finally`: соседние пробы файла живут в том же процессе.
  */
-function cleanEnv() {
-  return Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !/^npm_config/i.test(key)),
+async function withRunnerNoise(body) {
+  const store = mkdtempSync(join(tmpdir(), 'baser-devbox-runner-store-'));
+  boxes.push(store);
+  const noise = { CI: 'true', npm_config_store_dir: store };
+  const before = new Map(
+    Object.keys(noise).map((key) => [key, process.env[key]]),
   );
+  Object.assign(process.env, noise);
+  try {
+    return await body();
+  } finally {
+    for (const [key, value] of before) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 /**
@@ -183,11 +224,12 @@ function installedElsewhere() {
 
   const userconfig = join(box, 'npmrc');
   writeFileSync(userconfig, '');
-  const env = {
-    ...cleanEnv(),
+  // Окружение СОБРАНО (`env.mjs`), а не унаследовано: контейнеру от раннера
+  // наследовать нечего, и мерить проба обязана свою среду, а не машину прогона.
+  const env = containerEnv({
     NPM_CONFIG_USERCONFIG: userconfig,
     NPM_CONFIG_STORE_DIR: join(box, 'store-host'),
-  };
+  });
 
   // ДВА прогона, и это не суеверие: паспорт каталога модулей
   // (`node_modules/.modules.yaml`, в нём и записан адрес стора) pnpm кладёт не на
@@ -274,9 +316,12 @@ describe('ПОСТСОЗДАНИЕ В НЕИНТЕРАКТИВНОЙ СРЕДЕ:
       yesterday,
       'флага в дефолте нет — контролю нечего снимать, и он ничего не доказывает',
     ).not.toBe(command);
-    const box = installedElsewhere();
 
-    const attempt = await postCreate(yesterday, box);
+    // Под шумом прогона: контроль обязан держаться на СВОЕЙ среде. Наследующая
+    // фикстура здесь и краснеет — той же ошибкой, что стоила нам красного CI.
+    const attempt = await withRunnerNoise(() =>
+      postCreate(yesterday, installedElsewhere()),
+    );
 
     expect(attempt.completed, attempt.output).toBe(false);
     expect(
