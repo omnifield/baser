@@ -28,16 +28,27 @@ import { join } from 'node:path';
 // он бросает, если обвес не один (`tasker:BASER2-55`). Публичным входом зоны
 // `cli`, как и `run` (`tasker:BASER2-59`).
 import { run, soleRun } from '../../baser-cli/src/index.ts';
+import { containerEnv } from './env.mjs';
 import {
   consumerConfig,
   installConsumer,
   LIVE,
+  packedManifest,
   parseJsonc,
   tuning,
 } from './packed.mjs';
 
 const SCOPE = '@omnifield';
-const INSTALL = 'pnpm install --frozen-lockfile';
+
+/**
+ * Шаг установки — ДЕФОЛТОМ ИЗ ОБЪЯВЛЕНИЯ, а не копией его строки.
+ *
+ * Файл про реестр: установка ему нужна как граница, по которой режется
+ * постсоздание, и чем именно она ставит — не его вопрос. Копия делала бы этот файл
+ * вторым местом, где записан дефолт, и краснела бы на правке в первом — так и вышло,
+ * когда дефолт стал неинтерактивным (`tasker:BASER2-125`).
+ */
+const INSTALL = packedManifest().baser.settings.installCommand.default;
 
 /**
  * Постсоздание БЕЗ первого шага — названных потерь тулчейна.
@@ -97,11 +108,15 @@ function checkStep(npmScope = SCOPE) {
  * `execFileSync` здесь не годится и это не вкусовщина: стаб-реестр поднят в этом же
  * процессе, и синхронный запуск npm не дал бы ему принять соединение — проверка
  * «доступ есть» вечно падала бы по таймауту, доказывая несуществующий дефект.
+ *
+ * Окружение СОБИРАЕТСЯ (`env.mjs`), а не наследуется от прогона: проверка изображает
+ * постсоздание В КОНТЕЙНЕРЕ, и унаследованный npm-контекст мерил бы машину. Там же
+ * записано, чем это чревато и почему белый список, а не чистка `npm_config_*`.
  */
 function sh(script, env) {
   return new Promise((resolve) => {
     const child = spawn('sh', ['-c', script], {
-      env: { ...cleanEnv(), ...env },
+      env: containerEnv(env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = '';
@@ -110,24 +125,6 @@ function sh(script, env) {
     child.stderr.on('data', (chunk) => (err += chunk));
     child.on('close', (code) => resolve({ code, out, err }));
   });
-}
-
-/**
- * Окружение БЕЗ следов npm, из-под которого запущены сами тесты.
- *
- * Прогон идёт через `npx`, а тот экспортирует `npm_config_*` — в том числе
- * `npm_config_prefix` и `npm_config_globalconfig`, указывающие на общий npmrc
- * машины. Они бьют одноимённые UPPERCASE-переменные, поэтому клетка из
- * `NPM_CONFIG_PREFIX` выглядела клеткой и не держала: мутация «`--location=user` →
- * `--location=global`» всё равно писала приватный реестр на машину.
- *
- * Чистка — не только защита. Постсоздание девбокса выполняется В КОНТЕЙНЕРЕ, а не
- * из-под npx: проверка, унаследовавшая чужой npm-контекст, меряла бы не то.
- */
-function cleanEnv() {
-  return Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !/^npm_config/i.test(key)),
-  );
 }
 
 /** Стаб приватного реестра: отвечает на то же, что спрашивает `npm whoami`. */

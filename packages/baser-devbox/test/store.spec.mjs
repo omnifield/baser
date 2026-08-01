@@ -34,6 +34,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { run } from '../../baser-cli/src/index.ts';
+import { containerEnv } from './env.mjs';
 import {
   consumerConfig,
   installConsumer,
@@ -74,22 +75,18 @@ async function materialize(block) {
  * `pnpm store path` в чистом окружении — ровно тот вопрос, на который потребитель
  * получил неверный ответ.
  *
- * Окружение чистится от всех `*_config_*`, которыми располагает прогон: тесты
- * запускаются из-под менеджера пакетов, а постсоздание девбокса — нет, и
- * унаследованный контекст мерил бы не то. Дальше в него кладутся ИМЕННО ТЕ
+ * Окружение СОБИРАЕТСЯ (`env.mjs`), а не наследуется: тесты запускаются из-под
+ * менеджера пакетов, а постсоздание девбокса — нет, и унаследованный контекст мерил бы
+ * машину прогона. Чистка `*_config_*`, стоявшая здесь раньше, перечисляла ЧУЖОЕ и
+ * потому не держала — цена названа в `env.mjs`. В собранное кладутся ИМЕННО ТЕ
  * переменные, что уедут в артефакт.
  */
 function storePath(env) {
   const box = mkdtempSync(join(tmpdir(), 'baser-devbox-store-'));
   boxes.push(box);
-  const clean = Object.fromEntries(
-    Object.entries(process.env).filter(
-      ([key]) => !/^(npm_config|pnpm_config)/i.test(key),
-    ),
-  );
   return execFileSync('pnpm', ['store', 'path'], {
     cwd: box,
-    env: { ...clean, ...env },
+    env: containerEnv(env),
     encoding: 'utf-8',
   }).trim();
 }
