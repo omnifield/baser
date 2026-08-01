@@ -43,6 +43,23 @@ jobs:
           echo "Зона обязательна — по ней видно, чьё изменение."
           exit 1
 
+  # Номер выпуска обязан называть цену изменения. На нулевых мажорах `nx release`
+  # поднимает патч и фиче, и ломающему (проверено прогоном 2026-08-01), поэтому
+  # бамп назначается руками — а гейт держит то, что дисциплине не отдают:
+  # ломающее с прошлого тега не уедет в реестр патчем (`tasker:BASER2-95`).
+  #
+  # Нужна ВСЯ история и теги: база сравнения — тег последнего выпуска пакета.
+  release-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node tools/release-guard.mjs
+
   main:
     runs-on: ubuntu-latest
     steps:
