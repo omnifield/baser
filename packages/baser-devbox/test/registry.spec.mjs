@@ -32,12 +32,22 @@ import {
   consumerConfig,
   installConsumer,
   LIVE,
+  packedManifest,
   parseJsonc,
   tuning,
 } from './packed.mjs';
 
 const SCOPE = '@omnifield';
-const INSTALL = 'pnpm install --frozen-lockfile';
+
+/**
+ * Шаг установки — ДЕФОЛТОМ ИЗ ОБЪЯВЛЕНИЯ, а не копией его строки.
+ *
+ * Файл про реестр: установка ему нужна как граница, по которой режется
+ * постсоздание, и чем именно она ставит — не его вопрос. Копия делала бы этот файл
+ * вторым местом, где записан дефолт, и краснела бы на правке в первом — так и вышло,
+ * когда дефолт стал неинтерактивным (`tasker:BASER2-125`).
+ */
+const INSTALL = packedManifest().baser.settings.installCommand.default;
 
 /**
  * Постсоздание БЕЗ первого шага — названных потерь тулчейна.

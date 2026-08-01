@@ -38,6 +38,7 @@ import {
   consumerConfig,
   installConsumer,
   LIVE,
+  packedManifest,
   parseJsonc,
   tuning,
   tuningPath,
@@ -385,12 +386,12 @@ describe('НЕ МОЛЧАТЬ: тулчейн, объявленный репоз
     // Названная потеря — не отказ, и цепочка `&&` обязана дожить до установки
     // даже когда потеря названа. Иначе полиглот получил бы девбокс без
     // зависимостей вместо девбокса без питона.
+    // Шаг установки берётся дефолтом ИЗ ОБЪЯВЛЕНИЯ: файл про тулчейн, и копия
+    // чужого дефолта краснела бы у него на правке в чужой настройке.
+    const install = packedManifest().baser.settings.installCommand.default;
     const post = json.postCreateCommand;
-    expect(post.endsWith('pnpm install --frozen-lockfile')).toBe(true);
-    const upToInstall = post.slice(
-      0,
-      -' && pnpm install --frozen-lockfile'.length,
-    );
+    expect(post.endsWith(install)).toBe(true);
+    const upToInstall = post.slice(0, -` && ${install}`.length);
     const result = await sh(upToInstall, repo({ files: ['.python-version'] }));
     expect(result.code).toBe(0);
   });
