@@ -14,7 +14,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { readdirSync } from 'node:fs';
+import { readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FORM_VERSION } from '@omnifield/baser-contracts';
 import {
@@ -140,6 +140,63 @@ describe('конфиг потребителя рождается один раз
   });
 });
 
+describe('засев: два разных «не получилось», и молчание тут одно', () => {
+  const BROKEN = '@fixture/сломан';
+  const ABSENT = '@fixture/не-поставлен';
+
+  it('поставленный пакет с непригодным манифестом молча не выпадает', async () => {
+    const box = install();
+    const broken = box.installSource({
+      packageName: BROKEN,
+      id: 'fixture/broken',
+      layout: [{ src: 'file.md', dest: 'docs/file.md', render: false }],
+      templates: { 'file.md': '# file\n' },
+    });
+    // Недописанный `package.json` — ровно то, на чём отказывает сам резолвер
+    // Node, причём тем же отказом, что и на отсутствующем пакете. Разводит их
+    // код резолва контрактов (`tasker:BASER2-127`), а не наша догадка.
+    writeFileSync(join(broken.root, 'package.json'), '{ "name":');
+
+    const result = await run({ command: 'plan', cwd: box.root });
+
+    expect(result.status).toBe('refused');
+    const [problem] = result.problems;
+    expect(problem.code).toBe('package-manifest-unreadable');
+    // Пакет назван: иначе человеку сказано «что-то не читается» и предложено
+    // искать самому.
+    expect(problem.message).toContain(BROKEN);
+    // Перечень, про который известно, что он неполон, не рождается вовсе:
+    // рождение бывает одно, и следующий прогон эту дыру уже не залатает.
+    expect(result.config.creates).toBe(false);
+    expect(box.exists('baser.json')).toBe(false);
+  });
+
+  it('объявленная, но НЕ поставленная зависимость молчит — и это решение', async () => {
+    const box = install();
+    // Так выглядит свежий `checkout` без `install`: строка в манифесте есть,
+    // пакета на диске нет. Сказать про него нечего — обвес он или нет, знает
+    // только его манифест, а манифеста нет вовсе.
+    const manifest = JSON.parse(box.read('package.json') ?? '{}') as {
+      devDependencies?: Record<string, string>;
+    };
+    manifest.devDependencies = {
+      ...manifest.devDependencies,
+      [ABSENT]: '0.1.0',
+    };
+    box.write('package.json', `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const result = await run({ command: 'apply', cwd: box.root });
+
+    expect(result.problems).toEqual([]);
+    expect(result.status).toBe('applied');
+    // Перечень при этом настоящий: поставленный обвес в нём есть.
+    expect(JSON.parse(box.read('baser.json') ?? '{}')).toEqual({
+      formVersion: FORM_VERSION,
+      sources: [{ use: DEVBOX_PACKAGE }],
+    });
+  });
+});
+
 describe('отказ говорит чужим кодом, когда код есть', () => {
   it('опечатка в настройке — код КОНТРАКТОВ, а не выдумка двери', async () => {
     const box = install({
@@ -207,7 +264,9 @@ describe('отказ говорит чужим кодом, когда код е�
 
     const outcome = await cli(['plan', '--cwd', box.root], process.cwd());
 
-    expect(door(outcome)?.problems[0].code).toBe('package-not-found');
+    // Код — резолва контрактов, а не свой: своего у двери на это событие
+    // больше нет (`tasker:BASER2-128`).
+    expect(door(outcome)?.problems[0].code).toBe('package-not-installed');
     expect(outcome.exitCode).toBe(2);
   });
 
@@ -225,7 +284,7 @@ describe('отказ говорит чужим кодом, когда код е�
 
     expect(result.status).toBe('refused');
     const [problem] = result.problems;
-    expect(problem.code).toBe('package-not-found');
+    expect(problem.code).toBe('package-not-installed');
     expect(problem.at).toBe('baser.json.sources[1].use');
     // Кода `multiple-sources` больше нет: он снят вместе с причиной, а не
     // подавлен (`tasker:BASER2-55`).

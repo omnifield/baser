@@ -25,9 +25,10 @@ import {
   FORM_VERSION,
   parseConsumerConfig,
   type ConsumerConfig,
+  type FormProblem,
   type FormResult,
 } from '@omnifield/baser-contracts';
-import { resolveInstalledPackage } from './installed.js';
+import { locatePackage } from '@omnifield/baser-contracts/locate';
 
 /** Куда дверь пришла работать. */
 export interface Repo {
@@ -74,6 +75,10 @@ export interface ConsumerConfigState {
  * Засев работает ТОЛЬКО когда файла нет. Существующий конфиг авторитетен
  * целиком: иначе снятый пользователем обвес возвращался бы в конфиг сам, и
  * отказаться от поставленного пакета стало бы нечем.
+ *
+ * Отказать чтение может и на засеве — когда поставленный пакет есть, а его
+ * манифест непригоден: перечень, про который мы знаем, что он неполон, не
+ * рождается вовсе (`discoverInstalledSources`).
  */
 export function readConsumerConfig(
   repo: Repo,
@@ -82,6 +87,10 @@ export function readConsumerConfig(
   const absolute = join(repo.root, path);
 
   if (!existsSync(absolute)) {
+    const seeded = discoverInstalledSources(repo);
+    if (!seeded.ok) {
+      return seeded;
+    }
     const config: ConsumerConfig = {
       // Версию формы проставляет дверь, а не пользователь: миграционный крючок
       // появляется, вводить его никто не вводит (`kb:BASER2-5`, §6 формы).
@@ -89,7 +98,7 @@ export function readConsumerConfig(
       // Ни пресетов, ни значений: их место — файл на инструмент. Записать сюда
       // пустые заготовки значило бы предъявить человеку два места под одно и
       // то же и обещать, что работает любое.
-      sources: discoverInstalledSources(repo).map((use) => ({ use })),
+      sources: seeded.value.map((use) => ({ use })),
     };
     return {
       ok: true,
@@ -149,11 +158,37 @@ export function serializeConsumerConfig(config: ConsumerConfig): string {
  * то, что потребитель поставил СЕБЕ, а не то, что приехало транзитивно с чужой
  * зависимостью. Порядок байтовый — конфиг, рождённый дважды на одной раскладке,
  * обязан выйти одинаковым.
+ *
+ * ── ДВА РАЗНЫХ «НЕ ПОЛУЧИЛОСЬ», И МОЛЧАНИЕ ТУТ РОВНО ОДНО ───────────────────
+ *
+ * Пока резолв путал «пакета нет» с «манифест непригоден» (`tasker:BASER2-127`),
+ * у засева был один факт на оба случая, и не назвать его было честно: мы и
+ * правда не знали. Резолв контрактов их развёл — и молчание про второй стало
+ * бы уже не «мы не знаем», а «мы знаем и не говорим».
+ *
+ * **`package-not-installed` — молчим, и вот почему.** Засев отвечает на вопрос
+ * «что ПОСТАВЛЕНО», а пакет, объявленный в зависимостях и не поставленный, лежит
+ * за границей этого вопроса целиком: обвес он или нет, сказать может только его
+ * манифест, а манифеста нет вовсе. Отказывать на таком соседе значило бы ронять
+ * дверь в репозитории, где просто не сделан `install`, — причём ронять её на
+ * пакете, к обвесам, возможно, никакого отношения не имеющем.
+ *
+ * **`package-manifest-unreadable` — отказываем.** Пакет лежит на диске, и
+ * объявление обвеса живёт ровно в том файле, который прочитать не вышло: «обвес
+ * ли это» — вопрос, на который у нас нет ответа, а не ответ «нет». Перечень
+ * рождается ОДИН РАЗ и дальше авторитетен целиком (существующий конфиг засев не
+ * трогает), поэтому дыра, допущенная при рождении, следующим прогоном не
+ * лечится — человек чинит её правкой `baser.json` руками, и сперва догадавшись,
+ * что чинить. Положить перечень, про который мы знаем, что он неполон, значит
+ * соврать его полнотой.
+ *
+ * Цена отказа при этом маленькая: файла ещё нет, чинится названный файл, а
+ * следующий прогон засевает заново — ничего не потеряно и ничего не застыло.
  */
-function discoverInstalledSources(repo: Repo): string[] {
+function discoverInstalledSources(repo: Repo): FormResult<string[]> {
   const manifest = join(repo.root, 'package.json');
   if (!existsSync(manifest)) {
-    return [];
+    return { ok: true, value: [] };
   }
 
   let parsed: { dependencies?: unknown; devDependencies?: unknown };
@@ -162,7 +197,7 @@ function discoverInstalledSources(repo: Repo): string[] {
   } catch {
     // Битый манифест потребителя — не наша забота и не повод падать: обвесов из
     // него просто не видно, а конфиг родится пустым и скажет об этом вслух.
-    return [];
+    return { ok: true, value: [] };
   }
 
   const names = new Set<string>();
@@ -174,17 +209,32 @@ function discoverInstalledSources(repo: Repo): string[] {
     }
   }
 
-  return [...names]
-    .sort()
-    .filter((name) => declaresItselfSource(name, repo.root));
+  const sources: string[] = [];
+  const problems: FormProblem[] = [];
+  for (const name of [...names].sort()) {
+    const installed = locatePackage(name, repo.root);
+    if (!installed.ok) {
+      // Код и слова — резолва: он назвал и файл, и то, что чинится этот случай
+      // правкой файла, а не установкой. Второе описание одного события завело бы
+      // два места для одной правды.
+      problems.push(
+        ...installed.problems.filter(
+          (problem) => problem.code === 'package-manifest-unreadable',
+        ),
+      );
+      continue;
+    }
+    if (declaresItselfSource(installed.value.manifest)) {
+      sources.push(name);
+    }
+  }
+
+  return problems.length === 0
+    ? { ok: true, value: sources }
+    : { ok: false, problems };
 }
 
-function declaresItselfSource(packageName: string, repoRoot: string): boolean {
-  const installed = resolveInstalledPackage(packageName, repoRoot);
-  if (!installed.ok) {
-    return false;
-  }
-  const manifest = installed.value.manifest;
+function declaresItselfSource(manifest: unknown): boolean {
   return (
     typeof manifest === 'object' &&
     manifest !== null &&

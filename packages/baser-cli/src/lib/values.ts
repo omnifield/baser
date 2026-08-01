@@ -60,7 +60,7 @@ import {
   type SourceConfig,
   type SourceDeclaration,
 } from '@omnifield/baser-contracts';
-import type { InstalledPackage } from './installed.js';
+import type { LocatedPackage } from '@omnifield/baser-contracts/locate';
 import type { PlacedValue } from './previous.js';
 import type { Repo } from './repo.js';
 
@@ -138,7 +138,7 @@ export interface DefaultsPort {
  */
 export async function loadDefaults(
   declaration: SourceDeclaration,
-  pkg: InstalledPackage,
+  pkg: LocatedPackage,
   repo: Repo,
 ): Promise<DefaultsPort> {
   const modules = new Map<string, unknown>();
