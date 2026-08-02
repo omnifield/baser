@@ -17,6 +17,9 @@ importers:
       '@omnifield/baser-devbox':
         specifier: workspace:*
         version: link:packages/baser-devbox
+      '@omnifield/brainer-harness':
+        specifier: 0.2.0
+        version: 0.2.0
       '@swc/helpers':
         specifier: ~0.5.18
         version: 0.5.23
@@ -818,6 +821,9 @@ packages:
 
   '@nx/workspace@23.1.0':
     resolution: {integrity: sha512-cobC05wJX7c2bWJ6s3g0IOuu6YLCEPrmpkZdX4xPEtt3GX96BsDnBpqSaqdrKhmhaa16oIERisU3AozmxmV6DA==}
+
+  '@omnifield/brainer-harness@0.2.0':
+    resolution: {integrity: sha512-Svp29uWoFB5usbRP0yVRR37E+JX3nBI9K2IU5ewV9MTq1JjCkidUxf5B5vPcAAFI5a5kPeYNepJMXjF3K6nxtQ==, tarball: https://npm.pkg.github.com/download/@omnifield/brainer-harness/0.2.0/f8f06281c68f0bec42152b73af9aa57bb13b246c}
 
   '@oxc-project/types@0.139.0':
     resolution: {integrity: sha512-r9gHphtCs+1M7J0pw6Sn/hh/Wpa/iQrOOkrNAlVLF/gHq+/CJmHIWKKUUhdWjcD6CIa8idarspCsASiXCXvFUw==}
@@ -3847,6 +3853,8 @@ snapshots:
     transitivePeerDependencies:
       - '@swc-node/register'
       - '@swc/core'
+
+  '@omnifield/brainer-harness@0.2.0': {}
 
   '@oxc-project/types@0.139.0': {}
 

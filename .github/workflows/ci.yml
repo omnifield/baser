@@ -4,8 +4,14 @@ on:
     branches: [main]
   pull_request:
 
+# `packages: read` — с 2026-08-02 мы САМИ потребитель приватного пакета: обвес
+# агент-харнесса (`@omnifield/brainer-harness`) объявлен в `baser.json` и ставится
+# как обычная зависимость. Без этого права и без npmrc установка в CI отвечает
+# `ERR_PNPM_FETCH_401`, причём в тексте видно, что заголовок авторизации не ставился
+# вовсе — то есть чинится это у нас, а не грантом на той стороне.
 permissions:
   contents: read
+  packages: read
 
 jobs:
   # Заголовок PR — это и есть сообщение коммита в `main`: мержим сквошем, и в историю
@@ -67,11 +73,20 @@ jobs:
         with:
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
+      # Приватный scope `@omnifield` в GitHub Packages требует токен ДАЖЕ на чтение —
+      # это свойство сервиса, а не наша настройка (см. README, «Где брать пакеты»).
+      # Токен кладётся в npmrc ПОЛЬЗОВАТЕЛЯ (HOME), а не репозитория: npmrc в корне
+      # репозитория виден каждой пробе, которая запускает npm из своей фикстуры, и
+      # зона девбокса на нём краснеет — её проверки строят «реестр не настроен» сами.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@omnifield'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # run-many, а не affected: проектов четыре и они собираются за секунду, а affected
       # на squash-мерже способен не увидеть зону, которую задел сосед.
       - run: pnpm exec nx run-many -t typecheck build
