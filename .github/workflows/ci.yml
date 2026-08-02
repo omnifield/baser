@@ -73,20 +73,17 @@ jobs:
         with:
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
+      # Приватный scope `@omnifield` в GitHub Packages требует токен ДАЖЕ на чтение —
+      # это свойство сервиса, а не наша настройка (см. README, «Где брать пакеты»).
+      # Токен кладётся в npmrc ПОЛЬЗОВАТЕЛЯ (HOME), а не репозитория: npmrc в корне
+      # репозитория виден каждой пробе, которая запускает npm из своей фикстуры, и
+      # зона девбокса на нём краснеет — её проверки строят «реестр не настроен» сами.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-      # Приватный scope `@omnifield` в GitHub Packages требует токен ДАЖЕ на чтение —
-      # это свойство сервиса, а не наша настройка (см. README, «Где брать пакеты»).
-      # Пишем npmrc до установки: `setup-node` с `registry-url` кладёт его в HOME, а
-      # pnpm в CI читает конфиг репозитория, и первым же выигрывает он.
-      - run: |
-          printf '%s\n' \
-            '@omnifield:registry=https://npm.pkg.github.com' \
-            '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > .npmrc
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          registry-url: https://npm.pkg.github.com
+          scope: '@omnifield'
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
