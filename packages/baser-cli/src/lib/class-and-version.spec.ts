@@ -258,6 +258,136 @@ describe('отказ называет, что подтверждение сде�
   });
 });
 
+/**
+ * ТРЕТЬЕ СОСТОЯНИЕ: ЗАПИСЬ ЕСТЬ, А ЭТИХ ПУТЕЙ В НЕЙ НЕТ (`tasker:BASER2-134`).
+ *
+ * Живой случай weber (`tasker:BASER2-133`): девбокс стоит и раскладывает давно,
+ * запись на месте и верна, а ВТОРОЙ обвес целится в файлы, заполненные руками.
+ * Отказы движка пришли, отказа двери не было ни одного — и класс спорных
+ * артефактов человек вытащил ДЕДУКЦИЕЙ по счётчику в трейсе, хотя справка
+ * обещает, что его назовёт отказ.
+ *
+ * Оба прежних кода тут молчали по построению: они привязаны к РЕПОЗИТОРИЮ
+ * («ни конфига, ни записи» · «конфиг есть, записи нет»), а это состояние про
+ * ПУТИ. Перенастроить `first-install` было нельзя — он выпущен со смыслом
+ * «репозиторий девственный», и смена смысла выпущенного слова обманула бы его
+ * читателя молча.
+ *
+ * Проба берёт случай целиком и на СМЕШАННОМ наборе: часть путей `placed-once`,
+ * часть `regenerated`. Иначе не видно главного — что класс берётся из объявления
+ * целящегося обвеса, а не из своей карты.
+ */
+describe('второй обвес при живой записи: отказ есть, и он называет класс', () => {
+  const MINE = 'product: weber\nzones:\n  cli: [packages/weber-cli]\n';
+  const THEIR_POLICY = '# моя рамка\n';
+
+  /** Девбокс разложен и запись на месте; вторым объявлен плагин агентов. */
+  async function second(): Promise<Consumer> {
+    consumer = installDevbox({ config: configOf([DEVBOX_PACKAGE]) });
+    await run({ command: 'apply', cwd: consumer.root });
+
+    // Файлы, заполненные руками, — ровно те, про которые стоял вопрос.
+    consumer.write(HARNESS, MINE);
+    consumer.write(POLICY, THEIR_POLICY);
+    consumer.installSource(AGENTS);
+    consumer.write(
+      'baser.json',
+      `${JSON.stringify(configOf([DEVBOX_PACKAGE, AGENTS_PACKAGE]), null, 2)}\n`,
+    );
+    return consumer;
+  }
+
+  function unrecorded(result: DoorResult): string {
+    return (
+      result.problems.find((problem) => problem.code === 'unrecorded-dest')
+        ?.message ?? ''
+    );
+  }
+
+  it('КЛАСС ЧИТАЕТСЯ, а не выводится по косвенным признакам', async () => {
+    const box = await second();
+
+    const blocked = await run({ command: 'plan', cwd: box.root });
+    const message = unrecorded(blocked);
+
+    expect(blocked.status).toBe('blocked');
+    // Вопрос заявителя был ровно один: «отдать во владение — значит ли потерять
+    // содержимое?». Ответ на него теперь в тексте, и он поимённый.
+    expect(message).toContain(HARNESS);
+    expect(message).toContain('СОДЕРЖИМОЕ НЕ ИЗМЕНИТСЯ');
+    expect(message).toContain(POLICY);
+    expect(message).toContain('заменена целиком');
+    // Смешанный набор называется врозь, а не средним по больнице.
+    expect(message).toContain('классы у них разные');
+    expect(message).toContain('на месте перегенерируемых');
+  });
+
+  it('не посылает восстанавливать запись — она на месте и верна', async () => {
+    // Разница между этим кодом и `manifest-missing` вся тут: там верное
+    // действие «восстанови из истории», здесь восстанавливать нечего. Уверенный
+    // указатель не туда хуже отсутствующего (`tasker:BASER2-28`).
+    const box = await second();
+
+    const blocked = await run({ command: 'plan', cwd: box.root });
+
+    expect(blocked.problems.map((problem) => problem.code)).toEqual([
+      'unrecorded-dest',
+    ]);
+    expect(unrecorded(blocked)).toContain('восстанавливать нечего');
+    expect(unrecorded(blocked)).not.toContain('из истории');
+    // И это не первая установка: baser в этом репозитории раскладывает давно.
+    expect(unrecorded(blocked)).not.toContain('первая установка');
+  });
+
+  it('называет, КТО целится: «сними обвес» без имени — снимать наугад', async () => {
+    const box = await second();
+
+    const message = unrecorded(await run({ command: 'plan', cwd: box.root }));
+
+    expect(message).toContain(`"${AGENTS_ID}"`);
+    // Соседа, который тут раскладывает законно, отказ не приплетает.
+    expect(message).not.toContain(DEVBOX_ID);
+  });
+
+  it('обещание исполняется тем же прогоном: подтвердили — и байты целы', async () => {
+    // Обещание в тексте такой же контракт, как код. Текст, проверенный отдельно
+    // от поведения, ровно так с ним и разъезжается.
+    const box = await second();
+
+    const fixed = await run({
+      command: 'apply',
+      cwd: box.root,
+      confirm: [HARNESS, POLICY],
+    });
+
+    expect(fixed.status).toBe('applied');
+    expect(box.read(HARNESS)).toBe(MINE);
+    expect(box.read(POLICY)).toBe(POLICY_BODY);
+    // Владение перешло — следующий прогон сходится, а не отказывает снова.
+    expect((await run({ command: 'plan', cwd: box.root })).status).toBe(
+      'converged',
+    );
+  });
+
+  it('спорных путей нет — отказа нет: он не заготовка на каждый прогон', async () => {
+    // Узость обещания. Тот же репозиторий с двумя обвесами, но пути свободны:
+    // сообщение, которое видит каждый, за неделю перестаёт читаться.
+    consumer = installDevbox({ config: configOf([DEVBOX_PACKAGE]) });
+    await run({ command: 'apply', cwd: consumer.root });
+    consumer.installSource(AGENTS);
+    consumer.write(
+      'baser.json',
+      `${JSON.stringify(configOf([DEVBOX_PACKAGE, AGENTS_PACKAGE]), null, 2)}\n`,
+    );
+
+    const result = await run({ command: 'plan', cwd: consumer.root });
+
+    expect(
+      result.problems.some((problem) => problem.code === 'unrecorded-dest'),
+    ).toBe(false);
+  });
+});
+
 describe('версия обвеса доезжает до паспорта укладки', () => {
   it('версия из манифеста пакета ложится в запись', async () => {
     const box = withAgents({ ...AGENTS, version: '1.4.2' });
