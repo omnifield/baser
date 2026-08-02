@@ -3,6 +3,9 @@
   "sources": [
     {
       "use": "@omnifield/baser-devbox"
+    },
+    {
+      "use": "@omnifield/brainer-harness"
     }
   ]
 }

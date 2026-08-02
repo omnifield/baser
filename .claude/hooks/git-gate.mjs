@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // git-gate.mjs — PreToolUse hook: hard-gate на write-операции git/gh. Уровень доступа —
 // ДАННЫЕ из `.omnifield/harness.yaml` (config.git[role]): architect=full / owner=commit-only /
-// layer=none (kb:BRAIN-3). Роль-семантика (ЧТО режет каждый уровень) — рамка (инвариант).
+// layer=none (kb:BRAIN2-12). Роль-семантика (ЧТО режет каждый уровень) — рамка (инвариант).
 //
 // Несколько owner-сессий могут работать в одном shared working tree (одна .git).
 // Неконтролируемая смена HEAD / push размазывает работу соседей. Промпт под нагрузкой
@@ -47,57 +47,321 @@ function deny(reason) {
   process.exit(0);
 }
 
-// Префикс, после которого может идти git/gh: начало строки, пробел, `;`, `&&`, `||`, `|`, кавычка.
-const PFX = "(?:^|[\\s;|&\"'`])";
-// git может идти с global-options перед verb'ом (git -C path --no-pager <verb>).
-const GIT_PFX = `${PFX}git\\s+(?:[^\\s]+\\s+){0,6}`;
+// --- ГРАНИЦА: какие операции считаются git-записью (tasker:BRAIN2-49 её НЕ двигает) --------
+// Раньше граница была набором регулярок по всей строке команды, и это ловило git-команду,
+// УПОМЯНУТУЮ в данных (тело heredoc, аргумент curl'а, текст коммит-сообщения) наравне с
+// настоящим вызовом. Теперь тот же набор выражен таблицей «verb → запрещено ли», а к ней
+// подводит разбор команды (ниже). Состав запретов не изменился — изменилось распознавание.
 
-// commit-only режет write-операции, меняющие HEAD/публикующие/переписывающие историю.
-const COMMIT_ONLY_RULES = [
-  { rx: new RegExp(`${GIT_PFX}switch(?:\\s|$)`, "i"), label: "git switch" },
-  { rx: new RegExp(`${GIT_PFX}checkout\\s+-b\\b`, "i"), label: "git checkout -b" },
-  { rx: new RegExp(`${GIT_PFX}push(?:\\s|$)`, "i"), label: "git push" },
-  { rx: new RegExp(`${GIT_PFX}merge(?:\\s|$)`, "i"), label: "git merge" },
-  { rx: new RegExp(`${GIT_PFX}rebase(?:\\s|$)`, "i"), label: "git rebase" },
-  {
-    rx: new RegExp(`${GIT_PFX}reset\\s+--(?:hard|keep)\\b`, "i"),
-    label: "git reset --hard/--keep",
+/** commit-only: verb → метка запрета (или null, если этот вызов проходит). */
+const COMMIT_ONLY_VERBS = {
+  switch: () => "git switch",
+  push: () => "git push",
+  merge: () => "git merge",
+  rebase: () => "git rebase",
+  checkout: (args) => {
+    if (args.includes("-b")) return "git checkout -b";
+    // path-restore (`git checkout -- file`) — не смена HEAD, пускается.
+    if (args.includes("--")) return null;
+    return "git checkout <branch>";
   },
-  { rx: new RegExp(`${GIT_PFX}branch\\s+-(?:D|f|m|M)\\b`), label: "git branch -D/-f/-m" },
-  {
-    rx: new RegExp(`${GIT_PFX}worktree\\s+(?:add|remove|move)\\b`, "i"),
-    label: "git worktree add/remove/move",
-  },
-  {
-    rx: new RegExp(`${PFX}gh\\s+pr\\s+(?:create|merge|close|reopen|edit)\\b`, "i"),
-    label: "gh pr write",
-  },
-];
+  reset: (args) =>
+    args.some((a) => a === "--hard" || a === "--keep") ? "git reset --hard/--keep" : null,
+  branch: (args) =>
+    args.some((a) => ["-D", "-f", "-m", "-M"].includes(a)) ? "git branch -D/-f/-m" : null,
+  worktree: (args) =>
+    ["add", "remove", "move"].includes(args[0]) ? "git worktree add/remove/move" : null,
+};
 
-// none (layer) режет ЛЮБУЮ git-запись, включая commit/add — git не трогает вообще.
-const NONE_EXTRA_RULES = [
-  { rx: new RegExp(`${GIT_PFX}commit(?:\\s|$)`, "i"), label: "git commit" },
-  { rx: new RegExp(`${GIT_PFX}add(?:\\s|$)`, "i"), label: "git add" },
-  { rx: new RegExp(`${GIT_PFX}tag(?:\\s|$)`, "i"), label: "git tag" },
-  { rx: new RegExp(`${GIT_PFX}stash(?:\\s|$)`, "i"), label: "git stash" },
-];
+/** none (layer): git не трогает вообще — сверх commit-only режется ещё и это. */
+const NONE_EXTRA_VERBS = {
+  commit: () => "git commit",
+  add: () => "git add",
+  tag: () => "git tag",
+  stash: () => "git stash",
+};
 
-// `git checkout <branch>` режется в commit-only ТОЛЬКО если нет ` -- ` (path-restore пускается).
-function matchesCheckoutBranch(cmd) {
-  const rx = new RegExp(`${GIT_PFX}checkout(?!\\s+-b\\b)\\b`, "i");
-  if (!rx.test(cmd)) return null;
-  if (/\s--(?:\s|$)/.test(cmd)) return null;
-  return "git checkout <branch>";
+/** gh: единственная запись, которая нас касается — операции над PR. */
+const GH_VERBS = {
+  pr: (args) =>
+    ["create", "merge", "close", "reopen", "edit"].includes(args[0]) ? "gh pr write" : null,
+};
+
+// Global-опции git ПЕРЕД verb'ом; часть из них съедает следующий токен (git -C path push).
+const GIT_OPTS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--exec-path"]);
+
+// Слова, за которыми может прятаться другая команда: интерпретаторы и обёртки. Их аргументы
+// разбирать честно мы не беремся (у каждой обёртки своя грамматика опций), поэтому по такому
+// сегменту проходим ГРУБОЙ сетью — ищем любое вхождение git/gh. Ложное срабатывание внутри
+// такого сегмента лучше пропущенной записи: цена ошибки двусторонняя, и здесь мы выбираем
+// закрытую дверь (`bash -c '<git-запись>'` обязан резаться).
+const WRAPPER_WORDS = new Set([
+  "bash",
+  "sh",
+  "zsh",
+  "dash",
+  "ksh",
+  "fish",
+  "eval",
+  "exec",
+  "source",
+  ".",
+  "xargs",
+  "env",
+  "sudo",
+  "su",
+  "ssh",
+  "nohup",
+  "timeout",
+  "time",
+  "command",
+  "watch",
+  "stdbuf",
+]);
+
+/** Базовое имя команды: `/usr/bin/git` → `git`. */
+function baseName(token) {
+  return token.replace(/^.*\//, "");
+}
+
+/**
+ * Токенизация сегмента: разбивает по пробелам и СНИМАЕТ кавычки. Снятие кавычек здесь
+ * безопасно и нужно: сегмент уже опознан как вызов, и `git 'push'` обязан читаться как
+ * `git push`, иначе кавычка вокруг verb'а стала бы дырой.
+ */
+export function tokenize(text) {
+  const tokens = [];
+  let cur = "";
+  let started = false;
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "\\" && i + 1 < text.length) {
+      cur += text[i + 1];
+      started = true;
+      i += 2;
+    } else if (ch === "'" || ch === '"') {
+      const end = text.indexOf(ch, i + 1);
+      cur += end === -1 ? text.slice(i + 1) : text.slice(i + 1, end);
+      started = true;
+      i = end === -1 ? text.length : end + 1;
+    } else if (/\s/.test(ch)) {
+      if (started) tokens.push(cur);
+      cur = "";
+      started = false;
+      i += 1;
+    } else {
+      cur += ch;
+      started = true;
+      i += 1;
+    }
+  }
+  if (started) tokens.push(cur);
+  return tokens;
+}
+
+/** Первое слово сегмента (ведущие присваивания `VAR=val` пропускаются). */
+export function commandWord(segment) {
+  for (const token of tokenize(segment)) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue;
+    return baseName(token);
+  }
+  return "";
+}
+
+/**
+ * Один вызов git/gh, начиная с токена `git`/`gh`: пропускает global-опции и отдаёт
+ * `{ tool, verb, args }`. `git` без verb'а (`git`, `git --version`) → verb пуст, запретов нет.
+ */
+function readInvocation(tokens, start) {
+  const tool = baseName(tokens[start]);
+  let i = start + 1;
+  while (i < tokens.length && tokens[i].startsWith("-")) {
+    if (GIT_OPTS_WITH_VALUE.has(tokens[i])) i += 1;
+    i += 1;
+  }
+  return { tool, verb: tokens[i] ?? "", args: tokens.slice(i + 1) };
+}
+
+/**
+ * Разбор строки на ИСПОЛНЯЕМЫЕ сегменты с учётом кавычек. Возвращает `null`, если разобрать
+ * не удалось — тогда зовущий смотрит строку целиком (fail-safe в сторону закрытой двери).
+ * Содержимое подстановок (`$(…)`, backticks) — исполняемое, поэтому вынимается отдельными
+ * сегментами; внутри одинарных кавычек подстановок не бывает, там всё литерал.
+ */
+function collectSegments(text, out, depth = 0) {
+  if (depth > 4) return false;
+  let cur = "";
+  let i = 0;
+  const flush = () => {
+    if (cur.trim()) out.push(cur);
+    cur = "";
+  };
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "\\" && i + 1 < text.length) {
+      cur += text.slice(i, i + 2);
+      i += 2;
+    } else if (ch === "'") {
+      const end = text.indexOf("'", i + 1);
+      if (end === -1) return false;
+      cur += text.slice(i, end + 1);
+      i = end + 1;
+    } else if (ch === '"') {
+      const end = closingDouble(text, i);
+      if (end === -1) return false;
+      // Внутри двойных кавычек исполняется ТОЛЬКО подстановка — её и вынимаем.
+      if (!collectSubstitutions(text.slice(i + 1, end), out, depth)) return false;
+      cur += text.slice(i, end + 1);
+      i = end + 1;
+    } else if (ch === "$" && text[i + 1] === "(") {
+      const end = closingParen(text, i + 1);
+      if (end === -1) return false;
+      if (!collectSegments(text.slice(i + 2, end), out, depth + 1)) return false;
+      cur += " ";
+      i = end + 1;
+    } else if (ch === "`") {
+      const end = text.indexOf("`", i + 1);
+      if (end === -1) return false;
+      if (!collectSegments(text.slice(i + 1, end), out, depth + 1)) return false;
+      cur += " ";
+      i = end + 1;
+    } else if (";|&\n()".includes(ch)) {
+      flush();
+      i += 1;
+    } else {
+      cur += ch;
+      i += 1;
+    }
+  }
+  flush();
+  return true;
+}
+
+/** Внутри двойных кавычек нас интересуют только подстановки — остальное литерал. */
+function collectSubstitutions(inner, out, depth) {
+  let i = 0;
+  while (i < inner.length) {
+    if (inner[i] === "\\") {
+      i += 2;
+    } else if (inner[i] === "$" && inner[i + 1] === "(") {
+      const end = closingParen(inner, i + 1);
+      if (end === -1) return false;
+      if (!collectSegments(inner.slice(i + 2, end), out, depth + 1)) return false;
+      i = end + 1;
+    } else if (inner[i] === "`") {
+      const end = inner.indexOf("`", i + 1);
+      if (end === -1) return false;
+      if (!collectSegments(inner.slice(i + 1, end), out, depth + 1)) return false;
+      i = end + 1;
+    } else {
+      i += 1;
+    }
+  }
+  return true;
+}
+
+/** Индекс закрывающей `"` с учётом экранирования и вложенных `$(…)`. */
+function closingDouble(text, open) {
+  let i = open + 1;
+  while (i < text.length) {
+    if (text[i] === "\\") i += 2;
+    else if (text[i] === "$" && text[i + 1] === "(") {
+      const end = closingParen(text, i + 1);
+      if (end === -1) return -1;
+      i = end + 1;
+    } else if (text[i] === '"') return i;
+    else i += 1;
+  }
+  return -1;
+}
+
+/** Индекс парной `)` для `(` в позиции `open`. */
+function closingParen(text, open) {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === "\\") i += 1;
+    else if (text[i] === "(") depth += 1;
+    else if (text[i] === ")") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+const HEREDOC_RX = /<<-?\s*(["']?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n([\s\S]*?)\n[ \t]*\2(?=\n|$)/g;
+
+/**
+ * Тело heredoc — ДАННЫЕ и вырезается… кроме случая, когда его читает интерпретатор: тогда
+ * тело и есть программа (`bash <<'EOF' … EOF`). Владельца определяем по команде той строки,
+ * где стоит `<<`. Ради этого разбора задача и заводилась: `python3 - <<'PY' …` не должен
+ * ловиться на git-команду, упомянутую в передаваемом тексте (tasker:BRAIN2-49).
+ */
+export function stripHeredocBodies(cmd) {
+  return cmd.replace(HEREDOC_RX, (match, _quote, _delim, body) => {
+    const lineStart = cmd.lastIndexOf("\n", cmd.indexOf(match)) + 1;
+    const opener = cmd.slice(lineStart, cmd.indexOf(match));
+    const lastSegment = opener.split(/[;|&]/).pop() ?? opener;
+    if (WRAPPER_WORDS.has(commandWord(lastSegment))) return match; // тело читает интерпретатор
+    return match.replace(body, "");
+  });
+}
+
+/**
+ * Вызовы git/gh в команде: `[{ tool, verb, args }]`. Сегмент, чья команда — не git/gh и не
+ * обёртка, игнорируется целиком: его аргументы это данные, а не наши операции.
+ */
+export function gitInvocations(cmd) {
+  const segments = [];
+  if (!collectSegments(stripHeredocBodies(cmd), segments)) {
+    // Не разобрали (незакрытая кавычка/подстановка) — грубая сеть по всей строке.
+    return scanAll(tokenize(cmd));
+  }
+  const found = [];
+  for (const segment of segments) {
+    const tokens = tokenize(segment);
+    const word = commandWord(segment);
+    if (word === "git" || word === "gh") {
+      found.push(
+        readInvocation(
+          tokens,
+          tokens.findIndex((t) => baseName(t) === word),
+        ),
+      );
+    } else if (WRAPPER_WORDS.has(word)) {
+      found.push(...scanAll(tokens));
+    }
+  }
+  return found;
+}
+
+/**
+ * Грубая сеть: любое вхождение токена git/gh считается вызовом. Для обёрток и fail-safe.
+ * Токены дополнительно рассыпаются по пробелам: у обёртки программа приезжает ОДНИМ
+ * аргументом (`bash -c 'git push'` → токен `git push`), и без этого сеть его не увидит.
+ */
+function scanAll(tokens) {
+  const flat = tokens.flatMap((t) => t.split(/\s+/)).filter(Boolean);
+  const found = [];
+  for (let i = 0; i < flat.length; i++) {
+    const base = baseName(flat[i]);
+    if (base === "git" || base === "gh") found.push(readInvocation(flat, i));
+  }
+  return found;
 }
 
 /** Причина блокировки под уровень доступа, либо null. */
 export function blockReason(cmd, access) {
   if (access === "full") return null;
-  const rules = access === "none" ? [...COMMIT_ONLY_RULES, ...NONE_EXTRA_RULES] : COMMIT_ONLY_RULES;
-  for (const { rx, label } of rules) {
-    if (rx.test(cmd)) return label;
+  const gitVerbs =
+    access === "none" ? { ...COMMIT_ONLY_VERBS, ...NONE_EXTRA_VERBS } : COMMIT_ONLY_VERBS;
+  for (const { tool, verb, args } of gitInvocations(cmd)) {
+    const table = tool === "gh" ? GH_VERBS : gitVerbs;
+    const label = table[verb]?.(args);
+    if (label) return label;
   }
-  return matchesCheckoutBranch(cmd);
+  return null;
 }
 
 function buildMessage(cmd, label, access) {
@@ -106,7 +370,8 @@ function buildMessage(cmd, label, access) {
     "",
     `Причина: \`${label}\` вне прав твоей роли на shared \`.git\`.`,
     "",
-    "Действие: STOP. Не пытайся обойти (через `bash -c`, `&&`, кавычки — хук видит полную команду).",
+    "Действие: STOP. Не пытайся обойти: гейт разбирает команду, а не ищет подстроку —",
+    "`bash -c`, кавычки вокруг verb'а, подстановка и heredoc для интерпретатора видны ему все.",
     "Верни state architect. Architect либо сделает операцию сам, либо выдаст отдельный worktree.",
   ].join("\n");
 }
