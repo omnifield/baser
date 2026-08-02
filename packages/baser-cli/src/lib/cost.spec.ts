@@ -26,6 +26,8 @@
  * который печатается каждому и всегда, за неделю перестаёт читаться.
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   installDevbox,
@@ -73,6 +75,24 @@ async function placed(): Promise<Consumer> {
 async function movedUser(): Promise<Consumer> {
   const box = await placed();
   box.tune(DEVBOX_ID, { ...OMNIFIELD, settings: { imageUser: 'vscode' } });
+  return box;
+}
+
+/**
+ * Обвес выпустился заново: шаблон другой, значения ТЕ ЖЕ.
+ *
+ * Ровно живой случай weber (`tasker:BASER2-135`): артефакт разошёлся, а не
+ * переехало ни одно значение — ни `name`, ни `networkAlias`, ни `imageUser`.
+ */
+async function bumpedTemplate(): Promise<Consumer> {
+  const box = await placed();
+  box.writeTemplate(
+    'devcontainer.json.ejs',
+    `// строка, которой в прошлом выпуске не было\n${readFileSync(
+      join(box.sourceRoot, 'template/devcontainer.json.ejs'),
+      'utf-8',
+    )}`,
+  );
   return box;
 }
 
@@ -224,6 +244,36 @@ describe('ЧТО ОСТАЁТСЯ ЧЕЛОВЕКУ: дверь переписы�
     expect(text).not.toContain('остаётся человеку');
     expect(text).toContain('применено и записано на диск');
   });
+
+  it('движений нет — блок СЖИМАЕТСЯ до пересоздания (`tasker:BASER2-135`)', async () => {
+    // Живой прогон weber: обвес выпустился, файл разошёлся, а снаружи не поехало
+    // ничего. Абзац про обещание соседям приходил целиком и читался как
+    // заготовка — то есть обесценивал предупреждение ровно там, где оно должно
+    // работать. Пересоздание при этом остаётся человеку ВСЕГДА.
+    const box = await bumpedTemplate();
+
+    const result = await run({ command: 'plan', cwd: box.root });
+    const text = renderText(result);
+
+    // Предмет наступил: файл, который уже лежал, будет переписан.
+    expect(
+      soleRun(result).plan?.steps.some((step) => step.reason === 'diverged'),
+    ).toBe(true);
+    // Ни одного названного движения — ни прежнего конца, ни посчитанного от него.
+    expect(
+      soleRun(result).settings.every((setting) => setting.placed === undefined),
+    ).toBe(true);
+    expect(soleRun(result).derived).toEqual([]);
+
+    expect(text).toContain('остаётся человеку');
+    expect(text).toContain('докер дверь не зовёт и контейнерами не управляет');
+    expect(text).toContain('Переезжающих значений этот прогон не назвал');
+    // Адресата у обещания соседям нет — и абзаца тоже.
+    expect(text).not.toContain('обещание соседям');
+    // Итоговая строка при этом по-прежнему не обещает завершённости: работа
+    // остаётся, просто её меньше.
+    expect(text).toContain('Применением работа не кончится');
+  });
 });
 
 describe('ЧТО ИЗ ЧУЖОГО ФАЙЛА НЕ ВОСПРОИЗВЕДЁТСЯ — построчно', () => {
@@ -365,5 +415,64 @@ describe('ЧТО ИЗ ЧУЖОГО ФАЙЛА НЕ ВОСПРОИЗВЕДЁТС�
     ).toBe(true);
     expect(agents?.differences).toEqual([]);
     expect(renderText(result)).not.toContain('чужое не воспроизведётся');
+  });
+
+  it('«ЧУЖОЙ» ОПРЕДЕЛЁН в самом блоке, а не только в справке', async () => {
+    // Слово несущее: «что из твоего файла не воспроизведётся» читается как «файл
+    // в твоём репозитории», а речь про файл, которым обвес НЕ ВЛАДЕЕТ. Пока
+    // определение жило в `--help`, план отвечал только тому, кто туда сходил
+    // (`tasker:BASER2-135`).
+    const box = occupied();
+
+    const text = renderText(await run({ command: 'plan', cwd: box.root }));
+
+    expect(text).toContain('чужой здесь тот файл, которым обвес НЕ владеет');
+  });
+
+  it('`--difference` без чужого файла ОТВЕЧАЕТ, а не молчит', async () => {
+    // Живой прогон weber: их `devcontainer.json` с прошлой итерации уже во
+    // владении обвеса, блока для него нет ПО ПОСТРОЕНИЮ — и прогон с флагом
+    // напечатался байт в байт как без флага. Секунду это читается как
+    // невыполненное обещание, а ответ лежал в справке.
+    const box = await placed();
+
+    const silent = await run({ command: 'plan', cwd: box.root });
+    const asked = await run({
+      command: 'plan',
+      cwd: box.root,
+      difference: true,
+    });
+
+    // Предмет тот самый: чужого нет, показывать нечего — и до фикса оба вывода
+    // совпадали.
+    expect(soleRun(asked).differences).toEqual([]);
+    expect(renderText(silent)).not.toContain('--difference:');
+
+    const text = renderText(asked);
+    expect(text).toContain('--difference: показывать нечего');
+    expect(text).toContain('только для ЧУЖОГО файла');
+    expect(text).toContain('которым обвес НЕ владеет');
+  });
+
+  it('вопрос живёт В ОТВЕТЕ: `difference` читается гейтом', async () => {
+    // `renderText` не видит ничего, кроме `DoorResult`, — значит и ответить на
+    // флаг она может только тем, что в ответе есть. Тот же факт нужен гейту:
+    // счётчики говорят, сколько строк ВСЕГО, но усечение от полноты ими не
+    // отличается.
+    const box = occupied(
+      `${Array.from({ length: 40 }, (_, index) => `строка ${index}`).join('\n')}\n`,
+    );
+
+    const short = await run({ command: 'plan', cwd: box.root });
+    const whole = await run({
+      command: 'plan',
+      cwd: box.root,
+      difference: true,
+    });
+
+    expect(short.difference).toBe(false);
+    expect(whole.difference).toBe(true);
+    expect(soleRun(short).differences[0].gone.length).toBeLessThan(40);
+    expect(soleRun(whole).differences[0].gone.length).toBe(40);
   });
 });
