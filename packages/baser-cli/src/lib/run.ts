@@ -173,6 +173,14 @@ export interface RunOptions {
 interface Session {
   readonly repo: Repo;
   readonly command: DoorCommand;
+  /**
+   * Предел показа расхождения снят — прогон шёл с `--difference`.
+   *
+   * Держится в сессии, а не только в опциях фазы, потому что уезжает В ОТВЕТ:
+   * отказать прогон может на любом шаге, а вопрос, который ему задали, ответ
+   * обязан нести на любом исходе (`result.ts`, `DoorResult.difference`).
+   */
+  readonly difference: boolean;
   /** Спаны фаз двери. Движок мерит себя сам и своим трейсом. */
   readonly trace: TraceRecorder;
   config: ConfigReport;
@@ -331,6 +339,7 @@ export async function run(options: RunOptions): Promise<DoorResult> {
   const session: Session = {
     repo: readRepo(options.cwd),
     command: options.command,
+    difference: options.difference === true,
     trace: createTrace(),
     config: blankConfig(),
   };
@@ -528,7 +537,10 @@ async function runInRepo(
     // нет вовсе, отказ на нём — конфликт, и второго конца в плане не лежит.
     draft.differences = trace.span(
       'door.difference',
-      () => foreignDifferences(plan, item, tree, options.difference === true),
+      // Снятый предел берётся ИЗ СЕССИИ, а не из опций второй раз: он же уезжает
+      // в ответ полем `difference`, и две дороги к одному факту разошлись бы
+      // молча — гейт читал бы «усечения не было» над усечённым списком.
+      () => foreignDifferences(plan, item, tree, session.difference),
       { source: draft.source.id },
     );
 
@@ -1351,6 +1363,7 @@ function shell(session: Session): Omit<DoorResult, 'status'> {
     formVersion: FORM_VERSION,
     outputSchemaVersion: OUTPUT_SCHEMA_VERSION,
     command: session.command,
+    difference: session.difference,
     repo: { root: session.repo.root, name: session.repo.name },
     config: session.config,
     runs: [],
