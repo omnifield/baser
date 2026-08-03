@@ -27,6 +27,11 @@
  * **Путей здесь нет и не появится.** Раскладку объявляет обвес, а не потребитель:
  * новый файл в шаблоне обязан приезжать сам, без правки чужого файла.
  *
+ * **Закрепление версии значением не является.** Формой 4 у записи перечня
+ * появился необязательный `version` (`tasker:BASER2-145`): он говорит, КАКУЮ
+ * поставку брать по имени, а не как её настроить. Обещание «ни одного значения»
+ * остаётся целым — настройки живут только в файле на инструмент.
+ *
  * Разбор здесь только структурный: знает ли обвес такую настройку и такой
  * пресет — вопрос к паре «объявление + конфиг», он решается в `settings.ts`.
  */
@@ -39,7 +44,11 @@ import {
   type SettingValue,
 } from './values.js';
 import { isPlainObject } from './declaration.js';
-import { FORM_VERSION, MIN_FORM_VERSION } from './version.js';
+import {
+  FORM_VERSION,
+  MIN_FORM_VERSION,
+  PINNED_VERSION_SINCE,
+} from './version.js';
 
 /**
  * Где перечень поставленного лежит по умолчанию. Читает его дверь, не движок.
@@ -103,6 +112,24 @@ export function sourceConfigPath(sourceId: string): string {
 export interface ConsumerSourceEntry {
   /** Чем привезли: имя пакета обвеса. Идентичность приходит из объявления. */
   readonly use: string;
+  /**
+   * Закреплённая версия поставки — НЕОБЯЗАТЕЛЬНА, и отсутствие тут законно.
+   *
+   * Есть — человек сказал, какую поставку брать по имени, и сказал её ТОЧНО
+   * (`PINNED_VERSION`). Нет — «не закреплено»: дверь берёт последнюю доступную,
+   * называет её в плане до применения и закрепляет в паспорте укладки (решение
+   * architect, `tasker:BASER2-145`). Отсюда и необязательность: отсутствие — это
+   * рабочее состояние, а не пропущенное поле.
+   *
+   * **Что дверь делает со значением, форма не решает.** Здесь оно только
+   * принимается и проверяется на пригодность: ни реестра, ни файловой системы
+   * этот вход не видит, а «есть ли такая версия у пакета» — вопрос к тому, кто
+   * ставит, и задаётся он в другой зоне.
+   *
+   * Приехало формой 4 (`PINNED_VERSION_SINCE`): в конфиге, назвавшемся формой 3,
+   * это отказ, а не тихое согласие.
+   */
+  readonly version?: string;
 }
 
 export interface ConsumerConfig {
@@ -158,7 +185,7 @@ export const EMPTY_SOURCE_CONFIG: SourceConfig = { presets: [], settings: {} };
  * сослаться: подсказок за ним человек не получит.
  */
 const CONFIG_FIELDS = new Set(['$schema', 'formVersion', 'sources']);
-const ENTRY_FIELDS = new Set(['use']);
+const ENTRY_FIELDS = new Set(['use', 'version']);
 const SOURCE_CONFIG_FIELDS = new Set(['presets', 'settings']);
 
 /**
@@ -215,7 +242,7 @@ export function parseConsumerConfig(
   const seen = new Map<string, number>();
 
   raw.forEach((item, index) => {
-    const entry = parseEntry(log, item, `${at}.sources[${index}]`);
+    const entry = parseEntry(log, item, `${at}.sources[${index}]`, formVersion);
     if (!entry) {
       return;
     }
@@ -281,10 +308,32 @@ function parseFormVersion(log: ProblemLog, value: unknown, at: string): number {
   return value;
 }
 
+/**
+ * ТОЧНАЯ версия — та, которая закрепляет.
+ *
+ * Грамматика взята у semver (semver.org, официальное выражение спеки; сверено
+ * 2026-08-03) и сужена до одного случая: **ровно версия, без диапазона и без
+ * метки.** `^1.2.0`, `~1.2`, `>=1`, `latest`, `next` — законные строки для
+ * установщика, но НЕ закрепление: тот же коммит завтра поставит другое
+ * содержимое, а поле заведено ровно затем, чтобы этого не было (та же причина,
+ * по которой резолвер дефолта не ходит в сеть, — `declaration.ts`).
+ *
+ * Своей зависимости на `semver` для этого не заводим: обвес ставится в ЧУЖИЕ
+ * репозитории, и каждая наша зависимость становится зависимостью потребителя.
+ * Проверяется здесь ФОРМА строки, а не разрешение диапазонов, — для формы
+ * выражения спеки достаточно.
+ *
+ * Предрелиз и метка сборки законны (`1.2.3-beta.1+build.5`): они точную версию
+ * не размывают.
+ */
+const PINNED_VERSION =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+(?:[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
+
 function parseEntry(
   log: ProblemLog,
   value: unknown,
   at: string,
+  formVersion: number,
 ): ConsumerSourceEntry | null {
   if (!isPlainObject(value)) {
     log.add('not-an-object', at, 'ожидался объект {use}');
@@ -327,7 +376,75 @@ function parseEntry(
     return null;
   }
 
-  return { use: use.trim() };
+  const version = parsePinnedVersion(log, value['version'], at, formVersion);
+
+  return version === undefined
+    ? { use: use.trim() }
+    : { use: use.trim(), version };
+}
+
+/**
+ * Закрепление версии поставки — необязательное, точное и ничем не проверяемое
+ * снаружи.
+ *
+ * Три отказа, и все три — про пригодность самой записи:
+ *
+ * 1. **поле приехало формой 4, а конфиг назвался старше** — `PINNED_VERSION_SINCE`.
+ *    Отказ, а не тихое согласие: приняв закрепление под номером 3, мы дали бы
+ *    двери записать файл, который baser формы 3 назовёт `unknown-field`, то есть
+ *    опечаткой. Человек написал не опечатку, и сказать ему надо «обнови baser», а
+ *    не «поля не знаю»;
+ * 2. **не строка** — обычный `wrong-type`;
+ * 3. **строка есть, но версией не является** — `invalid-version`.
+ *
+ * Чего здесь НЕТ и не будет: проверки, что такая версия у пакета существует.
+ * Этот вход не читает ни файловой системы, ни сети, ни реестра — здесь только
+ * форма и её пригодность.
+ */
+function parsePinnedVersion(
+  log: ProblemLog,
+  value: unknown,
+  at: string,
+  formVersion: number,
+): string | undefined {
+  const field = `${at}.version`;
+
+  if (value === undefined) {
+    return undefined;
+  }
+  if (formVersion < PINNED_VERSION_SINCE) {
+    log.add(
+      'form-version-unsupported',
+      field,
+      `закрепление версии приехало формой ${PINNED_VERSION_SINCE}, а ${CONSUMER_CONFIG_PATH} ` +
+        `назвался формой ${formVersion} — подними "formVersion" до ${PINNED_VERSION_SINCE}. ` +
+        `Иначе baser, который формы ${PINNED_VERSION_SINCE} не знает, назовёт закрепление ` +
+        'опечаткой вместо «обнови baser»',
+    );
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    log.add(
+      'wrong-type',
+      field,
+      `ожидалась точная версия поставки строкой, получено ${describeValue(value)}`,
+    );
+    return undefined;
+  }
+
+  const pinned = value.trim();
+  if (!PINNED_VERSION.test(pinned)) {
+    log.add(
+      'invalid-version',
+      field,
+      `ожидалась ТОЧНАЯ версия поставки вида "1.2.3", получено ${describeValue(value)}. ` +
+        'Диапазон ("^1.2.0") и метка ("latest") не закрепляют ничего: тот же коммит ' +
+        'завтра поставит другое содержимое. Не закрепляешь — не пиши поле вовсе: ' +
+        'его отсутствие законно и означает «бери последнюю доступную»',
+    );
+    return undefined;
+  }
+  return pinned;
 }
 
 /**

@@ -1,4 +1,7 @@
 {
-  "formVersion": 3,
-  "sources": [{ "use": "@fixture/kit" }, { "use": "@fixture/seed" }]
+  "formVersion": 4,
+  "sources": [
+    { "use": "@fixture/kit", "version": "1.0.0" },
+    { "use": "@fixture/seed" }
+  ]
 }

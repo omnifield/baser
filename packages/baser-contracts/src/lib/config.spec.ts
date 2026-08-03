@@ -9,7 +9,11 @@ import {
   sourceConfigPath,
 } from './config.js';
 import { codesOf, consumerConfig, sourceConfigFile } from './form.fixture.js';
-import { FORM_VERSION, MIN_FORM_VERSION } from './version.js';
+import {
+  FORM_VERSION,
+  MIN_FORM_VERSION,
+  PINNED_VERSION_SINCE,
+} from './version.js';
 
 function refusals(patch: Record<string, unknown>) {
   const result = parseConsumerConfig(consumerConfig(patch));
@@ -104,6 +108,124 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
       expect(codesOf(refusals({ formVersion: 0 }))).toEqual([
         `form-version-invalid @ ${CONSUMER_CONFIG_PATH}.formVersion`,
       ]);
+    });
+  });
+
+  describe('закрепление версии поставки', () => {
+    it('ПРИНИМАЕТСЯ и доезжает до читателя формы', () => {
+      const result = parseConsumerConfig(
+        consumerConfig({
+          formVersion: PINNED_VERSION_SINCE,
+          sources: [{ use: '@omnifield/baser-devbox', version: '0.2.0' }],
+        }),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.sources[0]).toEqual({
+        use: '@omnifield/baser-devbox',
+        version: '0.2.0',
+      });
+    });
+
+    it('ОТСУТСТВИЕ ЗАКОННО — это «не закреплено», а не пропущенное поле', () => {
+      // Дверь возьмёт последнюю доступную, назовёт её в плане до применения и
+      // закрепит в паспорте (решение architect, `tasker:BASER2-145`).
+      const result = parseConsumerConfig(
+        consumerConfig({ formVersion: FORM_VERSION }),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.sources[0].version).toBeUndefined();
+    });
+
+    it('ЗАКРЕПЛЕНИЕ В КОНФИГЕ ФОРМЫ 3 — отказ, а не тихое согласие', () => {
+      // Метка, по которой ничего не ветвится, — украшение. Приняв закрепление
+      // под старым номером, мы дали бы двери записать файл, который прежний
+      // baser назовёт опечаткой вместо «обнови baser».
+      const problems = refusals({
+        formVersion: PINNED_VERSION_SINCE - 1,
+        sources: [{ use: '@omnifield/baser-devbox', version: '0.2.0' }],
+      });
+      expect(codesOf(problems)).toEqual([
+        `form-version-unsupported @ ${CONSUMER_CONFIG_PATH}.sources[0].version`,
+      ]);
+      expect(problems[0].message).toContain('обнови baser');
+      expect(problems[0].message).toContain(
+        `подними "formVersion" до ${PINNED_VERSION_SINCE}`,
+      );
+    });
+
+    it('и так же — в конфиге БЕЗ версии формы: молчание значит самую старую', () => {
+      const problems = refusals({
+        sources: [{ use: '@omnifield/baser-devbox', version: '0.2.0' }],
+      });
+      expect(codesOf(problems)).toEqual([
+        `form-version-unsupported @ ${CONSUMER_CONFIG_PATH}.sources[0].version`,
+      ]);
+    });
+
+    it('ДИАПАЗОН И МЕТКА НЕ ЗАКРЕПЛЯЮТ — названы отдельным кодом', () => {
+      // Строка на месте и типом верна: непригодно её СОДЕРЖАНИЕ, и чинится это
+      // не другим типом, а другим решением — точной версией либо снятием поля.
+      for (const version of [
+        '^1.2.0',
+        '~1.2',
+        '>=1.0.0',
+        'latest',
+        '1.2',
+        '',
+      ]) {
+        const problems = refusals({
+          formVersion: FORM_VERSION,
+          sources: [{ use: '@omnifield/baser-devbox', version }],
+        });
+        expect([version, codesOf(problems)]).toEqual([
+          version,
+          [`invalid-version @ ${CONSUMER_CONFIG_PATH}.sources[0].version`],
+        ]);
+      }
+      expect(
+        refusals({
+          formVersion: FORM_VERSION,
+          sources: [{ use: '@omnifield/baser-devbox', version: 'latest' }],
+        })[0].message,
+      ).toContain('не пиши поле вовсе');
+    });
+
+    it('предрелиз и метка сборки точную версию не размывают', () => {
+      const result = parseConsumerConfig(
+        consumerConfig({
+          formVersion: FORM_VERSION,
+          sources: [
+            { use: '@omnifield/baser-devbox', version: '1.2.3-beta.1+build.5' },
+          ],
+        }),
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    it('версию строкой, а не числом', () => {
+      expect(
+        codesOf(
+          refusals({
+            formVersion: FORM_VERSION,
+            sources: [{ use: '@omnifield/baser-devbox', version: 2 }],
+          }),
+        ),
+      ).toEqual([`wrong-type @ ${CONSUMER_CONFIG_PATH}.sources[0].version`]);
+    });
+
+    it('СУЩЕСТВОВАНИЕ ВЕРСИИ НЕ ПРОВЕРЯЕТСЯ — этот вход не читает реестр', () => {
+      // Форма судит пригодность записи, а не наличие поставки: ни сети, ни
+      // файловой системы здесь нет. «Такой версии у пакета нет» — отказ того,
+      // кто ставит, и приходит он из другой зоны.
+      const result = parseConsumerConfig(
+        consumerConfig({
+          formVersion: FORM_VERSION,
+          sources: [{ use: '@нет/такого-пакета', version: '999.999.999' }],
+        }),
+      );
+      expect(result.ok).toBe(true);
     });
   });
 
