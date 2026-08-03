@@ -82,18 +82,6 @@ export const LIVE = '.devcontainer/devcontainer.json';
 export const LOCK = '.devcontainer/devcontainer-lock.json';
 
 let packed = null;
-let tarballPath = null;
-
-/**
- * Сам ТАРБОЛ — файл, который уехал бы в реестр.
- *
- * Нужен там, где проверяется не содержимое пакета, а обращение с ним как с
- * зависимостью: менеджер пакетов ставит `.tgz`, а не каталог.
- */
-export function packedTarball() {
-  packedRoot();
-  return tarballPath;
-}
 
 /**
  * Каталог с содержимым тарбола: то и только то, что уедет в реестр.
@@ -124,7 +112,6 @@ export function packedRoot() {
     stdio: 'pipe',
   });
 
-  tarballPath = join(box, tarball);
   packed = join(box, 'package');
   return packed;
 }
