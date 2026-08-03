@@ -260,6 +260,52 @@ describe('объявленное уедет потребителю', () => {
   });
 });
 
+describe('обвес без подстановок — слою нечего мерить', () => {
+  /**
+   * Тот же случай, что у чужого обвеса в приёмке, но точечной поломкой живого:
+   * закрепляет формулировку и счёт «0 из N» независимо от чужой поставки —
+   * подними её версию, и приёмка расскажет об этом, а эта проба не соврёт.
+   */
+  it('причина читается итогом, а не оставшейся работой', () => {
+    const root = copyDevbox();
+    editDeclaration(root, (declaration) => {
+      for (const entry of declaration.layout) {
+        entry.render = false;
+      }
+    });
+
+    const report = checkPackage(root);
+
+    // Зелёный ответ обязан остаться зелёным: это про читаемость, не про вердикт.
+    expect(codes(report)).toEqual([]);
+    expect(report.ok).toBe(true);
+    expect(stage(report, 'templates')?.status).toBe('skipped');
+    expect(stage(report, 'templates')?.counted).toBe(0);
+    expect(stage(report, 'templates')?.reason).toBe(
+      'мерить нечего: рендеримых записей в раскладке 0 из 2 — ' +
+        'все артефакты едут байт в байт. Это полный ответ слоя, а не отложенная проверка',
+    );
+  });
+
+  it('пропуск от непригодного объявления остаётся пропуском — прогон красный', () => {
+    const root = copyDevbox();
+    editDeclaration(root, (declaration) => {
+      declaration.formVersion = 99;
+    });
+
+    const report = checkPackage(root);
+
+    // Два состояния под одним машинным именем различает ТОЛЬКО причина: там
+    // сверять было нечем, здесь — нечего. Слить их в один текст значило бы
+    // потерять разницу, ради которой правка и делалась.
+    expect(report.ok).toBe(false);
+    expect(stage(report, 'templates')?.reason).toContain(
+      'объявление непригодно',
+    );
+    expect(stage(report, 'templates')?.reason).not.toContain('полный ответ');
+  });
+});
+
 describe('три беды — три строки, а не три прогона', () => {
   it('поломки разных слоёв названы все сразу', () => {
     const root = copyDevbox();
