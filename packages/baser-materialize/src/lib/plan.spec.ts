@@ -490,6 +490,44 @@ describe('запись обязана утверждать объявленно�
     expect(computePlan({ tree, declaration: next }).status).toBe('converged');
   });
 
+  it('строка шага record называет ОБА адреса — предмет записи и то, что изменится', () => {
+    // Шаг стоит на своём `dest` и это верно, но содержимое `dest` он не трогает
+    // вовсе: изменится паспорт укладки. Текст, называвший только `dest`,
+    // отправлял читателя искать изменения в файле, который не изменится, —
+    // и рядом печатался отчёт «записано на диск» с другим адресом
+    // (`tasker:BASER2-141`).
+    const { tree, declaration } = createWorkspace({
+      layout: [ciEntry],
+      sources: { ...SOURCES, 'ci/build-2.yml': SOURCES['ci/build.yml'] },
+    });
+    applyPlan(tree, computePlan({ tree, declaration }));
+
+    const text = describePlan(
+      computePlan({
+        tree,
+        declaration: redeclare(declaration, [
+          { src: 'ci/build-2.yml', dest: WORKFLOW },
+        ]),
+      }),
+    );
+
+    expect(text).toContain(`record  ${WORKFLOW}`);
+    expect(text).toContain(`меняется паспорт укладки ${MANIFEST_PATH}`);
+    expect(text).toContain('сам артефакт остаётся как есть');
+  });
+
+  it('у остальных видов шага этого хвоста нет — им искать нечего', () => {
+    const { tree, declaration } = createWorkspace({
+      layout: [ciEntry],
+      sources: SOURCES,
+    });
+
+    const text = describePlan(computePlan({ tree, declaration }));
+
+    expect(text).toContain('create');
+    expect(text).not.toContain('паспорт укладки');
+  });
+
   it('устаревшая запись не доживает до снятия не того файла', () => {
     // Сценарий, на котором прошлая модель теряла файл: объявление сменилось,
     // содержимое совпало, шага не было — и следующее снятие записи уносило
