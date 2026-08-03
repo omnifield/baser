@@ -70,7 +70,11 @@ import { describeProblems } from './problems.js';
 import { checkSingleProvider } from './providers.js';
 import { resolveSettings, type ComputeDefault } from './settings.js';
 import { checkTemplate } from './template.js';
-import { FORM_VERSION } from './version.js';
+import {
+  FORM_VERSION,
+  MAP_TYPE_SINCE,
+  PINNED_VERSION_SINCE,
+} from './version.js';
 import type { SettingValue } from './values.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -403,13 +407,33 @@ describe('проба формы: два обвеса-фикстуры сразу
     expect(resolved('kit', { settings: { tools: {} } })['tools']).toEqual({});
   });
 
-  it('ФОРМА 2 И ФОРМА 3 ЖИВУТ РЯДОМ: подъём не требует правки от соседа', () => {
-    // Набор поднялся до 3 ради составного типа, заготовка осталась на 2 — и обе
-    // разбираются одним и тем же baser'ом. Ровно это и обещает MIN_FORM_VERSION:
+  it('ФОРМЫ 2, 3 И 4 ЖИВУТ РЯДОМ: подъём не требует правки от соседа', () => {
+    // Набор поднялся до 3 ради составного типа, заготовка осталась на 2, а
+    // перечень поставленного уехал на 4 ради закрепления версии — и всё это
+    // разбирается одним и тем же baser'ом. Ровно это и обещает MIN_FORM_VERSION:
     // граница двигается за ПЕРЕЕЗДОМ полей, а не за номером.
-    expect(declaration('kit').formVersion).toBe(FORM_VERSION);
+    expect(declaration('kit').formVersion).toBe(MAP_TYPE_SINCE);
     expect(declaration('seed').formVersion).toBe(2);
     expect(declaration('seed').settings['areas'].type).toBe('list');
+
+    // Объявление обвеса форма 4 не тронула ни на одно поле: прибавление целиком
+    // на стороне потребителя, и ни один выпущенный обвес от него не правится.
+    expect(installed().formVersion).toBe(PINNED_VERSION_SINCE);
+    expect(declaration('kit').settings['tools'].type).toBe('map');
+  });
+
+  it('ЗАКРЕПЛЕНИЕ ВЕРСИИ: один обвес закреплён, второй — нет, и оба законны', () => {
+    // Отсутствие поля — не пропуск, а состояние «не закреплено»: дверь возьмёт
+    // последнюю доступную, назовёт её в плане до применения и закрепит в
+    // паспорте (решение architect, `tasker:BASER2-145`). Что дверь делает со
+    // значением, форма не решает — она его принимает и судит пригодность.
+    const [набор, заготовка] = installed().sources;
+
+    expect(набор).toEqual({ use: TOOLS.kit, version: '1.0.0' });
+    expect(заготовка).toEqual({ use: TOOLS.seed });
+    // Реестра этот вход не видит: сходство с версией манифеста фикстуры —
+    // свойство самой фикстуры, а не проверки.
+    expect(manifest('kit')['version']).toBe('1.0.0');
   });
 
   it('СВЕРКА НЕ ПРОЩАЕТ НИЧЕГО: уложенное сходится с эталоном байт в байт', () => {
@@ -656,6 +680,43 @@ describe('проба отказов: каждый случай называет�
     expect(problems.map((problem) => problem.code)).toEqual([
       'template-html-escape',
     ]);
+  });
+
+  it('ЗАКРЕПЛЕНИЕ В ПЕРЕЧНЕ ПРЕЖНЕЙ ФОРМЫ: сказано, что поднять', () => {
+    // Живой перечень фикстуры, названный прежним номером. Старый baser сказал бы
+    // «конфиг такого поля не знает» и отправил искать опечатку там, где её нет:
+    // человек написал не опечатку, а закрепление, которого у ТОГО baser'а ещё
+    // не было. Ради этого версия и поднята.
+    const прежний = parseConsumerConfig(
+      readJson(join(consumer, CONSUMER_CONFIG_PATH)) as Record<string, unknown>,
+    );
+    expect(прежний.ok).toBe(true);
+
+    const назвался3 = parseConsumerConfig({
+      ...(readJson(join(consumer, CONSUMER_CONFIG_PATH)) as Record<
+        string,
+        unknown
+      >),
+      formVersion: PINNED_VERSION_SINCE - 1,
+    });
+    expect(назвался3.ok).toBe(false);
+    if (назвался3.ok) return;
+    expect(codesOf(назвался3.problems)).toEqual([
+      `form-version-unsupported @ ${CONSUMER_CONFIG_PATH}.sources[0].version`,
+    ]);
+    expect(назвался3.problems[0].message).toContain('обнови baser');
+  });
+
+  it('ДИАПАЗОН ВМЕСТО ВЕРСИИ: закреплением он не является', () => {
+    const плавающий = parseConsumerConfig({
+      formVersion: FORM_VERSION,
+      sources: [{ use: TOOLS.kit, version: '^1.0.0' }],
+    });
+
+    expect(плавающий.ok).toBe(false);
+    if (плавающий.ok) return;
+    expect(плавающий.problems[0].code).toBe('invalid-version');
+    expect(плавающий.problems[0].message).toContain('не пиши поле вовсе');
   });
 
   it('версию конфига проставила дверь, пользователь её не вводил', () => {

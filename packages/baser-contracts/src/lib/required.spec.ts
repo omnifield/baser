@@ -232,6 +232,13 @@ describe('сторона потребителя: что обязательно',
     expect(parseConsumerConfig(consumerConfig()).ok).toBe(true);
   });
 
+  it('sources[].version — НЕобязателен: отсутствие значит «не закреплено»', () => {
+    const result = parseConsumerConfig(consumerConfig());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.sources[0].version).toBeUndefined();
+  });
+
   it('пустой перечень законен — репозиторий без обвесов это не отказ', () => {
     const result = parseConsumerConfig(consumerConfig({ sources: [] }));
     expect(result.ok).toBe(true);

@@ -24,6 +24,7 @@ export {
   FORM_VERSION,
   MAP_TYPE_SINCE,
   MIN_FORM_VERSION,
+  PINNED_VERSION_SINCE,
 } from './lib/version.js';
 export type { FormVersion } from './lib/version.js';
 
