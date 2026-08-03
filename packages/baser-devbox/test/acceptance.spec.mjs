@@ -289,7 +289,7 @@ describe('ВТОРОЙ ПОТРЕБИТЕЛЬ: тот же обвес под с�
 
     const post = parseJsonc(consumer.read(LIVE)).postCreateCommand;
 
-    expect(post).toContain('npm config get @omnifield:registry');
+    expect(post).toContain('pnpm config get @omnifield:registry');
     expect(post.endsWith(' && pnpm install')).toBe(true);
     expect(post).not.toContain('--frozen-lockfile');
     // Комментарий над шагом собран из тех же частей — он назвал проверку.

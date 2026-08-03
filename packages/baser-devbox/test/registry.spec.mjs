@@ -113,10 +113,19 @@ function checkStep(npmScope = SCOPE) {
  * Окружение СОБИРАЕТСЯ (`env.mjs`), а не наследуется от прогона: проверка изображает
  * постсоздание В КОНТЕЙНЕРЕ, и унаследованный npm-контекст мерил бы машину. Там же
  * записано, чем это чревато и почему белый список, а не чистка `npm_config_*`.
+ *
+ * КАТАЛОГ ТОЖЕ НАЗВАН, и это не аккуратность. Постсоздание выполняется в корне
+ * репозитория потребителя, а не там, откуда запущен прогон, — и разница видна:
+ * pnpm читает в текущем каталоге пин `packageManager` и переключается на него
+ * (`tasker:BASER2-136`). Оставь мы каталог прогона, проба гоняла бы пин ЭТОГО
+ * репозитория поверх дерева потребителя, то есть мерила бы не то. Каталог берётся
+ * у собранного потребителя, а не параметром: у всех проб файла он один и тот же,
+ * и забыть его в одной значило бы получить молча другой прогон.
  */
 function sh(script, env) {
   return new Promise((resolve) => {
     const child = spawn('sh', ['-c', script], {
+      cwd: consumer.root,
       env: containerEnv(env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -128,7 +137,7 @@ function sh(script, env) {
   });
 }
 
-/** Стаб приватного реестра: отвечает на то же, что спрашивает `npm whoami`. */
+/** Стаб приватного реестра: отвечает на то же, что спрашивает `pnpm whoami`. */
 async function withRegistry(body) {
   const seen = [];
   const server = createServer((req, res) => {
@@ -324,7 +333,7 @@ describe('внешнему потребителю приватный реест�
     await run({ command: 'apply', cwd: consumer.root });
 
     const text = consumer.read(LIVE);
-    expect(text).not.toContain('npm whoami');
+    expect(text).not.toContain('pnpm whoami');
     expect(text).not.toContain('registry');
     expect(text).not.toContain('_authToken');
     // Постсоздание — ровно установка зависимостей, и ничего больше (первый шаг,
@@ -350,7 +359,7 @@ describe('внешнему потребителю приватный реест�
     );
     expect(scope.value).toBe(null);
     expect(scope.origin.kind).toBe('default');
-    expect(consumer.read(LIVE)).not.toContain('npm whoami');
+    expect(consumer.read(LIVE)).not.toContain('pnpm whoami');
   });
 });
 
@@ -394,7 +403,7 @@ describe('scope публичный — сказано ЗНАЧЕНИЕМ, а н�
     });
 
     // Артефакт — как у того, кто про реестр вообще не говорил: делать нечего.
-    expect(text).not.toContain('npm whoami');
+    expect(text).not.toContain('pnpm whoami');
     expect(text).not.toContain('_authToken');
     expect(afterToolchain(parseJsonc(text).postCreateCommand)).toBe(INSTALL);
 
@@ -432,7 +441,7 @@ describe('scope публичный — сказано ЗНАЧЕНИЕМ, а н�
 
   it('ДЕНЬ ADR-19: публичный scope не встаёт стеной там, где приватный встаёт', async () => {
     // Живой сценарий заявки, исполняемый: `@omnifield/*` стал публичным, пин в
-    // user-конфиге больше не нужен, `npm config get` возвращает `undefined`.
+    // user-конфиге больше не нужен, `pnpm config get` возвращает `undefined`.
     // Приватный профиль в этом окружении ОСТАНАВЛИВАЕТ установку — и правильно
     // делает. Публичный обязан пройти, и проходит он не потому, что проверка
     // смолчала, а потому, что её в артефакте нет вовсе.
@@ -471,7 +480,7 @@ describe('scope публичный — сказано ЗНАЧЕНИЕМ, а н�
 
     expect(value('npmScopeIsPrivate').value).toBe(true);
     expect(value('npmScopeIsPrivate').ours).toBe(true);
-    expect(text).toContain('npm whoami');
+    expect(text).toContain('pnpm whoami');
   });
 
   it('без scope булева не значит ничего — проверке нечего проверять', async () => {
@@ -498,7 +507,7 @@ describe('проверка стоит ПЕРЕД установкой, а не �
 
     const post = parseJsonc(consumer.read(LIVE)).postCreateCommand;
     const chown = post.indexOf('sudo chown');
-    const check = post.indexOf('npm whoami');
+    const check = post.indexOf('pnpm whoami');
     const install = post.indexOf(INSTALL);
 
     // chown раньше проверки не для красоты: креды лежат в томе, права на который он
