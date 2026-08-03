@@ -54,6 +54,13 @@
  *     не уходит сиротой молча, а называется извещением и снимается только
  *     поимённым подтверждением; пропал сам артефакт — кладём заново.
  *
+ * ГДЕ ЛЕЖИТ ИСТОЧНИК — ПОЛОЖЕНИЕ, А НЕ ПУТЬ (`tasker:BASER2-150`, `position.ts`).
+ * Движок пишет только внутрь дерева и обязан утверждать, что не пишет в
+ * собственный источник. Внутри дерева утверждение считается по путям
+ * (`dest-in-content-root`), снаружи — пересечение пусто по построению, и это
+ * УТВЕРЖДАЕТСЯ разбором положения, а не пропускается. Отказ остаётся живым
+ * ровно для третьего случая: положение источника не названо вовсе.
+ *
  * ПАСПОРТ УКЛАДКИ НЕСЁТ ВЕРСИЮ ОБВЕСА (`tasker:BASER2-52`). Движок её не
  * интерпретирует и по semver не сравнивает — он её хранит и следит, чтобы запись
  * утверждала СЕГОДНЯШНЮЮ (§2): подъём версии при том же содержимом даёт шаг
@@ -70,7 +77,13 @@ import {
 import type { Declaration, LayoutEntry } from './declaration.js';
 import type { CanonSource } from './source.js';
 import { createTreeSource } from './source.js';
-import { DeclarationError, SourceOutsideTreeError } from './errors.js';
+import { DeclarationError } from './errors.js';
+import type { SourcePosition } from './position.js';
+import {
+  describePosition,
+  resolveSourcePosition,
+  writesIntoSource,
+} from './position.js';
 import type { Manifest, ManifestRecord } from './manifest.js';
 import { MANIFEST_PATH, hashContent, readManifest } from './manifest.js';
 import type { TraceRecorder, TraceSpan } from './trace.js';
@@ -428,34 +441,14 @@ function requireUsableDeclaration(declaration: Declaration): void {
     shape('source — ожидался объект { id, contentRoot }');
   }
 
-  const { contentRoot } = declaration.source;
-
-  // Источника в этом дереве нет — форма честная, и движок называет её сам, а не
-  // вырождается в защиту, которой не за что зацепиться (`tasker:BASER2-24`).
-  if (contentRoot === null) {
-    throw new SourceOutsideTreeError(
-      `источник обвеса "${declaration.source.id}" лежит вне дерева потребителя: ` +
-        'репо-относительного пути к его шаблонам не существует, поэтому движок ' +
-        'не может проверить, что не пишет в собственный источник. Поставь обвес ' +
-        'в этот репозиторий',
-    );
-  }
-  if (typeof contentRoot !== 'string') {
+  // Отсутствие поля — форма не та, и это не то же самое, что названное «положение
+  // источника не известно» (`contentRoot: null`). Первое собирает дверь, второе
+  // разбирает `resolveSourcePosition` и отвечает на него своим отказом.
+  if (declaration.source.contentRoot === undefined) {
     shape(
-      'source.contentRoot — ожидалась строка с корнем содержимого либо null, ' +
-        'если источника в этом дереве нет',
-    );
-  }
-
-  // Вырожденный корень («.», «/», пустая строка) означает, что источником
-  // объявлено ВСЁ дерево. Тогда защита «движок не пишет в собственный источник»
-  // отваливается — `isInside` от такого корня ложна, — и прогон затирает
-  // шаблон, из которого сам же читает. Отказ вместо тихой порчи источника.
-  if (!toRepoPath(contentRoot).ok) {
-    throw new DeclarationError(
-      `корень содержимого "${contentRoot}" непригоден: ` +
-        'источником объявлено бы всё дерево, и движок писал бы поверх ' +
-        'собственных шаблонов. Нужен путь к каталогу шаблонов внутри пакета',
+      'source.contentRoot — ожидалась строка с корнем содержимого внутри ' +
+        'дерева, { outside: "<адрес>" } для источника заведомо снаружи либо ' +
+        'null, если положение не названо',
     );
   }
 
@@ -488,15 +481,32 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
   const { tree, declaration } = options;
   requireUsableDeclaration(declaration);
 
-  const contentRoot = declaration.source.contentRoot as string;
+  // Положение источника разбирается ОДИН РАЗ и дальше по движку живёт разобранным:
+  // «внутри дерева» и «заведомо снаружи» это разные способы держать защиту от
+  // записи в собственный источник, и решать, какой из них взят, посреди фазы
+  // плана значило бы завести второе место, знающее про положение.
+  const position = resolveSourcePosition(declaration.source);
   const sourceId = declaration.source.id;
   // Отсутствие версии приводится к `null` ЗДЕСЬ, один раз: дальше по движку
   // «версии нет» имеет ровно одно написание, и в паспорт укладки не может
   // просочиться `undefined`, которое сериализовалось бы пропуском ключа.
   const sourceVersion = declaration.source.version ?? null;
   const trace = options.trace ?? createTrace();
-  const source = options.source ?? createTreeSource(tree, contentRoot);
+  const source = options.source ?? defaultSource(tree, position, sourceId);
   const manifestPath = options.manifestPath ?? MANIFEST_PATH;
+
+  // ПОЛОЖЕНИЕ ИСТОЧНИКА НАЗВАНО В ТЕЛЕМЕТРИИ, а не подразумевается. Чем именно
+  // держится защита от записи в собственный источник — первое, что спрашивают,
+  // когда артефакт лёг не туда: внутри дерева это проверка пути на каждом `dest`,
+  // снаружи — пустое пересечение, утверждённое разбором положения. Молчащий об
+  // этом прогон выглядит одинаково в обоих случаях, а случаи разные.
+  trace.event('plan.source', {
+    source: sourceId,
+    position: position.kind,
+    at: describePosition(position),
+    guard:
+      position.kind === 'in-tree' ? 'dest-in-content-root' : 'empty-intersection',
+  });
 
   const confirm = new Set(
     (options.confirm ?? []).map((dest, index) =>
@@ -641,7 +651,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
         try {
           const unreachable = reachabilityConflict(entry, {
             tree,
-            contentRoot,
+            position,
             manifestPath,
             claimed,
             claimedDirs,
@@ -776,6 +786,32 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
     manifest: nextManifest(manifest, steps),
     trace: trace.snapshot(),
   };
+}
+
+/**
+ * Источник по умолчанию — дерево, и только оно.
+ *
+ * Умолчание есть ровно у одного положения: содержимое внутри дерева движок
+ * прочитает сам. Снаружи дерева он не ходит вовсе — файловой системы он не
+ * касается (`index.ts`), — поэтому источник, объявленный внешним, обязан приехать
+ * портом. Без порта читать было бы нечем, и молчаливым «шаблон не найден» на
+ * каждой записи это притворяться не должно: причина не в раскладке обвеса, а в
+ * том, что вызывающий не подал содержимое.
+ */
+function defaultSource(
+  tree: Tree,
+  position: SourcePosition,
+  sourceId: string,
+): CanonSource {
+  if (position.kind === 'outside-tree') {
+    throw new DeclarationError(
+      `источник обвеса "${sourceId}" объявлен лежащим вне дерева ` +
+        `("${position.at}"), а порт содержимого не подан: движок за пределы ` +
+        'дерева не ходит и прочитать шаблоны сам не может. Подай их ' +
+        'PlanOptions.source — содержимое готовит тот, кто достал поставку',
+    );
+  }
+  return createTreeSource(tree, position.contentRoot);
 }
 
 /**
@@ -962,7 +998,8 @@ function statusOf(
 
 interface ReachabilityContext {
   readonly tree: Tree;
-  readonly contentRoot: string;
+  /** Где лежит источник — этим держится защита от записи в него самого. */
+  readonly position: SourcePosition;
   readonly manifestPath: string;
   readonly claimed: ReadonlyMap<string, LayoutEntry>;
   readonly claimedDirs: ReadonlyMap<string, string>;
@@ -994,7 +1031,7 @@ function reachabilityConflict(
   entry: LayoutEntry,
   context: ReachabilityContext,
 ): PlanConflict | null {
-  const { tree, contentRoot, manifestPath, claimed, claimedDirs, removed } =
+  const { tree, position, manifestPath, claimed, claimedDirs, removed } =
     context;
 
   // Манифест — не артефакт и целью раскладки быть не может. Иначе движок
@@ -1014,14 +1051,19 @@ function reachabilityConflict(
     };
   }
 
-  if (isInside(entry.dest, contentRoot)) {
+  // ЗАЩИТА ОТ ЗАПИСИ В СОБСТВЕННЫЙ ИСТОЧНИК — по положению источника, а не по
+  // наличию пути (`tasker:BASER2-150`). Внутри дерева пересечение считается, как
+  // считалось; снаружи оно пусто по построению и утверждено разбором положения —
+  // молчание здесь означает «пересечения нет», а не «проверить было нечем».
+  const ownSource = writesIntoSource(position, entry.dest);
+  if (ownSource !== null) {
     return {
       kind: 'dest-in-content-root',
       dest: entry.dest,
       src: entry.src,
-      detail: { contentRoot },
+      detail: { contentRoot: ownSource },
       message:
-        `"${entry.dest}" лежит внутри contentRoot "${contentRoot}": движок писал бы ` +
+        `"${entry.dest}" лежит внутри contentRoot "${ownSource}": движок писал бы ` +
         'в собственный источник шаблонов — материализация в источник не имеет смысла',
     };
   }
@@ -1116,12 +1158,6 @@ function ancestorsOf(path: string): string[] {
     dirs.push(current);
   }
   return dirs;
-}
-
-/** Лежит ли путь внутри каталога (или совпадает с ним). */
-function isInside(path: string, directory: string): boolean {
-  const root = directory.replace(/\/+$/, '');
-  return root !== '' && (path === root || path.startsWith(`${root}/`));
 }
 
 interface EntryContext {
