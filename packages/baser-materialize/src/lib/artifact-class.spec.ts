@@ -461,3 +461,115 @@ describe('взятие во владение существующего файл
     expect(tree.read(HARNESS, 'utf-8')).toBe(SOURCES['harness.yaml']);
   });
 });
+
+/**
+ * КЛАСС В ОТКАЗЕ — приёмка `tasker:BASER2-141`.
+ *
+ * Живой случай: первый прогон после объявления второго обвеса отказал
+ * шестнадцатью конфликтами владения, и все шестнадцать строк отличались только
+ * именем файла. Вопрос потребителя был ровно один — «отдать во владение значит
+ * ли потерять содержимое?», — и ответ на него зависит от класса и больше ни от
+ * чего. Класс он вытащил дедукцией по счётчику `placedOnce` в трейсе: выводимо,
+ * но выводится то, что движок и так знает.
+ *
+ * Проверяется поэтому СМЕШАННЫЙ набор: на однородном классе строка «называет
+ * класс» неотличима от строки, называющей одно и то же слово всем подряд.
+ */
+describe('отказ владения называет класс спорного артефакта', () => {
+  const README = 'README.md';
+
+  /** Часть путей держится человеческими, часть — нашими, и все они спорные. */
+  function mixed() {
+    return createWorkspace({
+      layout: [
+        placedOnce,
+        // Класс не назван — умолчание; ровно так объявлено большинство раскладок.
+        { src: 'gitignore', dest: IGNORE },
+        { src: 'readme.md', dest: README, class: 'regenerated' },
+      ],
+      sources: { ...SOURCES, 'readme.md': '# канон\n' },
+      existing: { [HARNESS]: FILLED, [IGNORE]: 'dist\n', [README]: '# моё\n' },
+    });
+  }
+
+  it('класс назван в машинном ответе — по каждому спорному пути свой', () => {
+    const { tree, declaration } = mixed();
+
+    const plan = computePlan({ tree, declaration });
+
+    expect(
+      Object.fromEntries(
+        plan.conflicts.map((conflict) => [conflict.dest, conflict.class]),
+      ),
+    ).toEqual({
+      [HARNESS]: 'placed-once',
+      [IGNORE]: 'regenerated',
+      [README]: 'regenerated',
+    });
+  });
+
+  it('класс назван и в строке — вместе с тем, что сделает подтверждение', () => {
+    const { tree, declaration } = mixed();
+
+    const text = describePlan(computePlan({ tree, declaration }));
+
+    expect(text).toContain('Класс артефакта — "placed-once"');
+    expect(text).toContain('содержимого не трогая');
+    expect(text).toContain('Класс артефакта — "regenerated"');
+    expect(text).toContain('перекладывает содержимое из шаблона целиком');
+  });
+
+  it('обещание держится ИНВАРИАНТОМ: класс назван у каждого отказа, просящего подтверждения', () => {
+    // Вычитка двух строк доказывает две строки. Справка обещает класс у всякого
+    // отказа, который просит подтверждения, — это и проверяется.
+    const { tree, declaration } = mixed();
+
+    const asking = computePlan({ tree, declaration }).conflicts.filter(
+      (conflict) => conflict.detail.resolution === 'confirm',
+    );
+
+    expect(asking).toHaveLength(3);
+    for (const conflict of asking) {
+      expect(conflict.class).toBeDefined();
+      expect(conflict.message).toContain(conflict.class as string);
+    }
+  });
+
+  it('класс не выдумывается там, где движок его НЕ знает', () => {
+    // `unknown-artifact-class` — отказ ровно про то, что слово незнакомо: оно
+    // лежит строкой в `detail.artifactClass`, а поля `class` у отказа нет.
+    // Проставить сюда умолчание значило бы отчитаться о классе, которого никто
+    // не объявлял.
+    const { tree, declaration } = createWorkspace({
+      layout: [
+        { src: 'harness.yaml', dest: HARNESS, class: 'kept-forever' },
+      ] as unknown as readonly LayoutEntry[],
+      sources: SOURCES,
+      existing: { [HARNESS]: FILLED },
+    });
+
+    const conflict = computePlan({ tree, declaration }).conflicts[0];
+
+    expect(conflict.kind).toBe('unknown-artifact-class');
+    expect(conflict.class).toBeUndefined();
+  });
+
+  it('подтверждение делает ровно то, что назвал отказ — на обоих классах сразу', () => {
+    // Обещание строки и факт применения сверяются одним прогоном: иначе текст
+    // остаётся обещанием, проверенным глазами.
+    const { tree, declaration } = mixed();
+
+    const plan = computePlan({
+      tree,
+      declaration,
+      confirm: [HARNESS, IGNORE, README],
+    });
+    applyPlan(tree, plan);
+
+    // "placed-once": содержимого не трогая.
+    expect(tree.read(HARNESS, 'utf-8')).toBe(FILLED);
+    // "regenerated": перекладывает содержимое из шаблона целиком.
+    expect(tree.read(IGNORE, 'utf-8')).toBe(SOURCES.gitignore);
+    expect(tree.read(README, 'utf-8')).toBe('# канон\n');
+  });
+});
