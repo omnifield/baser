@@ -30,6 +30,7 @@ import {
   checkTemplate,
   describeProblems,
   FORM_VERSION,
+  MIN_FORM_VERSION,
   readSourceDeclaration,
 } from '../../baser-contracts/src/index.ts';
 import { locatePackage } from '../../baser-contracts/src/locate.ts';
@@ -64,7 +65,28 @@ describe('объявление пригодно по форме', () => {
   it('разбирается настоящим разбором контрактов и называет себя', () => {
     const decl = declaration();
 
-    expect(packedManifest().baser.formVersion).toBe(FORM_VERSION);
+    // ОКНО, А НЕ РАВЕНСТВО — и это решение, а не послабление.
+    //
+    // Форма обещает обвесу окно `[MIN_FORM_VERSION, FORM_VERSION]`: обвес ВПРАВЕ
+    // быть написанным против прежней ревизии и остаётся законным, пока поля не
+    // переехали (`MIN_FORM_VERSION` держится на 2 ровно затем, чтобы выпущенные
+    // обвесы не переписывались ради возможности, которой не пользуются).
+    // Равенство с `FORM_VERSION` требовало бы от НАШЕГО объявления ровно того,
+    // от чего эта граница защищает чужие: любой подъём формы красил бы зону
+    // девбокса — и красил бы её не тот, кто поднял (`tasker:BASER2-148`,
+    // поймано на живом при 3 → 4).
+    //
+    // Поэтому здесь судится ПРИГОДНОСТЬ объявления: разбор его принял (выше), а
+    // названная им форма — из тех, что этот baser разбирает. Соседняя зона
+    // выдачи судит так же (`baser-pack`, приёмка описи) и подъём формы пережила
+    // зелёной. Увидев рядом константу, «починить» это обратно на `toBe` значит
+    // вернуть дефект: совпадение чисел здесь — не инвариант девбокса.
+    const declaredForm = packedManifest().baser.formVersion;
+    expect(declaredForm).toBeGreaterThanOrEqual(MIN_FORM_VERSION);
+    expect(declaredForm).toBeLessThanOrEqual(FORM_VERSION);
+    // Разбор прочитал ровно то число, что стоит в опубликованном манифесте.
+    expect(decl.formVersion).toBe(declaredForm);
+
     expect(decl.source.id).toBe('omnifield/devbox');
     expect(decl.source.contentRoot).toBe('template');
     expect(decl.layout.map((entry) => entry.dest)).toEqual([
