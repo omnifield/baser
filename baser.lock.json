@@ -134,7 +134,7 @@
       "source": "omnifield/devbox",
       "version": "0.8.1",
       "class": "regenerated",
-      "hash": "sha256:69fb057307847c20c21a779d03b71a574e8bdd4ef6364a3fb3124ab4a0d40215"
+      "hash": "sha256:030be3427f80e3cc6b0ba78f4c6db7ba08a402f949548bdfd881825cb79cd5f7"
     },
     {
       "dest": ".omnifield/harness.yaml",

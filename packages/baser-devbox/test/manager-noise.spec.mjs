@@ -84,13 +84,13 @@ function box(prefix) {
  * Полный профиль потребителя: тома (значит имена стора) и приватный реестр
  * (значит проверка). Ровно та раскладка, на которой находка и случилась.
  */
-async function materialize() {
+async function materialize(settings = {}) {
   consumer = installConsumer({
     repoName: 'weber',
     config: consumerConfig(),
     tuning: tuning({
       presets: ['omnifield'],
-      settings: { npmScope: SCOPE, installAssistant: false },
+      settings: { npmScope: SCOPE, installAssistant: false, ...settings },
     }),
   });
   const result = await run({ command: 'apply', cwd: consumer.root });
@@ -108,6 +108,18 @@ function checkStep(artifact) {
     `шага проверки нет в постсоздании: ${post}`,
   ).toBe(true);
   return post.slice(from, to);
+}
+
+/** Шаг установки ассистента — тоже вырезанный из АРТЕФАКТА, а не собранный здесь. */
+function assistantStep(artifact) {
+  const step = artifact.onCreateCommand
+    .split(' && ')
+    .find((part) => part.includes('@anthropic-ai/claude-code'));
+  expect(
+    step,
+    `шага установки ассистента нет в постсоздании: ${artifact.onCreateCommand}`,
+  ).toBeTruthy();
+  return step;
 }
 
 /**
@@ -251,6 +263,35 @@ describe('проверка реестра спрашивает ТОГО, КЕМ 
     // окружении. Пока оно там, любой наш вызов npm пачкает вывод обвеса.
     expect(trap.calls()[0]).toContain('npm config get registry');
     expect(trap.calls()[0]).not.toContain('store-dir=нет');
+  });
+});
+
+describe('одноразовая настройка тома тоже идёт без имени стора', () => {
+  it('УСТАНОВКА АССИСТЕНТА: npm позвали — и имени, которого он не знает, не показали', async () => {
+    const artifact = await materialize({ installAssistant: true });
+    const step = assistantStep(artifact);
+    const trap = npmTrap();
+
+    const result = await sh(
+      step,
+      env(artifact, { named: { PATH: trap.PATH } }).named,
+    );
+
+    // Предмет здесь ДРУГОЙ, чем у проверки реестра: там утверждается, что npm не
+    // зовут вовсе, тут — что зовут нарочно (глобальный пакет ставит именно он) и
+    // при этом не показывают ему `store-dir`. Что ловушка видит имя, когда оно
+    // есть, доказано негативным контролем выше.
+    expect(result.code, result.err).toBe(0);
+    expect(trap.calls()).toHaveLength(1);
+    expect(trap.calls()[0]).toContain(
+      'install -g @anthropic-ai/claude-code@latest',
+    );
+    expect(trap.calls()[0]).toContain('store-dir=нет');
+
+    // Имя снято у КОМАНДЫ, а не у контейнера: установке зависимостей оно нужно, и
+    // приезжает она за ним в `containerEnv`. Починка шума, забравшая адрес стора,
+    // вернула бы `tasker:BASER2-111`.
+    expect(artifact.containerEnv.NPM_CONFIG_STORE_DIR).toBeTruthy();
   });
 });
 
