@@ -29,6 +29,7 @@ import {
   type FormResult,
 } from '@omnifield/baser-contracts';
 import { locatePackage } from '@omnifield/baser-contracts/locate';
+import type { SupplyOverride } from './supply.js';
 
 /** Куда дверь пришла работать. */
 export interface Repo {
@@ -82,12 +83,13 @@ export interface ConsumerConfigState {
  */
 export function readConsumerConfig(
   repo: Repo,
+  named: readonly SupplyOverride[] = [],
 ): FormResult<ConsumerConfigState> {
   const path = CONSUMER_CONFIG_PATH;
   const absolute = join(repo.root, path);
 
   if (!existsSync(absolute)) {
-    const seeded = discoverInstalledSources(repo);
+    const seeded = discoverInstalledSources(repo, named);
     if (!seeded.ok) {
       return seeded;
     }
@@ -184,11 +186,25 @@ export function serializeConsumerConfig(config: ConsumerConfig): string {
  *
  * Цена отказа при этом маленькая: файла ещё нет, чинится названный файл, а
  * следующий прогон засевает заново — ничего не потеряно и ничего не застыло.
+ *
+ * ── НАЗВАННЫЙ КАТАЛОГ ПОСТАВКИ — ТОЖЕ «ПОСТАВЛЕНО» ──────────────────────────
+ *
+ * Поставку достаёт дверь, и обвес больше не обязан лежать в зависимостях
+ * потребителя (`tasker:BASER2-146`). Значит в локации не на ноде объявленных
+ * зависимостей нет вовсе — а вопрос «что поставлено» ответ имеет: то, каталог
+ * чего человек назвал сам (`--source`). Ровно этим живёт ручная выдача: папку
+ * бандла принесли в локацию, и перечень рождается по ней.
+ *
+ * Догадки тут нет: названный флагом каталог — прямое утверждение человека, а не
+ * найденный дверью рядом файл. Существующий конфиг это по-прежнему не трогает.
  */
-function discoverInstalledSources(repo: Repo): FormResult<string[]> {
+function discoverInstalledSources(
+  repo: Repo,
+  named: readonly SupplyOverride[],
+): FormResult<string[]> {
   const manifest = join(repo.root, 'package.json');
   if (!existsSync(manifest)) {
-    return { ok: true, value: [] };
+    return { ok: true, value: [...named.map((supply) => supply.packageName)] };
   }
 
   let parsed: { dependencies?: unknown; devDependencies?: unknown };
@@ -209,9 +225,15 @@ function discoverInstalledSources(repo: Repo): FormResult<string[]> {
     }
   }
 
-  const sources: string[] = [];
+  // Названный каталог резолвом по имени не ищется — его назвали ПУТЁМ, и
+  // спрашивать про него `node_modules` значило бы искать там, где человек уже
+  // сказал «оно вот тут».
+  const sources: string[] = namedSources(named);
   const problems: FormProblem[] = [];
   for (const name of [...names].sort()) {
+    if (sources.includes(name)) {
+      continue;
+    }
     const installed = locatePackage(name, repo.root);
     if (!installed.ok) {
       // Код и слова — резолва: он назвал и файл, и то, что чинится этот случай
@@ -232,6 +254,33 @@ function discoverInstalledSources(repo: Repo): FormResult<string[]> {
   return problems.length === 0
     ? { ok: true, value: sources }
     : { ok: false, problems };
+}
+
+/**
+ * Названные каталоги, в которых лежит именно ОБВЕС.
+ *
+ * Проверка та же, что и у поставленного пакета: объявил блок `baser` — обвес,
+ * не объявил — молчим. Каталог, названный по ошибке, перечень не засевает, но и
+ * отказом не становится: назвать его мог человек, только начинающий писать свой
+ * обвес, а отказ на этом месте объявил бы дефектом его незаконченность.
+ */
+function namedSources(named: readonly SupplyOverride[]): string[] {
+  const found: string[] = [];
+  for (const supply of named) {
+    const manifest = join(resolve(supply.path), 'package.json');
+    if (!existsSync(manifest)) {
+      continue;
+    }
+    try {
+      if (declaresItselfSource(JSON.parse(readFileSync(manifest, 'utf-8')))) {
+        found.push(supply.packageName);
+      }
+    } catch {
+      // Непригодность манифеста назовёт доставание поставки: у него на это есть
+      // свой код и свой адрес, а вторая правда об одном событии не нужна.
+    }
+  }
+  return found.sort();
 }
 
 function declaresItselfSource(manifest: unknown): boolean {

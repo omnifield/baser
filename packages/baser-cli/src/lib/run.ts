@@ -74,10 +74,9 @@ import {
   type SourceConfig,
   type SourceDeclaration,
 } from '@omnifield/baser-contracts';
-import {
-  locatePackage,
-  type LocatedPackage,
-} from '@omnifield/baser-contracts/locate';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { type LocatedPackage } from '@omnifield/baser-contracts/locate';
 import {
   applyPlan,
   BaserMaterializeError,
@@ -100,6 +99,13 @@ import {
   type ProblemCode,
 } from './problems.js';
 import { locateContentRoot, type SourceLocation } from './installed.js';
+import {
+  newestVersion,
+  takeSupply,
+  type Supply,
+  type SupplyContext,
+  type SupplyOverride,
+} from './supply.js';
 import {
   readConsumerConfig,
   readRepo,
@@ -161,6 +167,27 @@ export interface RunOptions {
    * разошлось, у двери быть не должно.
    */
   readonly difference?: boolean;
+  /**
+   * ДЕВ-ПЕТЛЯ: поставка берётся из НАЗВАННОГО каталога, а не со склада.
+   *
+   * У нас самих обвесы лежат в монорепе рядом, и путь к каталогу — законный
+   * источник, а не обход (`kb:BASER2-22`). Но назвать его обязан человек: дверь,
+   * подхватывающая подвернувшийся рядом каталог сама, вернула бы ровно то, от
+   * чего эта работа уходит — поставку кладёт кто-то другой, а дверь угадывает,
+   * кто именно.
+   *
+   * Поимённо на пакет, а не флагом «брать локальное»: в локации обвесов бывает
+   * несколько, и общий переключатель означал бы, что про один из них соврали.
+   */
+  readonly sources?: readonly SupplyOverride[];
+  /**
+   * Корень кэша поставок; по умолчанию — каталог пользователя.
+   *
+   * Вход, а не флаг: кэш прогревают конвейер и проба, а человеку в терминале
+   * настраивать тут нечего — рыночная форма кладёт такое в `$XDG_CACHE_HOME`, и
+   * своё имя (`BASER_CACHE`) читается там же, в `supplyCacheRoot`.
+   */
+  readonly cache?: string;
 }
 
 /**
@@ -367,7 +394,13 @@ async function runInRepo(
   const log = new DoorProblemLog();
 
   // ── 1. Конфиг потребителя.
-  const state = trace.span('door.config', () => readConsumerConfig(repo));
+  // Названные каталоги поставок участвуют в ЗАСЕВЕ: в локации не на ноде
+  // объявленных зависимостей нет вовсе, и «что поставлено» отвечает ровно то,
+  // что человек назвал сам (`tasker:BASER2-146`). Существующий конфиг это
+  // по-прежнему не трогает.
+  const state = trace.span('door.config', () =>
+    readConsumerConfig(repo, options.sources ?? []),
+  );
   if (!state.ok) {
     log.addAll(state.problems);
     return refused(session, log.list());
@@ -388,14 +421,33 @@ async function runInRepo(
     return { ...shell(session), status: 'no-sources' };
   }
 
-  // ── 2. Объявления ВСЕХ поставленных обвесов.
+  // ── 2. Дерево локации.
   //
-  // Разбор идёт по всему перечню и не встаёт на первом непригодном: два
-  // ненайденных пакета — это два отказа, а не два прогона по штуке.
+  // Заводится ДО доставания поставок, потому что паспорт укладки — вход цепочки
+  // версии: пока в перечне версия не закреплена, повторный прогон обязан взять
+  // ту же поставку, которой уже разложено, а не догнать выпуск, случившийся
+  // между прогонами. Записей до шага 5 в дерево не уходит ни одной.
+  const tree = createRepoTree(repo.root);
+
+  // Снимок ДО всякой записи: следующие прогоны положат в дерево служебную
+  // запись, и признак «записи здесь нет» перестал бы отличать первую установку
+  // от второго обвеса, который просто лёг раньше.
+  const hadManifest = tree.exists(MANIFEST_PATH);
+
+  // ── 3. Поставки и объявления ВСЕХ обвесов перечня.
+  //
+  // Разбор идёт по всему перечню и не встаёт на первом непригодном: две
+  // недостанные поставки — это два отказа, а не два прогона по штуке.
   const drafts: DraftRun[] = [];
   const declared = trace.span(
     'door.declarations',
-    () => readDeclarations(config.sources, repo, session.config.path, log),
+    () =>
+      readDeclarations(config.sources, repo, session.config.path, log, {
+        context: supplyContext(tree),
+        overrides: options.sources ?? [],
+        ...(options.cache === undefined ? {} : { cache: options.cache }),
+        trace,
+      }),
     { sources: config.sources.length },
   );
   if (declared === null) {
@@ -404,7 +456,12 @@ async function runInRepo(
 
   for (const item of declared) {
     drafts.push({
-      source: describeSource(item.declaration, item.pkg, item.location),
+      source: describeSource(
+        item.declaration,
+        item.pkg,
+        item.supply,
+        item.location,
+      ),
       config: blankSourceConfig(item.declaration.source.id),
       settings: [],
       derived: [],
@@ -422,6 +479,11 @@ async function runInRepo(
     sources: declared.map((item) => ({
       id: item.declaration.source.id,
       version: item.pkg.version,
+      // Откуда поставка и ходили ли за ней на склад — первое, что спрашивают,
+      // когда «у меня разложилось иначе, чем у него»: цепочка версии у двух
+      // локаций расходится раньше, чем что-либо ещё.
+      origin: item.supply.origin.kind,
+      fetched: item.supply.fetched,
       artifacts: item.declaration.layout.length,
       placedOnce: item.declaration.layout.filter(
         (entry) => entry.class === 'placed-once',
@@ -464,14 +526,8 @@ async function runInRepo(
     return refused(session, log.list(), drafts);
   }
 
-  // ── 5. Дерево. `plan` и `apply` строят одно и то же — расходятся на сбросе.
-  const tree = createRepoTree(repo.root);
-
-  // Снимок ДО всякой записи: следующие прогоны положат в дерево служебную
-  // запись, и признак «записи здесь нет» перестал бы отличать первую установку
-  // от второго обвеса, который просто лёг раньше.
-  const hadManifest = tree.exists(MANIFEST_PATH);
-
+  // ── 5. Записи в дерево. `plan` и `apply` строят одно и то же — расходятся на
+  // сбросе; само дерево заведено выше, вместе с чтением паспорта укладки.
   if (creates) {
     tree.write(session.config.path, serializeConsumerConfig(config));
   }
@@ -648,45 +704,82 @@ async function runInRepo(
   };
 }
 
-/** Объявление обвеса плюс то, где физически лежит его содержимое. */
+/** Объявление обвеса, доставшая его поставка и место её содержимого. */
 interface DeclaredSource {
   readonly declaration: SourceDeclaration;
   readonly pkg: LocatedPackage;
+  readonly supply: Supply;
   readonly location: SourceLocation;
 }
 
+/** Всё, что нужно доставанию поставок и чего нет в самой записи перечня. */
+interface SupplyEnv {
+  readonly context: SupplyContext;
+  readonly overrides: readonly SupplyOverride[];
+  readonly cache?: string;
+  readonly trace: TraceRecorder;
+}
+
 /**
- * Читает объявления всех поставленных обвесов.
+ * Достаёт поставки всех обвесов перечня и читает их объявления.
  *
- * `null` — хоть один непригоден, и прогона не будет: раскладывать половину
- * набора нельзя, потому что применение проходит целиком либо никак. Отказы при
- * этом собраны по ВСЕМУ перечню — адрес каждого несёт индекс записи конфига,
- * иначе при двух одинаковых кодах непонятно, какую из них чинить.
+ * `null` — хоть одна не достана или непригодна, и прогона не будет: раскладывать
+ * половину набора нельзя, потому что применение проходит целиком либо никак.
+ * Отказы при этом собраны по ВСЕМУ перечню — адрес каждого несёт индекс записи
+ * конфига, иначе при двух одинаковых кодах непонятно, какую из них чинить.
+ *
+ * **Поставку достаёт дверь** (`kb:BASER2-22`). Раньше здесь стоял резолв по
+ * имени от корня локации, то есть поиск среди того, что положил пакетный
+ * менеджер ПОТРЕБИТЕЛЯ, — и локация на Go получала за это `package.json`, склад
+ * и лок. Теперь запись перечня называет поставку, а достаёт её дверь в кэш
+ * снаружи локации; резолв по имени никуда не делся — он зовётся тем же входом
+ * контрактов, только корнем ему служит каталог кэша (`supply.ts`).
  */
 function readDeclarations(
   entries: readonly ConsumerSourceEntry[],
   repo: Repo,
   configPath: string,
   log: DoorProblemLog,
+  env: SupplyEnv,
 ): DeclaredSource[] | null {
   const declared: DeclaredSource[] = [];
 
   for (const [index, entry] of entries.entries()) {
     const at = `${configPath}.sources[${index}].use`;
-    const installed = locatePackage(entry.use, repo.root);
-    if (!installed.ok) {
-      // Код и слова — резолва, адрес — двери. Пересказать чужой отказ своими
-      // словами значило бы завести второе описание одного события; а вот адрес
-      // у двери свой и он точнее: отказ несёт ИНДЕКС записи конфига, иначе при
-      // двух одинаковых кодах непонятно, какую из них чинить
-      // (`tasker:BASER2-55`). Файл, который правят, назван в самом тексте.
-      log.addAll(installed.problems.map((problem) => ({ ...problem, at })));
+    const local = env.overrides.find(
+      (override) => override.packageName === entry.use,
+    );
+
+    // Спан на поставку, а не событие: доставание единственная фаза двери, которая
+    // ходит по сети, и прогон, подорожавший на ней, обязан указывать на неё, а не
+    // на «где-то до плана». Кэш-попадание при этом мерится тем же спаном — по
+    // нему и видно, что склад не спрашивали.
+    const supply = env.trace.span(
+      'door.supply',
+      () =>
+        takeSupply(
+          {
+            packageName: entry.use,
+            pinned: entry.version ?? null,
+            local: local?.path ?? null,
+          },
+          env.context,
+          env.cache === undefined ? {} : { cache: env.cache },
+        ),
+      { source: entry.use },
+    );
+    if (!supply.ok) {
+      // Код и слова — доставания, адрес — записи перечня: чинят её, и при двух
+      // одинаковых кодах индекс единственное, что отличает одну от другой
+      // (`tasker:BASER2-55`).
+      log.addAll(supply.problems.map((problem) => ({ ...problem, at })));
       continue;
     }
 
+    const pkg = supply.value.package;
     const parsed = readSourceDeclaration(
-      installed.value.manifest,
-      `${installed.value.packageName}/package.json`,
+      pkg.manifest,
+      `${pkg.packageName}/package.json`,
     );
     if (!parsed.ok) {
       log.addAll(parsed.problems);
@@ -695,16 +788,68 @@ function readDeclarations(
 
     declared.push({
       declaration: parsed.value,
-      pkg: installed.value,
+      pkg,
+      supply: supply.value,
       location: locateContentRoot(
         repo.root,
-        installed.value.root,
+        pkg.root,
         parsed.value.source.contentRoot,
       ),
     });
   }
 
   return log.empty ? declared : null;
+}
+
+/**
+ * Чем дверь отвечает доставанию на два вопроса, которых оно не решает.
+ *
+ * Оба факта чужие: паспорт укладки ведёт движок, объявление разбирают контракты.
+ * Доставание их только СПРАШИВАЕТ — свой разбор того и другого был бы второй
+ * правдой о чужом факте, а расходятся такие копии молча.
+ */
+function supplyContext(tree: RepoTree): SupplyContext {
+  let recorded: Map<string, string[]> | null = null;
+
+  return {
+    recordedFor(sourceId: string): string | null {
+      if (recorded === null) {
+        recorded = new Map();
+        for (const record of readManifest(tree).values()) {
+          if (record.version === null || record.version === undefined) {
+            continue;
+          }
+          const versions = recorded.get(record.source) ?? [];
+          versions.push(record.version);
+          recorded.set(record.source, versions);
+        }
+      }
+      // Записи одного обвеса бывают разных версий — так выглядит паспорт после
+      // прогона, отказавшего на середине набора. Берётся СТАРШАЯ: она и есть то,
+      // чем локация разложена сейчас, а младшая — след того, что уже перекрыто.
+      return newestVersion(recorded.get(sourceId) ?? []);
+    },
+    identityOf(packageRoot: string): string | null {
+      const manifest = readPackageManifest(packageRoot);
+      if (manifest === null) {
+        return null;
+      }
+      const parsed = readSourceDeclaration(
+        manifest,
+        `${packageRoot}/package.json`,
+      );
+      return parsed.ok ? parsed.value.source.id : null;
+    },
+  };
+}
+
+/** Манифест лежащего пакета; `null` — файла нет либо он не разбирается. */
+function readPackageManifest(root: string): unknown {
+  try {
+    return JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8'));
+  } catch {
+    return null;
+  }
 }
 
 interface PrepareContext {
@@ -1035,8 +1180,9 @@ function freeze(drafts: readonly DraftRun[]): readonly SourceRun[] {
  * `contentRoot` подаётся ПРАВДОЙ, а не правдоподобием. Внутри дерева это
  * настоящий путь, и защита движка «не писать в собственный источник» работает в
  * полную силу. Вне дерева репо-относительного пути не существует, и дверь
- * говорит именно это: подделанный путь выглядел бы как защита, а защищал бы
- * пустоту (`installed.ts`, `README.md` § «Шов contentRoot»).
+ * говорит именно это — адресом снаружи, а не подделанным путём: подделка
+ * выглядела бы как защита, а защищала бы пустоту (`installed.ts`, `README.md`
+ * § «Шов contentRoot»).
  *
  * ## Класс и версия — здесь стык, на котором терялось слово
  *
@@ -1059,11 +1205,23 @@ function engineInput(
   return {
     source: {
       id: declaration.source.id,
-      // `null` — «источника в этом дереве нет». Форма честная, а не заглушка:
-      // подделать репо-относительный путь значило бы получить защиту, которая
-      // защищает пустоту, а настоящий источник оставить незакрытым. Движок
-      // называет этот случай сам (`SourceOutsideTreeError`).
-      contentRoot: location.kind === 'in-tree' ? location.path : null,
+      // ПОЛОЖЕНИЕ ИСТОЧНИКА, названное дверью, — а не `null` (`BASER2-150`).
+      //
+      // Знает его только она: она же и достала поставку. Внутри дерева это
+      // репо-относительный путь, и защита движка считается по путям. Снаружи —
+      // адрес КАК ЕСТЬ: каталог кэша вне локации, каталог дев-петли, поднятая
+      // раскладка. Пересечение с деревом там пусто по построению — движок
+      // пишет только внутрь, — и движок это УТВЕРЖДАЕТ, проверяя, что адрес
+      // репо-относительным путём невыразим.
+      //
+      // `null` дверь не подаёт НИКОГДА: он означает «положение не названо», а
+      // у двери нет такого состояния — обвес либо разложен в дереве, либо
+      // лежит по известному ей абсолютному адресу. Подать `null` значило бы
+      // сказать «не знаю» про то, что знаешь.
+      contentRoot:
+        location.kind === 'in-tree'
+          ? location.path
+          : { outside: location.absolute },
       // Версия — из манифеста пакета, второго места для неё нет (`kb:BASER2-2`).
       // `null` едет как `null`: обвес версии не назвал, и паспорт скажет именно
       // это, а не сочинённое за него число.
@@ -1099,17 +1257,14 @@ function engineRefusal(
     return ['door-failed', source.id, `движок сорвался: ${describe(cause)}`];
   }
 
-  if (cause.code === 'source-outside-tree') {
-    const where =
-      source.location.kind === 'outside-tree'
-        ? source.location.absolute
-        : source.packageRoot;
-    return [
-      cause.code,
-      `${source.packageName}/${source.contentRoot}`,
-      `${cause.message} (обвес установлен в "${where}")`,
-    ];
-  }
+  // ── ЗДЕСЬ СТОЯЛА ВЕТКА `source-outside-tree`, И ОНА СНЯТА ВМЕСТЕ С ПРИЧИНОЙ.
+  //
+  // Дверь дописывала к отказу движка путь установки обвеса — единственное, чего
+  // движок не знал, пока положение источника приезжало к нему как `null`.
+  // Теперь дверь его НАЗЫВАЕТ (`engineInput`), и до этого отказа доходит только
+  // вход, положение в котором не названо, — то есть не наш. Ветка, которая
+  // больше не может покраснеть, уезжает вместе с предметом: оставить её значило
+  // бы держать в коде состояние двери, которого у неё нет.
 
   // Адрес — это КУДА ИДТИ ЧИНИТЬ, а не «чей отказ». У битой служебной записи
   // это сам файл: приписать ему обвес значило бы отправить человека править
@@ -1405,6 +1560,7 @@ function dests(entries: readonly LayoutEntry[]): string {
 function describeSource(
   declaration: SourceDeclaration,
   pkg: LocatedPackage,
+  supply: Supply,
   location: SourceLocation,
 ): SourceReport {
   return {
@@ -1415,6 +1571,11 @@ function describeSource(
     packageRoot: pkg.root,
     contentRoot: declaration.source.contentRoot,
     location,
+    supply: {
+      origin: supply.origin,
+      fetched: supply.fetched,
+      cache: supply.cache,
+    },
   };
 }
 

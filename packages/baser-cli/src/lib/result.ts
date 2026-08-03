@@ -38,6 +38,7 @@ import type { DerivedMove } from './derived.js';
 import type { ArtifactDifference } from './difference.js';
 import type { DoorProblem } from './problems.js';
 import type { SourceLocation } from './installed.js';
+import type { SupplyOrigin } from './supply.js';
 import type { SettingMovement } from './values.js';
 
 export type DoorCommand = 'plan' | 'apply';
@@ -117,6 +118,38 @@ export interface SourceReport {
   readonly contentRoot: string;
   /** Тот же корень глазами движка: путь в дереве потребителя либо его отсутствие. */
   readonly location: SourceLocation;
+  /**
+   * ОТКУДА ВЗЯЛАСЬ ЭТА ПОСТАВКА — и почему именно эта версия.
+   *
+   * Поставку достаёт дверь, а не пакетный менеджер потребителя
+   * (`kb:BASER2-22`), и значит выбор версии — её решение, а не факт чужого лока.
+   * Решение, которое человек узнаёт постфактум, — это молча поднятый дефолт
+   * другими словами: сегодня прогон возьмёт одно, завтра другое, и объяснить
+   * разницу будет нечем. Поэтому выбор едет В ОТВЕТЕ и печатается ДО применения.
+   */
+  readonly supply: SupplyReport;
+}
+
+/**
+ * Как дверь достала поставку этого обвеса.
+ *
+ * Отдельная запись рядом с `packageVersion`, а не вместо него: версия — ФАКТ из
+ * манифеста поставки, а здесь — РЕШЕНИЕ двери, из-за которого этот манифест
+ * оказался у неё в руках. Слить их значило бы потерять различение между «обвес
+ * назвался так» и «мы взяли это, потому что так сказал паспорт укладки».
+ */
+export interface SupplyReport {
+  /** Чем определилась версия либо каталог. */
+  readonly origin: SupplyOrigin;
+  /**
+   * За этот прогон ходили на склад.
+   *
+   * `false` — поставка уже лежала в кэше, и ни одного запроса на склад не ушло.
+   * Ровно это спрашивает приёмка и ровно это делает прогон в оффлайне возможным.
+   */
+  readonly fetched: boolean;
+  /** Каталог кэша, где лежит поставка; `null` — дев-петля, кэш ни при чём. */
+  readonly cache: string | null;
 }
 
 /**

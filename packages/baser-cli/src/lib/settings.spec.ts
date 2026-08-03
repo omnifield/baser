@@ -118,7 +118,7 @@ describe('ЦЕЛЬ: настройки живут в файле на инстр�
       tuning: { [DEVBOX_ID]: { settings: { imageTag: '20' } } },
     });
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('applied');
     expect(box.read(LIVE)).toContain('typescript-node:20');
@@ -135,7 +135,7 @@ describe('ЦЕЛЬ: настройки живут в файле на инстр�
       tuning: { [DEVBOX_ID]: { presets: ['omnifield'] } },
     });
 
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     expect(box.read(LIVE)).toContain('--network=omnifield-gateway');
   });
@@ -150,7 +150,7 @@ describe('ЦЕЛЬ: настройки живут в файле на инстр�
       },
     });
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     expect(result.status).toBe('refused');
     const [problem] = result.problems;
@@ -164,7 +164,7 @@ describe('ЦЕЛЬ: настройки живут в файле на инстр�
       tuning: { [DEVBOX_ID]: { settings: { imageTeg: '24' } } },
     });
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     expect(result.status).toBe('refused');
     const problem = result.problems.find(
@@ -179,7 +179,7 @@ describe('ЦЕЛЬ: настройки живут в файле на инстр�
   it('имя файла считается из ЛИЧНОСТИ обвеса, а не из имени пакета', async () => {
     const box = install();
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     // omnifield/devbox → .omnifield/omnifield-devbox.yaml. Ссылки на файл в
     // baser.json нет: правило разъехаться не может, ссылка могла бы.
@@ -195,7 +195,7 @@ describe('рождение: один раз, если файла нет', () => 
   it('apply РОЖДАЕТ файл, plan только называет', async () => {
     const box = install();
 
-    const planned = await run({ command: 'plan', cwd: box.root });
+    const planned = await run({ command: 'plan', ...box.door });
 
     expect(soleRun(planned).config).toEqual({
       path: TUNING,
@@ -210,7 +210,7 @@ describe('рождение: один раз, если файла нет', () => 
     expect(planned.writes).toEqual([]);
     expect(planned.status).toBe('pending');
 
-    const applied = await run({ command: 'apply', cwd: box.root });
+    const applied = await run({ command: 'apply', ...box.door });
 
     expect(box.exists(TUNING)).toBe(true);
     expect(applied.writes.map((write) => write.path)).toContain(TUNING);
@@ -218,7 +218,7 @@ describe('рождение: один раз, если файла нет', () => 
 
   it('в родившемся файле НЕТ НИ ОДНОГО значения', async () => {
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     const block = blockOf(box.read(TUNING) as string);
 
@@ -228,7 +228,7 @@ describe('рождение: один раз, если файла нет', () => 
     expect(block).toEqual({ settings: null });
 
     // И прогон следом видит ровно «ничего не выбрано»: значения по-прежнему наши.
-    const again = await run({ command: 'plan', cwd: box.root });
+    const again = await run({ command: 'plan', ...box.door });
     expect(soleRun(again).settings.every((item) => item.ours)).toBe(true);
     expect(
       soleRun(again).settings.every((item) => item.chain.length === 1),
@@ -237,7 +237,7 @@ describe('рождение: один раз, если файла нет', () => 
 
   it('файл несёт title, description и дефолт КАЖДОЙ объявленной настройки', async () => {
     const box = install();
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
     const text = box.read(TUNING) as string;
 
     // Человеку есть что читать в файле, который он открывает, — а не в доке,
@@ -274,7 +274,7 @@ describe('рождение: один раз, если файла нет', () => 
 
   it('объявленные пресеты перечислены, но НИ ОДИН не выбран', async () => {
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     const text = box.read(TUNING) as string;
 
     expect(text).toContain(
@@ -288,7 +288,7 @@ describe('рождение: один раз, если файла нет', () => 
     // Родившийся файл обязан быть рабочим, а не декоративным: значение пишется
     // разборщиком YAML, поэтому кавычки, списки и null — его работа.
     const box = install();
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
     const named = new Map(
       soleRun(result).settings.map((item) => [item.key, item.value]),
     );
@@ -304,7 +304,7 @@ describe('рождение: один раз, если файла нет', () => 
 
     box.write(TUNING, uncommentSettings(born, [...named.keys()]));
 
-    const filled = await run({ command: 'plan', cwd: box.root });
+    const filled = await run({ command: 'plan', ...box.door });
 
     expect(filled.problems).toEqual([]);
     for (const setting of soleRun(filled).settings) {
@@ -321,7 +321,7 @@ describe('рождение: один раз, если файла нет', () => 
       existing: { [LIVE]: '{\n  "name": "мой старый девбокс"\n}\n' },
     });
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('blocked');
     // Применение целиком либо никак — файл настроек не исключение.
@@ -331,7 +331,7 @@ describe('рождение: один раз, если файла нет', () => 
 
   it('файл настроек НЕ запись раскладки: в паспорте укладки его нет', async () => {
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     // Файл на диске ЕСТЬ — иначе «его нет в паспорте» было бы верно и на пустом
     // месте, то есть не проверяло бы ничего.
@@ -339,7 +339,7 @@ describe('рождение: один раз, если файла нет', () => 
     expect(box.exists(MANIFEST_PATH)).toBe(true);
     expect(manifestOf(box).map((record) => record.dest)).not.toContain(TUNING);
     // И сиротой он не станет: движок о нём не знает вовсе.
-    expect((await run({ command: 'apply', cwd: box.root })).status).toBe(
+    expect((await run({ command: 'apply', ...box.door })).status).toBe(
       'converged',
     );
   });
@@ -396,7 +396,7 @@ describe('пустой файл настроек не рождается вов�
   it('нечего объявлять — файла нет ни у plan, ни у apply', async () => {
     const box = withSilent();
 
-    const planned = await run({ command: 'plan', cwd: box.root });
+    const planned = await run({ command: 'plan', ...box.door });
 
     expect(runOf(planned).config).toEqual({
       path: AGENTS_TUNING,
@@ -407,7 +407,7 @@ describe('пустой файл настроек не рождается вов�
       creates: false,
     });
 
-    const applied = await run({ command: 'apply', cwd: box.root });
+    const applied = await run({ command: 'apply', ...box.door });
 
     expect(applied.status).toBe('applied');
     expect(box.exists(AGENTS_TUNING)).toBe(false);
@@ -416,7 +416,7 @@ describe('пустой файл настроек не рождается вов�
     );
     // И это не «отложилось до следующего раза»: прогон сходится, а сходимость
     // на несозданном файле — то же самое утверждение, только машинное.
-    expect((await run({ command: 'apply', cwd: box.root })).status).toBe(
+    expect((await run({ command: 'apply', ...box.door })).status).toBe(
       'converged',
     );
   });
@@ -424,7 +424,7 @@ describe('пустой файл настроек не рождается вов�
   it('адрес всё равно назван, и назван с ПРИЧИНОЙ, а не молча', async () => {
     const box = withSilent();
 
-    const text = renderText(await run({ command: 'plan', cwd: box.root }));
+    const text = renderText(await run({ command: 'plan', ...box.door }));
 
     // Адрес говорит, ГДЕ регулировка появится, когда обвес её объявит. Без
     // объяснения он читается как «файл где-то потерялся» — ровно то, на что
@@ -444,7 +444,7 @@ describe('пустой файл настроек не рождается вов�
     const box = withSilent();
     box.write(AGENTS_TUNING, MINE);
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('applied');
     expect(box.read(AGENTS_TUNING)).toBe(MINE);
@@ -463,7 +463,7 @@ describe('пустой файл настроек не рождается вов�
     // Тот самый момент, ради которого рождение и откладывалось: файл приезжает
     // тогда, когда в нём есть что читать, а не заранее и пустым.
     const box = withSilent();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     expect(box.exists(AGENTS_TUNING)).toBe(false);
 
     box.installSource({
@@ -473,7 +473,7 @@ describe('пустой файл настроек не рождается вов�
       },
     });
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(box.exists(AGENTS_TUNING)).toBe(true);
     expect(runOf(result).config.creates).toBe(true);
@@ -490,7 +490,7 @@ describe('пустой файл настроек не рождается вов�
       presets: { тихий: { title: 'Ничего не спрашивать', values: {} } },
     });
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(runOf(result).config.creates).toBe(true);
     const text = box.read(AGENTS_TUNING) as string;
@@ -506,10 +506,10 @@ describe('пустой файл настроек не рождается вов�
 describe('после рождения дверь в файл НЕ ПИШЕТ', () => {
   it('второй прогон не трогает файл ни на байт', async () => {
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     const born = box.read(TUNING);
 
-    const again = await run({ command: 'apply', cwd: box.root });
+    const again = await run({ command: 'apply', ...box.door });
 
     expect(again.status).toBe('converged');
     expect(again.writes).toEqual([]);
@@ -527,13 +527,13 @@ describe('после рождения дверь в файл НЕ ПИШЕТ', (
     // ИМЕННО ПОТОМУ, что писать его некуда. Запиши дверь дефолт в файл при
     // рождении — здесь бы осталась вчерашняя версия, и молча.
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     const born = box.read(TUNING) as string;
     expect(box.read(LIVE)).toContain(`typescript-node:${PINNED_NODE}`);
     expect(born).toContain(`# imageTag: "${PINNED_NODE}"`);
 
     box.updateResolvers(BUMPED_RESOLVERS);
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(box.read(LIVE)).toContain(`typescript-node:${MOVED_NODE}`);
     // Файл не тронут — включая закомментированный дефолт, который устарел.
@@ -553,7 +553,7 @@ describe('после рождения дверь в файл НЕ ПИШЕТ', (
     const mine = box.read(TUNING);
 
     box.updateResolvers(BUMPED_RESOLVERS);
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     expect(box.read(TUNING)).toBe(mine);
     expect(box.read(LIVE)).toContain('typescript-node:20');
@@ -580,7 +580,7 @@ describe('зарезервирован ровно один ключ — baser', 
       ].join('\n'),
     );
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     // Ни отказа про незнакомые поля, ни правки чужого куска.
     expect(result.status).toBe('applied');
@@ -595,7 +595,7 @@ describe('зарезервирован ровно один ключ — baser', 
     const box = install();
     box.write(TUNING, 'baser:\n  setings:\n    imageTag: "20"\n');
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     expect(result.status).toBe('refused');
     expect(result.problems[0].code).toBe('unknown-field');
@@ -608,7 +608,7 @@ describe('файл есть, но непригоден', () => {
     const box = install();
     box.write(TUNING, 'baser:\n  settings:\n   imageTag: "20"\n  \tтаб\n');
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     expect(result.status).toBe('refused');
     const problem = result.problems.find(
@@ -627,7 +627,7 @@ describe('файл есть, но непригоден', () => {
     const box = install();
     box.write(TUNING, 'baser: [это не объект]\n');
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     expect(result.status).toBe('refused');
     expect(soleRun(result).config).toEqual({
@@ -666,7 +666,7 @@ describe('файл на КАЖДЫЙ инструмент свой', () => {
     });
     box.installSource(AGENTS);
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('applied');
     expect(box.read(LIVE)).toContain('typescript-node:20');
@@ -689,7 +689,7 @@ describe('файл на КАЖДЫЙ инструмент свой', () => {
     });
     box.installSource(AGENTS);
 
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     expect(box.exists('.omnifield/harness.yaml')).toBe(true);
     expect(box.exists('.omnifield/omnifield-agent-harness.yaml')).toBe(true);
@@ -706,12 +706,12 @@ describe('ответ и текст называют файл настроек', 
   it('адрес печатается ВСЕГДА, а рождение — отдельной пометкой', async () => {
     const box = install();
 
-    const planned = renderText(await run({ command: 'plan', cwd: box.root }));
+    const planned = renderText(await run({ command: 'plan', ...box.door }));
     expect(planned).toContain(`настройки ${TUNING} — будет создан`);
     expect(planned).toContain('значений в нём нет');
 
-    await run({ command: 'apply', cwd: box.root });
-    const after = renderText(await run({ command: 'plan', cwd: box.root }));
+    await run({ command: 'apply', ...box.door });
+    const after = renderText(await run({ command: 'plan', ...box.door }));
 
     // Файл уже есть — пометки о рождении нет, а адрес остался: человек, которому
     // надо что-то подкрутить, узнаёт его из вывода, а не из доки.
@@ -722,7 +722,7 @@ describe('ответ и текст называют файл настроек', 
   it('трейс: чтение мерится всегда, рождение — только когда оно было', async () => {
     const box = install();
 
-    const born = await run({ command: 'apply', cwd: box.root });
+    const born = await run({ command: 'apply', ...box.door });
     expect(
       born.trace.find((span) => span.name === 'door.settings')?.detail,
     ).toEqual({ source: DEVBOX_ID });
@@ -730,7 +730,7 @@ describe('ответ и текст называют файл настроек', 
       born.trace.find((span) => span.name === 'door.born')?.detail,
     ).toEqual({ source: DEVBOX_ID, path: TUNING });
 
-    const again = await run({ command: 'plan', cwd: box.root });
+    const again = await run({ command: 'plan', ...box.door });
     expect(again.trace.some((span) => span.name === 'door.settings')).toBe(
       true,
     );

@@ -191,7 +191,6 @@ describe('INSTALL.md написан про КОНКРЕТНЫЙ обвес', () 
     // Служебная запись обязана коммититься, и это сказано человеку, а не
     // оставлено в комментарии к константе.
     expect(doc).toContain('baser.lock.json');
-    expect(doc).toContain('node_modules/');
     // И что будет с его собственным файлом — до того, как он запустит.
     expect(doc).toContain('Ничего не будет затёрто');
     expect(doc).toContain('--confirm');
@@ -205,15 +204,20 @@ describe('УНЕСЛИ И ЗАРАБОТАЛО', () => {
     const built = join(box('bundle'), 'выдача');
     bundle(DEVBOX, { into: built });
 
-    const far = join(box('far'), 'выдача-унесённая');
-    cpSync(built, far, { recursive: true });
-
     const repo = join(box('repo'), 'weber');
     mkdirSync(repo, { recursive: true });
     writeFileSync(
       join(repo, 'package.json'),
       '{ "name": "weber", "private": true }\n',
     );
+
+    // Бандл унесён от монорепы и положен В ЛОКАЦИЮ — туда, куда его кладёт
+    // человек по доке («положи эту папку в корень своего репозитория»).
+    // Место стало значимым: обвес в локацию не копируется, дверь берёт его
+    // прямо отсюда, а содержимое обязано быть видно дереву локации
+    // (`tasker:BASER2-146`).
+    const far = join(repo, 'выдача-унесённая');
+    cpSync(built, far, { recursive: true });
     return { far, repo };
   }
 
@@ -301,10 +305,10 @@ describe('УНЕСЛИ И ЗАРАБОТАЛО', () => {
     );
 
     // Уводить прозу в никуда было бы починкой за счёт человека: он по-прежнему
-    // обязан узнать, что запись в его манифесте снята.
+    // обязан узнать, ОТКУДА взялся обвес, который ему сейчас разложат.
     JSON.parse(streams.stdout);
-    expect(streams.stderr).toContain('package.json');
-    expect(streams.stderr).toMatch(/сн(ял|ято)|как был/);
+    expect(streams.stderr).toContain('@omnifield/baser-devbox');
+    expect(streams.stderr).toMatch(/из этой папки|не копируется/);
   });
 
   it('чистый чужой репозиторий: одна команда — и обвес разложен', () => {
@@ -339,19 +343,16 @@ describe('УНЕСЛИ И ЗАРАБОТАЛО', () => {
 
     install(far, repo, '--plan');
 
-    // Тронуто то же, что тронул бы `npm i`, — но остаётся из этого только
-    // склад: запись в манифесте живёт ровно прогон (`tasker:BASER2-35`).
-    // Инструкция, назвавшая одно и умолчавшая о другом, была бы тем же
-    // уверенным указателем не туда, за который здесь уже чинили сообщения.
-    expect(existsSync(join(repo, 'node_modules/@omnifield/baser-devbox'))).toBe(
-      true,
-    );
+    // Прежде дока обещала уборку («обвес кладётся в node_modules, запись
+    // снимается»), и обещание было верным. Теперь верно другое, и проверяется
+    // тоже оно: в локацию не кладётся НИЧЕГО — ни склада, ни строки в чужом
+    // манифесте (`tasker:BASER2-146`).
+    expect(existsSync(join(repo, 'node_modules'))).toBe(false);
     expect(readFileSync(join(repo, 'package.json'), 'utf-8')).toBe(before);
 
     const doc = readFileSync(join(far, 'INSTALL.md'), 'utf-8');
-    expect(doc).toContain('node_modules/');
-    expect(doc).toContain('package.json');
-    expect(doc).toMatch(/сниме|снимае/);
+    expect(doc).toMatch(/не кладётся|не копируется/);
+    expect(doc).toContain('--source');
   });
 
   it('WEBER: первая установка в непустой репозиторий — отказ, --confirm снимает', () => {
@@ -388,24 +389,18 @@ describe('УНЕСЛИ И ЗАРАБОТАЛО', () => {
     expect(landed).toContain('weber-devbox');
   });
 
-  it('обвес встал так, как его поставил бы пакетный менеджер — НА ПРОГОН', () => {
+  it('обвес берётся ИЗ ПАПКИ БАНДЛА, а в локацию не кладётся вовсе', () => {
     const { far, repo } = carried();
+    const before = readFileSync(join(repo, 'package.json'), 'utf-8');
 
     const out = install(far, repo, '--plan');
 
-    // Файлы на месте — и пакет был ОБЪЯВЛЕН зависимостью, иначе дверь
-    // скопированного каталога не увидела бы: половина имитации хуже её
-    // отсутствия. Доказательство объявления — сам план: без него ответом было
-    // бы «обвесов не поставлено».
-    const installed = join(repo, 'node_modules/@omnifield/baser-devbox');
-    expect(statSync(installed).isDirectory()).toBe(true);
+    // План посчитан — значит дверь обвес нашла. Нашла она его по названному
+    // каталогу, и доказательство тому — отсутствие всего остального: имитации
+    // пакетного менеджера здесь больше нет, потому что она больше не нужна.
     expect(out).toContain('план применим');
-
-    // А после прогона имитация сворачивается: запись, которую нельзя
-    // закоммитить, за собой не оставляют (`tasker:BASER2-35`).
-    const manifest = JSON.parse(
-      readFileSync(join(repo, 'package.json'), 'utf-8'),
-    ) as { dependencies?: Record<string, string> };
-    expect(manifest.dependencies?.['@omnifield/baser-devbox']).toBeUndefined();
+    expect(statSync(join(far, 'payload')).isDirectory()).toBe(true);
+    expect(existsSync(join(repo, 'node_modules'))).toBe(false);
+    expect(readFileSync(join(repo, 'package.json'), 'utf-8')).toBe(before);
   });
 });

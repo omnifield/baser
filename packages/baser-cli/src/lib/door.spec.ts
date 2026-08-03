@@ -29,6 +29,23 @@ import { cli, type CliOutcome } from './cli.js';
 import { run } from './run.js';
 import { renderText } from './report.js';
 import type { DoorResult } from './result.js';
+import { startStore, type FakeStore } from './store.fixture.js';
+
+/**
+ * Прогон, которому НУЖЕН склад: поставку двери больше не кладёт никто, и
+ * ненайденная поставка — это ответ склада, а не отсутствие каталога.
+ *
+ * Склад поднимается пустым: он на связи и честно отвечает «такого у меня нет».
+ * Без него проба ушла бы в сеть — то есть проверяла бы чужой реестр и погоду.
+ */
+async function withStore<T>(body: (store: FakeStore) => Promise<T>): Promise<T> {
+  const store = await startStore();
+  try {
+    return await body(store);
+  } finally {
+    await store.close();
+  }
+}
 
 let consumer: Consumer | null = null;
 
@@ -72,7 +89,7 @@ describe('конфиг потребителя рождается один раз
     const box = install();
     const before = snapshot(box);
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     expect(result.config.existed).toBe(false);
     expect(result.config.creates).toBe(true);
@@ -86,10 +103,10 @@ describe('конфиг потребителя рождается один раз
     // Артефакты уже на месте, но конфиг снесли: движку делать нечего, а прогону
     // есть. Гейт, спросивший «сошлось?», не имеет права зазеленеть здесь.
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     box.remove('baser.json');
 
-    const plan = await run({ command: 'plan', cwd: box.root });
+    const plan = await run({ command: 'plan', ...box.door });
 
     expect(soleRun(plan).plan?.status).toBe('converged');
     expect(plan.status).toBe('pending');
@@ -98,14 +115,14 @@ describe('конфиг потребителя рождается один раз
     expect(plan.writes).toEqual([]);
     expect(box.exists('baser.json')).toBe(false);
 
-    const applied = await run({ command: 'apply', cwd: box.root });
+    const applied = await run({ command: 'apply', ...box.door });
     expect(applied.status).toBe('applied');
     expect(applied.writes).toEqual([{ path: 'baser.json', kind: 'CREATE' }]);
   });
 
   it('apply кладёт конфиг и САМ проставляет в него версию формы', async () => {
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     const written = JSON.parse(box.read('baser.json') ?? '{}') as {
       formVersion: number;
@@ -120,7 +137,7 @@ describe('конфиг потребителя рождается один раз
     // Пакет поставлен и объявлен зависимостью, но из конфига убран руками.
     const box = install({ config: { formVersion: 2, sources: [] } });
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('no-sources');
     expect(result.config.creates).toBe(false);
@@ -131,6 +148,8 @@ describe('конфиг потребителя рождается один раз
   it('обвесов не поставлено — это не ошибка и пустой конфиг не кладётся', async () => {
     const box = install({ declareDependency: false });
 
+    // Ни объявленной зависимости, ни названного каталога поставки: сказать
+    // «поставлено» тут нечем, и это не ошибка, а пустая локация.
     const outcome = await cli(['apply', '--cwd', box.root], process.cwd());
 
     expect(door(outcome)?.status).toBe('no-sources');
@@ -157,7 +176,7 @@ describe('засев: два разных «не получилось», и мо
     // код резолва контрактов (`tasker:BASER2-127`), а не наша догадка.
     writeFileSync(join(broken.root, 'package.json'), '{ "name":');
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     expect(result.status).toBe('refused');
     const [problem] = result.problems;
@@ -185,7 +204,7 @@ describe('засев: два разных «не получилось», и мо
     };
     box.write('package.json', `${JSON.stringify(manifest, null, 2)}\n`);
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.problems).toEqual([]);
     expect(result.status).toBe('applied');
@@ -204,7 +223,7 @@ describe('отказ говорит чужим кодом, когда код е�
       tuning: { [DEVBOX_ID]: { settings: { imageTeg: '24' } } },
     });
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     expect(result.status).toBe('refused');
     expect(result.problems.map((problem) => problem.code)).toContain(
@@ -218,7 +237,7 @@ describe('отказ говорит чужим кодом, когда код е�
     // "{{ name }}" и ничем бы себя не выдал.
     box.writeTemplate('devcontainer.json.ejs', '{ "name": "{{ name }}" }\n');
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('refused');
     expect(result.problems[0].code).toBe('template-not-ejs');
@@ -244,7 +263,7 @@ describe('отказ говорит чужим кодом, когда код е�
       ].join('\n'),
     );
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     expect(result.status).toBe('refused');
     const failures = result.problems.filter(
@@ -257,16 +276,26 @@ describe('отказ говорит чужим кодом, когда код е�
     expect(failures[0].at).toContain('settings.name.defaultFrom');
   });
 
-  it('пакет назван в конфиге, но не поставлен', async () => {
+  it('поставка названа в перечне, а на складе её нет', async () => {
     const box = install({
-      config: { formVersion: 2, sources: [{ use: '@чужой/обвес' }] },
+      config: { formVersion: 2, sources: [{ use: 'baser-fixture-unknown' }] },
     });
 
-    const outcome = await cli(['plan', '--cwd', box.root], process.cwd());
+    const outcome = await withStore((store) =>
+      cli(
+        ['plan', '--cwd', box.root, ...box.doorArgs()],
+        process.cwd(),
+      ).then((result) => {
+        // Склад РЕАЛЬНО спросили — иначе отказ говорил бы о том, чего не делали.
+        expect(store.requests()).toBeGreaterThan(0);
+        return result;
+      }),
+    );
 
-    // Код — резолва контрактов, а не свой: своего у двери на это событие
-    // больше нет (`tasker:BASER2-128`).
-    expect(door(outcome)?.problems[0].code).toBe('package-not-installed');
+    // Поставку достаёт дверь (`tasker:BASER2-146`), значит и отказ её: склад
+    // ответил, поставки нет. Прежний `package-not-installed` тут больше не
+    // возникает — искать в чужом складе дверь перестала.
+    expect(door(outcome)?.problems[0].code).toBe('supply-not-published');
     expect(outcome.exitCode).toBe(2);
   });
 
@@ -276,15 +305,17 @@ describe('отказ говорит чужим кодом, когда код е�
     const box = install({
       config: {
         formVersion: 2,
-        sources: [{ use: DEVBOX_PACKAGE }, { use: '@omnifield/baser-second' }],
+        sources: [{ use: DEVBOX_PACKAGE }, { use: 'baser-fixture-second' }],
       },
     });
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await withStore(() =>
+      run({ command: 'plan', ...box.door }),
+    );
 
     expect(result.status).toBe('refused');
     const [problem] = result.problems;
-    expect(problem.code).toBe('package-not-installed');
+    expect(problem.code).toBe('supply-not-published');
     expect(problem.at).toBe('baser.json.sources[1].use');
     // Кода `multiple-sources` больше нет: он снят вместе с причиной, а не
     // подавлен (`tasker:BASER2-55`).
@@ -295,22 +326,29 @@ describe('отказ говорит чужим кодом, когда код е�
 });
 
 describe('шов contentRoot: источник вне дерева', () => {
-  it('раскладка hoisted-workspace названа своим кодом, а не подделана путём', async () => {
+  it('раскладка вне дерева НАЗВАНА адресом и работает, а не отказывает', async () => {
     const box = install({ hoisted: true, config: CONFIG, tuning: TUNED });
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
-    // Пакет резолвится (Node идёт вверх), но репо-относительного пути к его
-    // шаблонам не существует — и дверь говорит именно это.
-    expect(soleRun(result).source.location.kind).toBe('outside-tree');
-    expect(result.status).toBe('refused');
-    expect(result.problems[0].code).toBe('source-outside-tree');
+    // Репо-относительного пути к шаблонам не существует — и дверь говорит
+    // именно это, адресом снаружи. Отказом это положение быть перестало
+    // (`tasker:BASER2-150`): движок пишет только внутрь дерева, источник лежит
+    // снаружи, пересечение пусто по построению.
+    const location = soleRun(result).source.location;
+    expect(location.kind).toBe('outside-tree');
+    expect(result.problems).toEqual([]);
+    expect(result.status).toBe('applied');
+    // И это НАСТОЯЩАЯ укладка из источника снаружи, а не «отказа не было»:
+    // артефакт лёг в дерево потребителя.
+    expect(box.read('.devcontainer/devcontainer.json')).not.toBeNull();
   });
+
 
   it('штатная установка даёт НАСТОЯЩИЙ путь — защита движка работает', async () => {
     const box = install({ config: CONFIG, tuning: TUNED });
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     expect(soleRun(result).source.location).toEqual({
       kind: 'in-tree',
@@ -323,11 +361,17 @@ describe('трейсы: свои фазы, чужие отдельно', () => {
   it('дверь мерит СЕБЯ, а движок — себя; списки не смешаны', async () => {
     const box = install({ config: CONFIG, tuning: TUNED });
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
     const door = result.trace.map((span) => span.name);
 
     expect(door).toEqual([
       'door.config',
+      // Доставание поставки — единственная фаза двери, которая ходит по сети, и
+      // мерится она ОТДЕЛЬНО от разбора объявлений (`tasker:BASER2-146`):
+      // прогон, подорожавший на складе, обязан указывать на склад, а не на
+      // «где-то до плана». Спан на каждую поставку, поэтому он и закрывается
+      // раньше объемлющего `door.declarations`.
+      'door.supply',
       'door.declarations',
       // Событие, а не спан: «чем шёл прогон» — обвес, его ВЕРСИЯ и сколько
       // артефактов он держит не своими руками (`tasker:BASER2-68`). Мерить тут
@@ -364,7 +408,7 @@ describe('трейсы: свои фазы, чужие отдельно', () => {
 
   it('в текст трейсы не идут: телеметрия, а не печать в поток', async () => {
     const box = install({ config: CONFIG, tuning: TUNED });
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(renderText(result)).not.toContain('door.render');
   });
@@ -378,7 +422,7 @@ describe('коды возврата — производная от состоя
       '.devcontainer/devcontainer.json',
       '// чужой файл, движок его не клал\n{}\n',
     );
-    const outcome = await cli(['plan', '--cwd', blocked.root], process.cwd());
+    const outcome = await cli(['plan', '--cwd', blocked.root, ...blocked.doorArgs()], process.cwd());
     expect(soleRun(door(outcome) as DoorResult).plan?.conflicts[0].kind).toBe(
       'foreign-dest',
     );
@@ -389,13 +433,13 @@ describe('коды возврата — производная от состоя
       config: { formVersion: 2, sources: [{ use: '@нет/такого' }] },
     });
     expect(
-      (await cli(['plan', '--cwd', refused.root], process.cwd())).exitCode,
+      (await cli(['plan', '--cwd', refused.root, ...refused.doorArgs()], process.cwd())).exitCode,
     ).toBe(2);
     refused.cleanup();
 
     const empty = install({ declareDependency: false });
     expect(
-      (await cli(['plan', '--cwd', empty.root], process.cwd())).exitCode,
+      (await cli(['plan', '--cwd', empty.root, ...empty.doorArgs()], process.cwd())).exitCode,
     ).toBe(0);
   });
 });

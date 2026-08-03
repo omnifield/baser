@@ -6,8 +6,24 @@
  * хоть одно из трёх, проверяла бы не дверь.
  *
  * Поэтому здесь именно УСТАНОВКА: обвес девбокса раскладывается в
- * `node_modules/@omnifield/baser-devbox` временного репозитория ровно так, как
- * его положил бы npm, — манифест, резолверы, каталог шаблонов.
+ * `node_modules/@omnifield/baser-devbox` временного репозитория — манифест,
+ * резолверы, каталог шаблонов, всё настоящее и на настоящем диске.
+ *
+ * ── ПОЧЕМУ КАТАЛОГ НАЗЫВАЕТСЯ ДВЕРИ, А НЕ НАХОДИТСЯ ЕЮ ──────────────────────
+ *
+ * Дверь больше не ищет обвес среди поставленного пакетным менеджером
+ * потребителя: поставку она достаёт сама, со склада в кэш снаружи локации
+ * (`tasker:BASER2-146`, `kb:BASER2-22`). Значит проба, положившая пакет в
+ * `node_modules`, этим ничего двери не сказала — и говорит ей отдельно, входом
+ * дев-петли: `door` / `doorArgs` отдают `--source <имя пакета>=<каталог>`.
+ *
+ * Каталог при этом остался прежним намеренно. Он лежит ВНУТРИ дерева
+ * потребителя, как и наши собственные обвесы в монорепе, — то есть шов
+ * `contentRoot` проверяется на той же раскладке, что и раньше, а `hoisted`
+ * по-прежнему даёт «источника в этом дереве нет».
+ *
+ * Само доставание со склада изображать здесь нечем и не нужно: оно проверяется
+ * целиком и без сети на поднятом в пробе складе (`supply.spec.ts`).
  *
  * ── ОТКУДА БЕРЁТСЯ ОБВЕС (`tasker:BASER2-26`) ───────────────────────────────
  *
@@ -64,6 +80,7 @@ import {
   readManifest,
   type ManifestRecord,
 } from '@omnifield/baser-materialize';
+import type { SupplyOverride } from './supply.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -199,7 +216,29 @@ export interface Consumer {
   installSource(spec: SourceSpec): InstalledSource;
   /** Снимает поставленный обвес целиком — и пакет, и запись о зависимости. */
   removeSource(packageName: string): void;
+  /**
+   * ВХОД ПРОГОНА для этого репозитория: корень плюс каталоги поставок.
+   *
+   * Поставку достаёт дверь (`kb:BASER2-22`), и по имени она полезла бы на склад —
+   * то есть в сеть, из пробы, за пакетом, который ещё не выпущен. Поэтому проба
+   * называет каталог поставки тем же входом, каким его называет человек с
+   * обвесом в исходниках рядом: `--source <имя>=<каталог>`. Это не мок и не
+   * обход — это ровно дев-петля, и она обязана быть живой (`tasker:BASER2-146`).
+   *
+   * Доставание со склада проверяется отдельно и целиком — на поднятом в пробе
+   * складе, без сети (`supply.spec.ts`). Изображать его здесь значило бы
+   * проверять доставание в каждой пробе и ни в одной по-настоящему.
+   */
+  readonly door: DoorEntry;
+  /** То же самое для вызова через argv — `cli(['plan', ...box.doorArgs()])`. */
+  doorArgs(): readonly string[];
   cleanup(): void;
+}
+
+/** Корень локации и ручки дев-петли — то, чем зовут `run` в пробах. */
+export interface DoorEntry {
+  readonly cwd: string;
+  readonly sources: readonly SupplyOverride[];
 }
 
 /** Второй обвес: что он объявляет и что везёт. */
@@ -311,9 +350,29 @@ export function installDevbox(options: InstallOptions = {}): Consumer {
   // файлы поимённо значило бы ставить не тот пакет, который получит человек.
   cpSync(packedDevbox(), sourceRoot, { recursive: true });
 
+  /**
+   * Каталоги поставок этого репозитория — вход дев-петли.
+   *
+   * Список живой: второй обвес добавляет к нему свою запись, снятый — убирает.
+   * Держать его снимком значило бы, что проба «конфиг сузили до одного обвеса»
+   * продолжает называть дверь каталог того, кого уже сняли.
+   */
+  const supplies: SupplyOverride[] = [
+    { packageName: DEVBOX_PACKAGE, path: sourceRoot },
+  ];
+
   const consumer: Consumer = {
     root,
     sourceRoot,
+    get door(): DoorEntry {
+      return { cwd: root, sources: [...supplies] };
+    },
+    doorArgs() {
+      return supplies.flatMap((supply) => [
+        '--source',
+        `${supply.packageName}=${supply.path}`,
+      ]);
+    },
     read(path) {
       const file = join(root, path);
       return existsSync(file) ? readFileSync(file, 'utf-8') : null;
@@ -376,13 +435,24 @@ export function installDevbox(options: InstallOptions = {}): Consumer {
       return consumer.read(sourceConfigPath(sourceId));
     },
     installSource(spec) {
-      return installExtraSource(
+      const installed = installExtraSource(
         options.hoisted === true ? box : root,
         root,
         spec,
       );
+      supplies.push({
+        packageName: installed.packageName,
+        path: installed.root,
+      });
+      return installed;
     },
     removeSource(packageName) {
+      const index = supplies.findIndex(
+        (supply) => supply.packageName === packageName,
+      );
+      if (index !== -1) {
+        supplies.splice(index, 1);
+      }
       rmSync(
         join(
           options.hoisted === true ? box : root,
@@ -418,13 +488,15 @@ export function installDevbox(options: InstallOptions = {}): Consumer {
 }
 
 /**
- * Ставит обвес так же, как его поставил бы npm: пакет плюс зависимость.
+ * Ставит второй обвес: пакет на диск плюс запись в `devDependencies`.
  *
- * Половина установки уже стоила нам дефекта (`README.md`, «ручная доставка»):
- * дверь ищет обвесы по ОБЪЯВЛЕННЫМ зависимостям, и каталог без строки в
- * `devDependencies` для неё не поставлен вовсе. Фикстура, копирующая только
- * файлы, проверяла бы дверь на состоянии, которого у пакетного менеджера не
- * бывает.
+ * Запись осталась не ради двери — поставку она достаёт сама и в чужой манифест
+ * больше не смотрит (`tasker:BASER2-146`). Осталась она ради ЗАСЕВА: перечень
+ * рождается по объявленным зависимостям потребителя, и без записи проба «конфиг
+ * рождается сам» проверяла бы засев на пустом месте.
+ *
+ * Дверь узнаёт про этот каталог тем же входом, что и про первый, — `--source`
+ * из `door` / `doorArgs` фикстуры.
  */
 function installExtraSource(
   modulesRoot: string,
