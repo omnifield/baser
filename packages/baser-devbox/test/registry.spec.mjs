@@ -27,7 +27,7 @@ import { join } from 'node:path';
 // Обвес здесь один — прогон под него берётся `soleRun` двери, а не `runs[0]`:
 // он бросает, если обвес не один (`tasker:BASER2-55`). Публичным входом зоны
 // `cli`, как и `run` (`tasker:BASER2-59`).
-import { run, soleRun } from '../../baser-cli/src/index.ts';
+import { soleRun } from '../../baser-cli/src/index.ts';
 import { containerEnv } from './env.mjs';
 import {
   consumerConfig,
@@ -35,6 +35,7 @@ import {
   LIVE,
   packedManifest,
   parseJsonc,
+  run,
   tuning,
 } from './packed.mjs';
 
