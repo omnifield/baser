@@ -14,6 +14,11 @@ import type { PackReport, PayloadArtifact } from '@omnifield/baser-pack';
  * Класс берётся из ОПИСИ — она и существует для того, чтобы узнавать груз, не
  * вскрывая его (`baser-pack`, `manifest.ts`). Заглядывать за неё в объявление
  * обвеса значило бы завести вторую правду о том же грузе.
+ *
+ * Дублем разбора класса у отказов прогона это НЕ является (`tasker:BASER2-143`).
+ * Там дверь берёт класс словом движка, потому что движок его сказал; здесь
+ * движка нет в разговоре вовсе — бандл собирается без единого прогона по
+ * репозиторию потребителя, и спросить, кроме описи, некого.
  */
 function confirmationPrice(artifacts: readonly PayloadArtifact[]): string {
   const once = artifacts.filter((item) => item.class === 'placed-once');
