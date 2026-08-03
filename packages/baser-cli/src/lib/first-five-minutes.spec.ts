@@ -112,17 +112,35 @@ function status(repo: string): string[] {
     .filter((line) => line !== '');
 }
 
+/**
+ * Кладёт бандл В РЕПОЗИТОРИЙ — ровно туда, куда его кладёт человек по доке.
+ *
+ * Место стало значимым: обвес больше не копируется в локацию, дверь берёт его
+ * прямо из папки бандла (`--source`), а содержимое обвеса обязано быть видно
+ * дереву локации. Дока это и говорила всегда — «положи эту папку в корень
+ * своего репозитория, иначе из контейнера её не видно», — и теперь то же
+ * требование есть у самой механики, а не только у докерной команды.
+ */
+function placed(bundleDir: string, repo: string): string {
+  const here = join(repo, basename(bundleDir));
+  cpSync(bundleDir, here, { recursive: true });
+  return here;
+}
+
 /** Установщик — ОТДЕЛЬНЫМ процессом: только так вопрос задаётся честно. */
 function install(
   bundleDir: string,
   repo: string,
   ...args: string[]
 ): { out: string; code: number } {
+  const here = existsSync(join(repo, basename(bundleDir)))
+    ? join(repo, basename(bundleDir))
+    : placed(bundleDir, repo);
   try {
     return {
       out: execFileSync(
         process.execPath,
-        [join(bundleDir, 'install.mjs'), '--cwd', repo, ...args],
+        [join(here, 'install.mjs'), '--cwd', repo, ...args],
         { encoding: 'utf-8', cwd: repo },
       ),
       code: 0,
@@ -131,6 +149,14 @@ function install(
     const failure = cause as { stdout?: string; status?: number };
     return { out: String(failure.stdout ?? cause), code: failure.status ?? 1 };
   }
+}
+
+/** `git status` без папки бандла: её человек уносит, и дока это говорит. */
+function statusBesidesBundle(repo: string, bundleDir: string): string[] {
+  const here = `${basename(bundleDir)}/`;
+  return status(repo)
+    .map((line) => line.slice(3))
+    .filter((path) => path !== here);
 }
 
 describe('BASER2-33 · шебанг есть — бит исполнения обязан быть тоже', () => {
@@ -298,8 +324,19 @@ describe('BASER2-34 · Node на хосте — предусловие, а не 
   });
 });
 
-describe('BASER2-35 · ручная доставка не оставляет того, что нельзя закоммитить', () => {
-  it('после сухого прогона git status ПУСТ', () => {
+describe('BASER2-146 · ручная доставка не кладёт в локацию ничего чужого', () => {
+  /**
+   * Прежде здесь проверялась УБОРКА: обвес копировался в `node_modules` цели и
+   * на время прогона объявлялся в её манифесте, а установщик всё это за собой
+   * снимал (`tasker:BASER2-35`). Механизм снят вместе с причиной — поставку
+   * достаёт дверь, и названный каталог для неё законный источник, — поэтому
+   * пробы про «снял запись», «убрал после отказа» и «дока описывает уборку»
+   * уехали вместе с предметом.
+   *
+   * Утверждение при этом стало СИЛЬНЕЕ, а не исчезло: раньше чужого следа не
+   * оставалось после уборки, теперь его не возникает вовсе.
+   */
+  it('после сухого прогона git status показывает ТОЛЬКО папку бандла', () => {
     const into = built();
     const repo = repository();
     const before = readFileSync(join(repo, 'package.json'), 'utf-8');
@@ -307,9 +344,12 @@ describe('BASER2-35 · ручная доставка не оставляет т�
     const { out } = install(into, repo, '--plan');
 
     expect(out).toContain('план применим');
-    expect(status(repo)).toEqual([]);
-    // Манифест возвращён побайтово: чужой файл не должен даже переформатироваться.
+    // Папка бандла — единственный след, и про неё дока говорит прямо: унеси
+    // или удали. Больше в списке нет ничего.
+    expect(statusBesidesBundle(repo, into)).toEqual([]);
+    // Манифест не тронут даже на байт — его никто и не открывал.
     expect(readFileSync(join(repo, 'package.json'), 'utf-8')).toBe(before);
+    expect(existsSync(join(repo, 'node_modules'))).toBe(false);
   });
 
   it('после установки коммитить можно ВСЁ, что осталось', () => {
@@ -321,7 +361,7 @@ describe('BASER2-35 · ручная доставка не оставляет т�
 
     // Осталось ровно то, что человек и обязан закоммитить: артефакты, конфиг
     // и служебная запись. Манифеста в списке нет вовсе.
-    const changed = status(repo).map((line) => line.slice(3));
+    const changed = statusBesidesBundle(repo, into);
     expect(changed).toContain('.devcontainer/');
     expect(changed).toContain('baser.json');
     expect(changed).toContain('baser.lock.json');
@@ -332,53 +372,49 @@ describe('BASER2-35 · ручная доставка не оставляет т�
     expect(readFileSync(join(repo, 'package.json'), 'utf-8')).toBe(before);
   });
 
-  it('запись ЖИВЁТ во время прогона — иначе дверь обвеса не увидела бы', () => {
+  it('обвес РАБОТАЕТ, не будучи положенным в локацию', () => {
     const into = built();
     const repo = repository();
 
     const { out } = install(into, repo);
 
-    // Уборка, отменившая саму установку, — не уборка. Артефакты на диске
-    // доказывают, что дверь нашла обвес по объявленной зависимости, пока та
-    // была объявлена.
+    // Дверь взяла обвес из папки бандла — и разложила. Ни склада, ни записи в
+    // манифесте для этого не понадобилось.
     expect(out).toContain('применено и записано на диск');
     expect(existsSync(join(repo, '.devcontainer/devcontainer.json'))).toBe(
       true,
     );
-    // А обвес на складе остаётся: git его не отслеживает, он никому не мешает.
-    expect(existsSync(join(repo, 'node_modules/@omnifield/baser-devbox'))).toBe(
-      true,
-    );
+    expect(existsSync(join(repo, 'node_modules'))).toBe(false);
   });
 
-  it('установщик ГОВОРИТ, что убрал за собой', () => {
+  it('установщик ГОВОРИТ, откуда взял обвес', () => {
     const into = built();
     const repo = repository();
 
     const { out } = install(into, repo, '--plan');
 
-    // Молчаливая уборка — тоже молчание: человек должен понимать, что
-    // произошло с его манифестом.
-    expect(out).toContain('package.json');
-    expect(out).toMatch(/сн(ял|ято)|верн(ул|уто)|как был/);
+    // Молчание тут было бы тем же молчанием, что и молчаливая уборка: человек
+    // обязан понимать, откуда взялось то, что ему сейчас разложат.
+    expect(out).toContain('из этой папки');
+    expect(out).toMatch(/не копируется/);
   });
 
-  it('репозиторий БЕЗ package.json: создали — снесли', () => {
+  it('репозиторий БЕЗ package.json: его и не появляется', () => {
     const into = built();
     const repo = repository({ manifest: false });
 
     const { out } = install(into, repo);
 
-    // В Go- или Python-репозитории чужеродный манифест — след, которого там
-    // отродясь не было. Убирать тогда файл целиком, а не строчку.
+    // В Go- или Python-локации чужеродный манифест — след, которого там
+    // отродясь не было. Раньше он создавался на прогон и удалялся; теперь не
+    // создаётся вовсе, и это то же утверждение, только без окна, в котором оно
+    // неверно.
     expect(out).toContain('применено и записано на диск');
     expect(existsSync(join(repo, 'package.json'))).toBe(false);
-    expect(status(repo).map((line) => line.slice(3))).not.toContain(
-      'package.json',
-    );
+    expect(statusBesidesBundle(repo, into)).not.toContain('package.json');
   });
 
-  it('второй прогон после уборки сходится — уборка не ломает повторяемость', () => {
+  it('второй прогон сходится', () => {
     const into = built();
     const repo = repository();
 
@@ -386,12 +422,10 @@ describe('BASER2-35 · ручная доставка не оставляет т�
     const again = install(into, repo);
 
     expect(again.out).toContain('сошлось');
-    expect(status(repo).map((line) => line.slice(3))).not.toContain(
-      'package.json',
-    );
+    expect(statusBesidesBundle(repo, into)).not.toContain('package.json');
   });
 
-  it('прогон УПАЛ — за собой всё равно убрано', () => {
+  it('прогон УПАЛ — в локации всё равно ничего чужого', () => {
     const into = built();
     const repo = repository();
     mkdirSync(join(repo, '.devcontainer'), { recursive: true });
@@ -405,11 +439,12 @@ describe('BASER2-35 · ручная доставка не оставляет т�
 
     const { out, code } = install(into, repo);
 
-    // Отказ двери — штатный исход, а не повод оставить мину в манифесте.
+    // Отказ двери — штатный исход, и после него в локации не остаётся ничего,
+    // кроме папки, которую человек принёс сам.
     expect(code).not.toBe(0);
     expect(out).toContain('первая установка в непустой репозиторий');
     expect(readFileSync(join(repo, 'package.json'), 'utf-8')).toBe(before);
-    expect(status(repo)).toEqual([]);
+    expect(statusBesidesBundle(repo, into)).toEqual([]);
   });
 
   it('дока говорит и про САМУ ПАПКУ бандла — она тоже след', () => {
@@ -424,33 +459,50 @@ describe('BASER2-35 · ручная доставка не оставляет т�
     expect(doc).toMatch(/не коммить|удали|унеси/);
   });
 
-  it('дверь после уборки работает: конфиг авторитетнее манифеста', () => {
+  it('ДВЕРЬ НАПРЯМУЮ работает командой ИЗ ДОКИ, а не выдуманной', () => {
     const into = built();
     const repo = repository();
     install(into, repo);
+    const doc = readFileSync(join(repo, basename(into), 'INSTALL.md'), 'utf-8');
 
-    // Уборка снимает запись, по которой обвес НАШЛИ, — и вопрос «а дальше-то
-    // дверь его увидит?» надо задать, а не предположить. Ответ: увидит, потому
-    // что после установки авторитетен `baser.json`, а он остаётся и коммитится.
-    const out = execFileSync(
-      process.execPath,
-      [join(into, 'baser.mjs'), 'plan', '--cwd', repo],
-      { encoding: 'utf-8', cwd: repo },
-    );
+    // Дока обещает прямой вызов двери и называет каталог поставки флагом:
+    // без него дверь пошла бы на склад за невыпущенным обвесом. Проба
+    // ИСПОЛНЯЕТ написанное, а не пишет своё — обещание в доке такой же
+    // контракт, как код.
+    const direct = codeBlocks(doc)
+      .map((block) => block.replace(/\\\n/g, ' ').split(/\s+/))
+      .find((argv) => argv[0] === 'node' && argv[1].endsWith('baser.mjs'));
+    expect(direct).toBeDefined();
+    expect(direct).toContain('--source');
+
+    // Подставляется ровно два места, названные в доке заглушками: путь до
+    // репозитория и — внутри значения `--source` — папка бандла. Всё остальное
+    // исполняется как написано.
+    const argv = (direct ?? []).slice(1).map((word) => {
+      if (word === '/путь/к/репозиторию') {
+        return repo;
+      }
+      return word.replace(
+        new RegExp(`(^|=)${basename(into)}/`),
+        `$1${join(repo, basename(into))}/`,
+      );
+    });
+
+    const out = execFileSync(process.execPath, argv, {
+      cwd: repo,
+      encoding: 'utf-8',
+    });
 
     expect(out).toContain('сошлось');
     expect(out).not.toContain('обвесов не поставлено');
   });
 
-  it('INSTALL.md описывает уборку как есть', () => {
+  it('INSTALL.md говорит, что в локацию ничего не кладётся', () => {
     const doc = readFileSync(join(built(), 'INSTALL.md'), 'utf-8');
 
-    // Сказано, что запись снимается, — а не только что она появляется.
-    expect(doc).toMatch(/сниме|снимае|возвраща/);
-    expect(doc).toContain('package.json');
-    // И названа причина: пакет нигде не опубликован, поэтому запись не
-    // резолвится ни у кого, кроме того, кто держит бандл в руках.
-    expect(doc).toMatch(/не опубликован|не резолвится/);
+    expect(doc).toMatch(/не кладётся|не копируется/);
+    // И названа причина: поставку берёт дверь, а не пакетный менеджер локации.
+    expect(doc).toContain('--source');
   });
 });
 

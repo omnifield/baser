@@ -33,8 +33,17 @@ export type {
   SourceConfigReport,
   SourceReport,
   SourceRun,
+  SupplyReport,
   WriteReport,
 } from './lib/result.js';
+
+// ПОСТАВКУ ДОСТАЁТ ДВЕРЬ (`kb:BASER2-22`). Наружу уезжает то же, что и всегда:
+// форма ответа (`SupplyOrigin` — на неё ссылается `SupplyReport`), вход
+// (`SupplyOverride` — ручка дев-петли в `RunOptions`) и адрес кэша, который
+// прогревают конвейер и проба. Само доставание (`takeSupply`) внутреннее — тем
+// же правилом, что и остальные механики: наружу ответ, а не то, чем он получен.
+export { SUPPLY_CACHE_ENV, supplyCacheRoot } from './lib/supply.js';
+export type { SupplyOrigin, SupplyOverride } from './lib/supply.js';
 
 export { run } from './lib/run.js';
 export type { RunOptions } from './lib/run.js';

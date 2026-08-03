@@ -158,7 +158,7 @@ describe('ЦЕЛЬ: два инструмента ставятся ОДНОЙ к
   it('оба обвеса легли, и каждый артефакт подписан своим', async () => {
     const box = twoTools();
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('applied');
     expect(box.read(DEVCONTAINER)).toContain('baser-devbox');
@@ -183,7 +183,7 @@ describe('ЦЕЛЬ: два инструмента ставятся ОДНОЙ к
   it('отказ multiple-sources на легальном случае больше не воспроизводится', async () => {
     const box = twoTools();
 
-    const outcome = await cli(['apply', '--cwd', box.root], process.cwd());
+    const outcome = await cli(['apply', '--cwd', box.root, ...box.doorArgs()], process.cwd());
 
     expect(door(outcome).problems).toEqual([]);
     expect(door(outcome).status).toBe('applied');
@@ -197,7 +197,7 @@ describe('ЦЕЛЬ: два инструмента ставятся ОДНОЙ к
   it('прогон у каждого обвеса СВОЙ, а план не сведён в общий котёл', async () => {
     const box = twoTools();
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     expect(result.runs.map((item) => item.source.id)).toEqual([
       DEVBOX_ID,
@@ -221,7 +221,7 @@ describe('ЦЕЛЬ: два инструмента ставятся ОДНОЙ к
     consumer = installDevbox();
     consumer.installSource(AGENTS);
 
-    const result = await run({ command: 'apply', cwd: consumer.root });
+    const result = await run({ command: 'apply', ...consumer.door });
 
     expect(result.status).toBe('applied');
     expect(
@@ -242,7 +242,7 @@ describe('ЦЕЛЬ: два инструмента ставятся ОДНОЙ к
   it('сброс на диск ОДИН на оба обвеса, и записи в нём общие', async () => {
     const box = twoTools();
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.writes.map((write) => write.path).sort()).toEqual(
       [
@@ -270,10 +270,10 @@ describe('ЦЕЛЬ: два инструмента ставятся ОДНОЙ к
 describe('переход: повторные прогоны в ЛЮБОМ порядке', () => {
   it('второй прогон сходится, и диск не тронут', async () => {
     const box = twoTools();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     const landed = box.read(DEVCONTAINER);
 
-    const again = await run({ command: 'apply', cwd: box.root });
+    const again = await run({ command: 'apply', ...box.door });
 
     expect(again.status).toBe('converged');
     expect(again.writes).toEqual([]);
@@ -286,7 +286,7 @@ describe('переход: повторные прогоны в ЛЮБОМ пор
 
   it('обвесы переставлены в конфиге — ничего не снимается и не кладётся заново', async () => {
     const box = twoTools([DEVBOX_PACKAGE, AGENTS_PACKAGE]);
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     const before = manifestOf(box);
 
     // Тот же набор, другая очередь. Владение не имеет права быть функцией
@@ -296,7 +296,7 @@ describe('переход: повторные прогоны в ЛЮБОМ пор
       `${JSON.stringify(configOf([AGENTS_PACKAGE, DEVBOX_PACKAGE]), null, 2)}\n`,
     );
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('converged');
     expect(result.writes).toEqual([]);
@@ -307,7 +307,7 @@ describe('переход: повторные прогоны в ЛЮБОМ пор
 
   it('порядок первой установки на итог не влияет: дерево и владение те же', async () => {
     const first = twoTools([DEVBOX_PACKAGE, AGENTS_PACKAGE]);
-    await run({ command: 'apply', cwd: first.root });
+    await run({ command: 'apply', ...first.door });
     const forward = {
       devcontainer: first.read(DEVCONTAINER),
       harness: first.read(HARNESS),
@@ -316,7 +316,7 @@ describe('переход: повторные прогоны в ЛЮБОМ пор
     first.cleanup();
 
     const second = twoTools([AGENTS_PACKAGE, DEVBOX_PACKAGE]);
-    const result = await run({ command: 'apply', cwd: second.root });
+    const result = await run({ command: 'apply', ...second.door });
 
     expect(result.status).toBe('applied');
     // Сверка «оба одинаковы» без этого была бы верна и на двух пустых деревьях.
@@ -333,13 +333,13 @@ describe('переход: повторные прогоны в ЛЮБОМ пор
     // объявление. Теперь чужая запись — чужое хозяйство: она остаётся, а
     // артефакт на диске не трогают.
     const box = twoTools();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     box.write(
       'baser.json',
       `${JSON.stringify(configOf([DEVBOX_PACKAGE]), null, 2)}\n`,
     );
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('converged');
     expect(box.read(HARNESS)).toBe('product: baser\n');
@@ -355,7 +355,7 @@ describe('переход: повторные прогоны в ЛЮБОМ пор
 describe('переход: обвес снят с репозитория', () => {
   it('выпиленная запись убирает СВОЙ артефакт и только его', async () => {
     const box = twoTools();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     // Обвес выпустился заново и перестал класть один из своих файлов.
     box.installSource({
@@ -363,7 +363,7 @@ describe('переход: обвес снят с репозитория', () => 
       layout: AGENTS.layout.filter((entry) => entry.dest !== POLICY),
     });
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('applied');
     expect(box.exists(POLICY)).toBe(false);
@@ -382,7 +382,7 @@ describe('переход: обвес снят с репозитория', () => 
         [HARNESS, AGENTS_ID],
       ].sort(),
     );
-    expect((await run({ command: 'apply', cwd: box.root })).status).toBe(
+    expect((await run({ command: 'apply', ...box.door })).status).toBe(
       'converged',
     );
   });
@@ -395,7 +395,7 @@ describe('столкновение двух обвесов на один пут�
     });
     consumer.installSource(RIVAL);
 
-    const result = await run({ command: 'apply', cwd: consumer.root });
+    const result = await run({ command: 'apply', ...consumer.door });
 
     expect(result.status).toBe('refused');
     const [problem] = result.problems;
@@ -415,7 +415,7 @@ describe('столкновение двух обвесов на один пут�
     });
     consumer.installSource(RIVAL);
 
-    const result = await run({ command: 'apply', cwd: consumer.root });
+    const result = await run({ command: 'apply', ...consumer.door });
 
     expect(result.status).toBe('refused');
     expect(result.problems[0].code).toBe('artifact-shared');
@@ -427,7 +427,7 @@ describe('столкновение двух обвесов на один пут�
     // паспорте укладки, а потом из конфига ушёл — объявления его больше нет,
     // запись есть. Пришедший на его путь плагин перехватить артефакт не может.
     const box = twoTools();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     box.removeSource(AGENTS_PACKAGE);
     box.installSource(RIVAL);
@@ -436,7 +436,7 @@ describe('столкновение двух обвесов на один пут�
       `${JSON.stringify(configOf([AGENTS_PACKAGE]), null, 2)}\n`,
     );
 
-    const outcome = await cli(['apply', '--cwd', box.root], process.cwd());
+    const outcome = await cli(['apply', '--cwd', box.root, ...box.doorArgs()], process.cwd());
     const result = door(outcome);
 
     expect(result.status).toBe('blocked');
@@ -458,7 +458,7 @@ describe('столкновение двух обвесов на один пут�
 
   it('подтверждением этот отказ не снимается, и это названо извещением', async () => {
     const box = twoTools();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     box.removeSource(AGENTS_PACKAGE);
     box.installSource(RIVAL);
@@ -469,7 +469,7 @@ describe('столкновение двух обвесов на один пут�
 
     const result = await run({
       command: 'apply',
-      cwd: box.root,
+      ...box.door,
       confirm: [DEVCONTAINER],
     });
 
@@ -499,7 +499,7 @@ describe('ПЕРЕДАЧА АРТЕФАКТА от обвеса к обвесу 
   /** Раскладывает исходное состояние и переводит артефакт «в дороге». */
   async function inTransit(order: readonly string[]): Promise<Consumer> {
     const box = twoTools([DEVBOX_PACKAGE, AGENTS_PACKAGE]);
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     // Отдающий выпустился без этого артефакта, принимающий — с ним.
     box.installSource({
@@ -519,7 +519,7 @@ describe('ПЕРЕДАЧА АРТЕФАКТА от обвеса к обвесу 
     // считаться раньше захвата — при любой записи в конфиге.
     consumer = await inTransit(BACKWARD);
 
-    const result = await run({ command: 'apply', cwd: consumer.root });
+    const result = await run({ command: 'apply', ...consumer.door });
 
     expect(result.status).toBe('applied');
     expect(consumer.read(POLICY)).toBe('# shared-policy — рамка ролей (v2)\n');
@@ -527,14 +527,14 @@ describe('ПЕРЕДАЧА АРТЕФАКТА от обвеса к обвесу 
       manifestOf(consumer).find((record) => record.dest === POLICY)?.source,
     ).toBe(SUCCESSOR_ID);
     // И сходится со второго прогона, а не колеблется вечно.
-    expect((await run({ command: 'apply', cwd: consumer.root })).status).toBe(
+    expect((await run({ command: 'apply', ...consumer.door })).status).toBe(
       'converged',
     );
   });
 
   it('исход ОДИНАКОВ в обе стороны — порядок записей больше ничего не решает', async () => {
     const forward = await inTransit(FORWARD);
-    await run({ command: 'apply', cwd: forward.root });
+    await run({ command: 'apply', ...forward.door });
     const expected = {
       policy: forward.read(POLICY),
       manifest: manifestOf(forward)
@@ -544,7 +544,7 @@ describe('ПЕРЕДАЧА АРТЕФАКТА от обвеса к обвесу 
     forward.cleanup();
 
     consumer = await inTransit(BACKWARD);
-    const result = await run({ command: 'apply', cwd: consumer.root });
+    const result = await run({ command: 'apply', ...consumer.door });
 
     expect(result.status).toBe('applied');
     expect(consumer.read(POLICY)).toBe(expected.policy);
@@ -561,7 +561,7 @@ describe('ПЕРЕДАЧА АРТЕФАКТА от обвеса к обвесу 
     // считается из объявлений и паспорта укладки, а не из удачи.
     consumer = await inTransit(BACKWARD);
 
-    const result = await run({ command: 'plan', cwd: consumer.root });
+    const result = await run({ command: 'plan', ...consumer.door });
 
     const order = result.runs.map((item) => item.source.id);
     expect(order.indexOf(AGENTS_ID)).toBeLessThan(order.indexOf(SUCCESSOR_ID));
@@ -572,7 +572,7 @@ describe('ПЕРЕДАЧА АРТЕФАКТА от обвеса к обвесу 
     // человек, и менять его порядок без причины значит путать без причины.
     const box = twoTools([AGENTS_PACKAGE, DEVBOX_PACKAGE]);
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     expect(result.runs.map((item) => item.source.id)).toEqual([
       AGENTS_ID,
@@ -593,7 +593,7 @@ describe('ПЕРЕДАЧА АРТЕФАКТА от обвеса к обвесу 
         layout: [{ src: 'harness.yaml', dest: HARNESS, render: false }],
         templates: { 'harness.yaml': 'product: baser\n' },
       });
-      await run({ command: 'apply', cwd: box.root });
+      await run({ command: 'apply', ...box.door });
 
       // Обмен: каждый объявил то, что лежит за соседом.
       box.installSource({
@@ -605,11 +605,11 @@ describe('ПЕРЕДАЧА АРТЕФАКТА от обвеса к обвесу 
     }
 
     const first = await swapped([AGENTS_PACKAGE, SUCCESSOR_PACKAGE]);
-    const forward = await run({ command: 'apply', cwd: first.root });
+    const forward = await run({ command: 'apply', ...first.door });
     first.cleanup();
 
     consumer = await swapped([SUCCESSOR_PACKAGE, AGENTS_PACKAGE]);
-    const backward = await run({ command: 'apply', cwd: consumer.root });
+    const backward = await run({ command: 'apply', ...consumer.door });
 
     expect(forward.status).toBe('blocked');
     expect(backward.status).toBe('blocked');
@@ -632,7 +632,7 @@ describe('подтверждение адресуется своему обве�
 
     const result = await run({
       command: 'plan',
-      cwd: consumer.root,
+      ...consumer.door,
       confirm: [DEVCONTAINER],
     });
 
@@ -653,7 +653,7 @@ describe('подтверждение адресуется своему обве�
 
     const result = await run({
       command: 'plan',
-      cwd: box.root,
+      ...box.door,
       confirm: ['.devcontainre/devcontainer.json'],
     });
 
@@ -683,7 +683,7 @@ describe('первая установка в непустой репозитор
     });
     consumer.installSource(AGENTS);
 
-    const result = await run({ command: 'apply', cwd: consumer.root });
+    const result = await run({ command: 'apply', ...consumer.door });
 
     expect(result.status).toBe('blocked');
     // Причина у пачки общая — записи нет на весь репозиторий. Повторить её на
@@ -707,7 +707,7 @@ describe('первая установка в непустой репозитор
     consumer = installDevbox({ existing: { [HARNESS]: 'product: чужой\n' } });
     consumer.installSource(AGENTS);
 
-    const result = await run({ command: 'apply', cwd: consumer.root });
+    const result = await run({ command: 'apply', ...consumer.door });
 
     expect(result.status).toBe('blocked');
     expect(
@@ -723,7 +723,7 @@ describe('ответ один на все обвесы', () => {
   it('текст печатает КАЖДЫЙ обвес со своим движением и своим планом', async () => {
     const box = twoTools();
 
-    const text = renderText(await run({ command: 'plan', cwd: box.root }));
+    const text = renderText(await run({ command: 'plan', ...box.door }));
 
     expect(text).toContain('обвесов: 2');
     expect(text).toContain(`обвес: ${DEVBOX_ID}`);
@@ -741,7 +741,7 @@ describe('ответ один на все обвесы', () => {
   it('счётчик обвесов не печатается, когда обвес один', async () => {
     consumer = installDevbox({ config: configOf([DEVBOX_PACKAGE]) });
 
-    const text = renderText(await run({ command: 'plan', cwd: consumer.root }));
+    const text = renderText(await run({ command: 'plan', ...consumer.door }));
 
     // «обвесов: 1» ничего не сообщает — строка, которая всегда одна и та же,
     // читается как шум и через неделю перестаёт читаться вовсе.
@@ -752,7 +752,7 @@ describe('ответ один на все обвесы', () => {
   it('plan не пишет НИЧЕГО, сколько бы обвесов ни стояло', async () => {
     const box = twoTools();
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     expect(result.status).toBe('pending');
     expect(result.writes).toEqual([]);
@@ -767,7 +767,7 @@ describe('ответ один на все обвесы', () => {
   it('трейс двери называет обвес у каждой своей фазы', async () => {
     const box = twoTools();
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
     const rendered = result.trace.filter((span) => span.name === 'door.render');
 
     // Фазы повторяются по разу на обвес, и различить их можно данными, а не

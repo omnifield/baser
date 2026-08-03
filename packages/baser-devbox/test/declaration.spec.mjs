@@ -35,7 +35,6 @@ import {
 } from '../../baser-contracts/src/index.ts';
 import { locatePackage } from '../../baser-contracts/src/locate.ts';
 import { locateContentRoot } from '../../baser-cli/src/index.ts';
-import { run } from '../../baser-cli/src/index.ts';
 import {
   consumerConfig,
   DEVBOX_PACKAGE,
@@ -44,6 +43,7 @@ import {
   packedFiles,
   packedManifest,
   packedRoot,
+  run,
   tuning,
 } from './packed.mjs';
 

@@ -99,7 +99,7 @@ function recordOf(box: Consumer, dest: string) {
 describe('класс артефакта доезжает до движка', () => {
   it('СКВОЗНОЕ: объявленный placed-once не перекладывается на втором прогоне', async () => {
     const box = withAgents();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     expect(box.read(HARNESS)).toBe('product: baser\n');
 
     // Человек заполнил файл под себя — ровно то, ради чего класс и заведён.
@@ -114,7 +114,7 @@ describe('класс артефакта доезжает до движка', () 
       },
     });
 
-    const second = await run({ command: 'apply', cwd: box.root });
+    const second = await run({ command: 'apply', ...box.door });
 
     // Главное утверждение работы: работа человека на диске цела.
     expect(box.read(HARNESS)).toContain('zones:');
@@ -138,7 +138,7 @@ describe('класс артефакта доезжает до движка', () 
   it('класс попадает в паспорт укладки, и хеша у placed-once нет', async () => {
     const box = withAgents();
 
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     expect(recordOf(box, HARNESS)?.class).toBe('placed-once');
     // Записанный и никогда не сравниваемый хеш — половина имитации.
@@ -150,10 +150,10 @@ describe('класс артефакта доезжает до движка', () 
 
   it('правка placed-once руками флага не поднимает — прогон сходится', async () => {
     const box = withAgents();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     box.write(HARNESS, 'product: чужой руками\n');
 
-    const again = await run({ command: 'plan', cwd: box.root });
+    const again = await run({ command: 'plan', ...box.door });
 
     expect(again.status).toBe('converged');
   });
@@ -194,7 +194,7 @@ describe('отказ называет, что подтверждение сде�
   it('ТОЛЬКО placed-once: обещано не трогать содержимое — и оно цело', async () => {
     const box = occupied({ [HARNESS]: MINE });
 
-    const blocked = await run({ command: 'plan', cwd: box.root });
+    const blocked = await run({ command: 'plan', ...box.door });
     const message = firstInstall(blocked);
 
     expect(blocked.status).toBe('blocked');
@@ -213,7 +213,7 @@ describe('отказ называет, что подтверждение сде�
     // прогоном, а не верим на слово.
     const fixed = await run({
       command: 'apply',
-      cwd: box.root,
+      ...box.door,
       confirm: [HARNESS],
     });
 
@@ -222,7 +222,7 @@ describe('отказ называет, что подтверждение сде�
     expect(box.read(HARNESS)).toBe(MINE);
     // Владение при этом перешло — иначе следующий прогон отказал бы снова.
     expect(recordOf(box, HARNESS)?.class).toBe('placed-once');
-    expect((await run({ command: 'plan', cwd: box.root })).status).toBe(
+    expect((await run({ command: 'plan', ...box.door })).status).toBe(
       'converged',
     );
   });
@@ -230,7 +230,7 @@ describe('отказ называет, что подтверждение сде�
   it('ОБА класса разом: цена названа поимённо, а не средним по больнице', async () => {
     const box = occupied({ [HARNESS]: MINE, [POLICY]: '# моя рамка\n' });
 
-    const blocked = await run({ command: 'plan', cwd: box.root });
+    const blocked = await run({ command: 'plan', ...box.door });
     const message = firstInstall(blocked);
 
     // Подтверждают поимённо — значит и цена обязана быть поимённой: «часть
@@ -246,7 +246,7 @@ describe('отказ называет, что подтверждение сде�
 
     const fixed = await run({
       command: 'apply',
-      cwd: box.root,
+      ...box.door,
       confirm: [HARNESS, POLICY],
     });
 
@@ -284,7 +284,7 @@ describe('второй обвес при живой записи: отказ е�
   /** Девбокс разложен и запись на месте; вторым объявлен плагин агентов. */
   async function second(): Promise<Consumer> {
     consumer = installDevbox({ config: configOf([DEVBOX_PACKAGE]) });
-    await run({ command: 'apply', cwd: consumer.root });
+    await run({ command: 'apply', ...consumer.door });
 
     // Файлы, заполненные руками, — ровно те, про которые стоял вопрос.
     consumer.write(HARNESS, MINE);
@@ -307,7 +307,7 @@ describe('второй обвес при живой записи: отказ е�
   it('КЛАСС ЧИТАЕТСЯ, а не выводится по косвенным признакам', async () => {
     const box = await second();
 
-    const blocked = await run({ command: 'plan', cwd: box.root });
+    const blocked = await run({ command: 'plan', ...box.door });
     const message = unrecorded(blocked);
 
     expect(blocked.status).toBe('blocked');
@@ -328,7 +328,7 @@ describe('второй обвес при живой записи: отказ е�
     // указатель не туда хуже отсутствующего (`tasker:BASER2-28`).
     const box = await second();
 
-    const blocked = await run({ command: 'plan', cwd: box.root });
+    const blocked = await run({ command: 'plan', ...box.door });
 
     expect(blocked.problems.map((problem) => problem.code)).toEqual([
       'unrecorded-dest',
@@ -342,7 +342,7 @@ describe('второй обвес при живой записи: отказ е�
   it('называет, КТО целится: «сними обвес» без имени — снимать наугад', async () => {
     const box = await second();
 
-    const message = unrecorded(await run({ command: 'plan', cwd: box.root }));
+    const message = unrecorded(await run({ command: 'plan', ...box.door }));
 
     expect(message).toContain(`"${AGENTS_ID}"`);
     // Соседа, который тут раскладывает законно, отказ не приплетает.
@@ -356,7 +356,7 @@ describe('второй обвес при живой записи: отказ е�
 
     const fixed = await run({
       command: 'apply',
-      cwd: box.root,
+      ...box.door,
       confirm: [HARNESS, POLICY],
     });
 
@@ -364,7 +364,7 @@ describe('второй обвес при живой записи: отказ е�
     expect(box.read(HARNESS)).toBe(MINE);
     expect(box.read(POLICY)).toBe(POLICY_BODY);
     // Владение перешло — следующий прогон сходится, а не отказывает снова.
-    expect((await run({ command: 'plan', cwd: box.root })).status).toBe(
+    expect((await run({ command: 'plan', ...box.door })).status).toBe(
       'converged',
     );
   });
@@ -373,14 +373,14 @@ describe('второй обвес при живой записи: отказ е�
     // Узость обещания. Тот же репозиторий с двумя обвесами, но пути свободны:
     // сообщение, которое видит каждый, за неделю перестаёт читаться.
     consumer = installDevbox({ config: configOf([DEVBOX_PACKAGE]) });
-    await run({ command: 'apply', cwd: consumer.root });
+    await run({ command: 'apply', ...consumer.door });
     consumer.installSource(AGENTS);
     consumer.write(
       'baser.json',
       `${JSON.stringify(configOf([DEVBOX_PACKAGE, AGENTS_PACKAGE]), null, 2)}\n`,
     );
 
-    const result = await run({ command: 'plan', cwd: consumer.root });
+    const result = await run({ command: 'plan', ...consumer.door });
 
     expect(
       result.problems.some((problem) => problem.code === 'unrecorded-dest'),
@@ -392,7 +392,7 @@ describe('версия обвеса доезжает до паспорта ук�
   it('версия из манифеста пакета ложится в запись', async () => {
     const box = withAgents({ ...AGENTS, version: '1.4.2' });
 
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     expect(recordOf(box, POLICY)?.version).toBe('1.4.2');
     expect(recordOf(box, HARNESS)?.version).toBe('1.4.2');
@@ -400,12 +400,12 @@ describe('версия обвеса доезжает до паспорта ук�
 
   it('ПЕРЕХОД: обвес поднял версию — расхождение названо, и названо ПОЛЕМ', async () => {
     const box = withAgents({ ...AGENTS, version: '1.4.2' });
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     // Содержимое то же самое — двинулась ровно версия. Молчание здесь означало
     // бы, что паспорт продолжает называть вчерашнюю версию.
     box.installSource({ ...AGENTS, version: '2.0.0' });
-    const second = await run({ command: 'plan', cwd: box.root });
+    const second = await run({ command: 'plan', ...box.door });
 
     const step = runOf(second, AGENTS_ID).plan?.steps.find(
       (item) => item.dest === POLICY,
@@ -413,7 +413,7 @@ describe('версия обвеса доезжает до паспорта ук�
     expect(step?.reason).toBe('reclaimed');
     expect(step?.restated).toEqual(['version']);
 
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     expect(recordOf(box, POLICY)?.version).toBe('2.0.0');
   });
 
@@ -422,7 +422,7 @@ describe('версия обвеса доезжает до паспорта ук�
     // идёт по настоящему обвесу.
     consumer = installDevbox({ config: configOf([DEVBOX_PACKAGE]) });
 
-    const result = await run({ command: 'apply', cwd: consumer.root });
+    const result = await run({ command: 'apply', ...consumer.door });
 
     const version = runOf(result, DEVBOX_ID).source.packageVersion;
     expect(version).not.toBeNull();
@@ -436,7 +436,7 @@ describe('обвес версию НЕ назвал', () => {
   it('в паспорт ложится null, а не сочинённая версия', async () => {
     const box = withAgents({ ...AGENTS, version: null });
 
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     // `0.0.0` было бы утверждением о версии, которого обвес не делал, — и
     // именно на нём потом строилось бы «между твоей версией и новой было
@@ -447,7 +447,7 @@ describe('обвес версию НЕ назвал', () => {
   it('дверь называет это вслух, а не показывает пустое место', async () => {
     const box = withAgents({ ...AGENTS, version: null });
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     // Данными — читается гейтом.
     expect(runOf(result, AGENTS_ID).source.packageVersion).toBeNull();
@@ -463,13 +463,22 @@ describe('обвес версию НЕ назвал', () => {
   it('трейс несёт версию каждого обвеса — телеметрия отвечает на «чем шёл прогон»', async () => {
     const box = withAgents({ ...AGENTS, version: '1.4.2' });
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     // Спаны движка сюда не сведены и не будут: `plan.owned` мерит его работу, а
     // это — то, с чем дверь его позвала.
     const sources = result.trace.find((span) => span.name === 'door.sources');
     expect(sources?.detail?.['sources']).toEqual([
-      { id: AGENTS_ID, version: '1.4.2', artifacts: 2, placedOnce: 1 },
+      {
+        id: AGENTS_ID,
+        version: '1.4.2',
+        // Откуда поставка и ходили ли за ней на склад — первое, что спрашивают,
+        // когда «у меня разложилось иначе, чем у него» (`tasker:BASER2-146`).
+        origin: 'local',
+        fetched: false,
+        artifacts: 2,
+        placedOnce: 1,
+      },
     ]);
   });
 
@@ -496,7 +505,7 @@ describe('обвес версию НЕ назвал', () => {
         "  ctx.source.version === null ? 'версия не названа' : ctx.source.version;\n",
     );
 
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     // Обход снят: пока `ResolverContext.source.version` был обязательной
     // строкой, дверь изображала отсутствие пустой строкой — и резолвер не мог
@@ -511,7 +520,7 @@ describe('обвес версию НЕ назвал', () => {
   it('трейс не сочиняет версию там, где её нет', async () => {
     const box = withAgents({ ...AGENTS, version: null });
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     const sources = result.trace.find((span) => span.name === 'door.sources');
     expect(

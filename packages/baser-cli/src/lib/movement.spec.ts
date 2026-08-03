@@ -63,7 +63,7 @@ function install(block: Record<string, unknown> = {}): Consumer {
 }
 
 async function movements(box: Consumer): Promise<Map<string, SettingMovement>> {
-  const result = await run({ command: 'plan', cwd: box.root });
+  const result = await run({ command: 'plan', ...box.door });
   return new Map(
     soleRun(result).settings.map((setting) => [setting.key, setting]),
   );
@@ -163,7 +163,7 @@ describe('переход: обвес обновился, дефолт подня
 describe('движение названо ДО применения, а не после', () => {
   it('в тексте оно стоит ВЫШЕ плана: человек читает сверху вниз', async () => {
     const box = install();
-    const text = renderText(await run({ command: 'plan', cwd: box.root }));
+    const text = renderText(await run({ command: 'plan', ...box.door }));
 
     const values = text.indexOf('значения:');
     const plan = text.indexOf('шагов:');
@@ -181,7 +181,7 @@ describe('движение названо ДО применения, а не п�
     // Строка живёт ЗДЕСЬ, а не только в отказе первой установки: отказ читает
     // тот, у кого файл уже лежал, а этот блок — каждый, кто ставит обвес.
     const text = renderText(
-      await run({ command: 'plan', cwd: install().root }),
+      await run({ command: 'plan', ...install().door }),
     );
 
     expect(text).toContain(
@@ -193,7 +193,7 @@ describe('движение названо ДО применения, а не п�
   });
 
   it('текст — рендер ПОВЕРХ ответа: в нём нет ничего, чего нет в данных', async () => {
-    const result = await run({ command: 'plan', cwd: install().root });
+    const result = await run({ command: 'plan', ...install().door });
     const text = renderText(result);
 
     for (const setting of soleRun(result).settings) {

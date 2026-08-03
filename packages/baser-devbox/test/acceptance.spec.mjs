@@ -54,7 +54,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 // Обвесов в ответе двери столько же, сколько поставлено (`tasker:BASER2-55`), и
 // каждый прогон лежит под своим. Здесь обвес один — берём `soleRun` двери, а не
@@ -62,7 +62,7 @@ import { join } from 'node:path';
 // молча проверять первый из двух. Берётся он публичным входом зоны `cli`, как и
 // `run`: приёмка одной зоны не имеет права держаться за внутренности другой
 // (`tasker:BASER2-59`).
-import { run, soleRun } from '../../baser-cli/src/index.ts';
+import { soleRun } from '../../baser-cli/src/index.ts';
 import { MANIFEST_PATH } from '../../baser-materialize/src/index.ts';
 import {
   consumerConfig,
@@ -74,6 +74,7 @@ import {
   LOCK,
   packedManifest,
   parseJsonc,
+  run,
   tuning,
 } from './packed.mjs';
 
@@ -152,7 +153,12 @@ describe('ПРИЁМКА: поставил пакет → позвал двер�
     expect(box.read(LIVE)).toBe(landed);
   });
 
-  it('дверь опознала ИМЕННО поставленный пакет, а не копию в монорепе', async () => {
+  it('дверь взяла ИМЕННО названную поставку, а не выпуск со склада', async () => {
+    // Утверждение сменило предмет вместе с дверью (`tasker:BASER2-151`).
+    // Пока дверь искала обвес по `node_modules` локации, спорить можно было с
+    // копией в монорепе. Теперь дверь достаёт поставку сама, и спорить можно с
+    // ОПУБЛИКОВАННЫМ выпуском того же имени: он на складе есть, и взять его
+    // дверь могла бы молча. Проба закрывает именно это.
     const box = clean({ tuning: AS_LIVE });
 
     const result = await run({ command: 'plan', cwd: box.root });
@@ -160,15 +166,34 @@ describe('ПРИЁМКА: поставил пакет → позвал двер�
     const { source } = soleRun(result);
     expect(source.id).toBe('omnifield/devbox');
     expect(source.packageName).toBe(DEVBOX_PACKAGE);
+    // Версия — из тарбола, собранного ЭТИМ прогоном. Опубликованный выпуск
+    // живёт своей жизнью, и здесь эти два числа и разошлись бы.
     expect(source.packageVersion).toBe(packedManifest().version);
-    // Корень пакета — внутри дерева потребителя: значит источник закрыт от
-    // записи в себя, а не «где-то на машине».
+    // Каталог — тот, который назвала фикстура, и он внутри дерева потребителя:
+    // значит источник закрыт от записи в себя, а не «где-то на машине».
     expect(source.packageRoot).toBe(
       join(box.root, 'node_modules', DEVBOX_PACKAGE),
     );
     expect(source.location.kind).toBe('in-tree');
+    // «Откуда взял» дверь называет в ответе, а не подразумевает: дев-петля, и
+    // на склад за этой поставкой не ходили.
+    expect(source.supply.origin.kind).toBe('local');
+    expect(source.supply.fetched).toBe(false);
     // Трейс прогона существует — мерить работу двери есть чем.
     expect(result.trace.length).toBeGreaterThan(0);
+  });
+
+  it('за поставкой зона на склад НЕ ходит — кэш остался пустым', async () => {
+    const box = clean({ tuning: AS_LIVE });
+
+    await run({ command: 'apply', cwd: box.root });
+
+    // Второй конец предыдущей пробы, и он про фикстуру, а не про дверь. Кэш
+    // поставок уведён с машины в свою временную папку и не создаётся: каталог
+    // появится ровно тогда, когда дверь пойдёт доставать. Значит вызов, которому
+    // забыли назвать каталог поставки, оставит след — а не позеленеет тихо на
+    // опубликованном обвесе, как это уже случилось однажды.
+    expect(existsSync(box.cache)).toBe(false);
   });
 });
 

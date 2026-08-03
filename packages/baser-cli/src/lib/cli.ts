@@ -34,6 +34,7 @@ import { packPackage, type PackReport } from '@omnifield/baser-pack';
 import { bundle, BUNDLE_SCHEMA_VERSION, type BundleReport } from './bundle.js';
 import { renderBundle, renderCheck, renderPack, renderText } from './report.js';
 import { run } from './run.js';
+import type { SupplyOverride } from './supply.js';
 import { DOOR_SCHEMA_VERSION } from './schema.js';
 import { exitCodeOf, type DoorResult } from './result.js';
 
@@ -50,9 +51,23 @@ export const USAGE = `baser — дверь материализации и по�
   --cwd <path>      корень репозитория потребителя — plan, apply
   --confirm <dest>  отдать чужой артефакт во владение обвесу, поимённо — plan, apply
   --difference      расхождение с чужим файлом целиком, без усечения — plan, apply
+  --source <имя>=<каталог>  взять поставку из каталога, а не со склада — plan, apply
   --into <path>     каталог выдачи — pack, bundle
   --version         версии схем: двери, формы, вывода движка, бандла
   --help            это сообщение
+
+Поставку достаёт САМА дверь — тем же пакетным менеджером, в кэш снаружи твоей
+локации ($BASER_CACHE, иначе $XDG_CACHE_HOME/baser, иначе ~/.cache/baser). В
+локации от этого не появляется ни склада, ни лока, ни записи в твоём манифесте:
+объявлять обвес зависимостью больше не нужно, и на локации не на ноде ничего
+чужого не заводится.
+
+Какую версию брать: закреплённую в "baser.json" (sources[].version), иначе ту,
+которой уже разложено по паспорту укладки, иначе последнюю доступную — и
+последнюю план называет ДО применения, а не берёт молча.
+
+--source называет каталог поставки поимённо и со складом не советуется: это
+дев-петля для того, у кого обвес лежит рядом в исходниках.
 
 Что из чужого файла не воспроизведётся, план называет построчно и БЕЗ ФЛАГА —
 --difference только снимает усечение: показанного всегда меньше найденного, и
@@ -108,6 +123,7 @@ export async function cli(
       cwd: parsed.cwd ?? cwd,
       confirm: parsed.confirm,
       difference: parsed.difference,
+      sources: parsed.sources,
     });
     return emit({ kind: 'door', door }, renderText(door), exitCodeOf(door));
   }
@@ -169,8 +185,8 @@ const NEEDS_INTO: readonly Command[] = ['pack', 'bundle'];
  * `--json` не перечисляется: он есть у всех и означает у всех одно.
  */
 const FLAGS_BY_COMMAND: Readonly<Record<Command, readonly string[]>> = {
-  plan: ['--cwd', '--confirm', '--difference'],
-  apply: ['--cwd', '--confirm', '--difference'],
+  plan: ['--cwd', '--confirm', '--difference', '--source'],
+  apply: ['--cwd', '--confirm', '--difference', '--source'],
   check: [],
   pack: ['--into'],
   bundle: ['--into'],
@@ -195,6 +211,8 @@ type ParsedArgv =
       readonly confirm: readonly string[];
       /** Показать расхождение с чужим файлом целиком, без усечения. */
       readonly difference: boolean;
+      /** Дев-петля: поставки, названные каталогом вместо склада. */
+      readonly sources: readonly SupplyOverride[];
       /** Каталог обвеса для команд подготовки. */
       readonly target: string;
       /** Каталог выдачи для `pack` и `bundle`. */
@@ -243,6 +261,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
   let into: string | null = null;
   let difference = false;
   const confirm: string[] = [];
+  const sources: SupplyOverride[] = [];
   const positional: string[] = [];
 
   /** Флаг знаком другой команде: для этой он ничем не лучше опечатки. */
@@ -277,7 +296,12 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
       continue;
     }
 
-    if (flag === '--cwd' || flag === '--confirm' || flag === '--into') {
+    if (
+      flag === '--cwd' ||
+      flag === '--confirm' ||
+      flag === '--into' ||
+      flag === '--source'
+    ) {
       if (!FLAGS_BY_COMMAND[command].includes(flag)) {
         return foreign(flag);
       }
@@ -295,8 +319,29 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
         cwd = argument;
       } else if (flag === '--into') {
         into = argument;
-      } else {
+      } else if (flag === '--confirm') {
         confirm.push(argument);
+      } else {
+        // Значение флага — ПАРА «имя пакета = каталог», и разбор её требует:
+        // «--source packages/baser-devbox» не сказал бы, к какой записи перечня
+        // каталог относится, а угадать это дверь не вправе — в локации обвесов
+        // бывает несколько.
+        const split = argument.indexOf('=');
+        if (split <= 0 || split === argument.length - 1) {
+          return {
+            ok: false,
+            stdout:
+              `флаг "--source" ждёт пару "<имя пакета>=<каталог>", а получил ` +
+              `"${argument}". Каталог называется поимённо: дев-петля включается ` +
+              'для НАЗВАННОЙ поставки, а не для всех сразу.\n\n' +
+              `${USAGE}\n`,
+            exitCode: 2,
+          };
+        }
+        sources.push({
+          packageName: argument.slice(0, split),
+          path: argument.slice(split + 1),
+        });
       }
       continue;
     }
@@ -340,6 +385,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
     cwd,
     confirm,
     difference,
+    sources,
     target: positional[0] ?? '',
     into: into ?? '',
   };

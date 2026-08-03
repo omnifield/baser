@@ -74,7 +74,7 @@ function install(block: Record<string, unknown> = {}): Consumer {
 }
 
 async function movements(box: Consumer): Promise<Map<string, SettingMovement>> {
-  const result = await run({ command: 'plan', cwd: box.root });
+  const result = await run({ command: 'plan', ...box.door });
   return new Map(
     soleRun(result).settings.map((setting) => [setting.key, setting]),
   );
@@ -83,7 +83,7 @@ async function movements(box: Consumer): Promise<Map<string, SettingMovement>> {
 describe('обвес сменил резолвер: поедет имя контейнера и АЛИАС В СЕТИ', () => {
   it('план называет ОБА конца каждого движения, а не только новое значение', async () => {
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     expect(box.read(LIVE)).toContain('"name": "baser-devbox"');
     expect(box.read(LIVE)).toContain('--network-alias=baser');
 
@@ -103,7 +103,7 @@ describe('обвес сменил резолвер: поедет имя конт
 
   it('прежнее значение названо АДРЕСОМ артефакта, которым оно доказано', async () => {
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     box.updateResolvers(RENAMED);
 
     const name = (await movements(box)).get('name');
@@ -115,10 +115,10 @@ describe('обвес сменил резолвер: поедет имя конт
 
   it('оба конца доезжают до ТЕКСТА, и стоят выше плана', async () => {
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     box.updateResolvers(RENAMED);
 
-    const text = renderText(await run({ command: 'plan', cwd: box.root }));
+    const text = renderText(await run({ command: 'plan', ...box.door }));
 
     expect(text).toContain('"baser" → "weber"');
     expect(text).toContain('"baser-devbox" → "weber-devbox"');
@@ -130,7 +130,7 @@ describe('обвес сменил резолвер: поедет имя конт
 
   it('значения, которые не двигались, поля переезда НЕ несут', async () => {
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     box.updateResolvers(RENAMED);
 
     const byKey = await movements(box);
@@ -156,7 +156,7 @@ describe('человек заполнил настройку на УЖЕ СТО�
     // считаются цели томов. Кто заполнит её на уже стоящем девбоксе —
     // переселит тома, и узнать об этом обязан ДО применения.
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     box.tune(DEVBOX_ID, {
       presets: ['omnifield'],
@@ -173,7 +173,7 @@ describe('человек заполнил настройку на УЖЕ СТО�
 describe('НИ ОДНОГО НЕДОКАЗАННОГО СЛОВА', () => {
   it('шаблон уехал вместе со значением — дверь молчит, а не гадает', async () => {
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     // Выпуск обвеса поменял и резолвер, и сам шаблон. Прежний артефакт теперь
     // не воспроизводится НИ ОДНИМ набором значений этого шаблона, и назвать
@@ -187,7 +187,7 @@ describe('НИ ОДНОГО НЕДОКАЗАННОГО СЛОВА', () => {
       )}`,
     );
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
     const byKey = new Map(
       soleRun(result).settings.map((setting) => [setting.key, setting]),
     );
@@ -200,7 +200,7 @@ describe('НИ ОДНОГО НЕДОКАЗАННОГО СЛОВА', () => {
 
   it('артефакт правили руками — прежний конец не сочиняется', async () => {
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     const landed = box.read(LIVE) as string;
     box.write(LIVE, `${landed}\n// правка руками\n`);
@@ -219,7 +219,7 @@ describe('НИ ОДНОГО НЕДОКАЗАННОГО СЛОВА', () => {
     // Список разворачивается шаблоном в структуру, флаг — в ветку: «прежнего
     // места» у них в тексте нет. Восстановить нечем — значит и слова нет.
     const box = install();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     box.tune(DEVBOX_ID, {
       presets: ['omnifield'],

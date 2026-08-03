@@ -26,12 +26,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 // Обвес здесь один — прогон под него берётся `soleRun` двери, а не `runs[0]`:
 // он бросает, если обвес не один (`tasker:BASER2-55`). Публичным входом зоны
 // `cli`, как и `run` (`tasker:BASER2-59`).
-import { run, soleRun } from '../../baser-cli/src/index.ts';
+import { soleRun } from '../../baser-cli/src/index.ts';
 import {
   consumerConfig,
   installConsumer,
   LIVE,
   parseJsonc,
+  run,
   tuning,
 } from './packed.mjs';
 

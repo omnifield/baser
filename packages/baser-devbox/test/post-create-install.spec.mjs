@@ -76,7 +76,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { run, soleRun } from '../../baser-cli/src/index.ts';
+import { soleRun } from '../../baser-cli/src/index.ts';
 import { containerEnv } from './env.mjs';
 import {
   consumerConfig,
@@ -84,6 +84,7 @@ import {
   LIVE,
   parseJsonc,
   REPO_ROOT,
+  run,
   tuning,
 } from './packed.mjs';
 

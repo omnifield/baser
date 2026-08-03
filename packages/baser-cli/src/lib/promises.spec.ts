@@ -251,7 +251,14 @@ describe('флаг, не относящийся к команде, отказы�
     });
 
     const outcome = await cli(
-      ['plan', '--cwd', consumer.root, '--confirm', 'a.txt'],
+      [
+        'plan',
+        '--cwd',
+        consumer.root,
+        ...consumer.doorArgs(),
+        '--confirm',
+        'a.txt',
+      ],
       process.cwd(),
     );
 
@@ -304,7 +311,7 @@ describe('публичная поверхность равна фактичес�
       config: { formVersion: 2, sources: [{ use: DEVBOX_PACKAGE }] },
     });
 
-    const result = await run({ command: 'plan', cwd: consumer.root });
+    const result = await run({ command: 'plan', ...consumer.door });
 
     // Сосед держится за него глубоким путём в наш `src/lib` (`tasker:BASER2-59`).
     // Пока хелпер не отдан наружу, любая перекладка наших тестовых файлов
@@ -338,7 +345,7 @@ describe('отказ набора доезжает до человека чит�
     });
     consumer.installSource(rival);
 
-    const result = await run({ command: 'plan', cwd: consumer.root });
+    const result = await run({ command: 'plan', ...consumer.door });
     const text = renderText(result);
 
     expect(result.status).toBe('refused');

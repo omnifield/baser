@@ -67,7 +67,7 @@ async function placed(): Promise<Consumer> {
     config: CONFIG,
     tuning: { [DEVBOX_ID]: OMNIFIELD },
   });
-  await run({ command: 'apply', cwd: consumer.root });
+  await run({ command: 'apply', ...consumer.door });
   return consumer;
 }
 
@@ -103,7 +103,7 @@ describe('ПЕРЕЕЗД ПОСЧИТАННОГО: настройка смени
     // человек наполнял руками, лежит теперь не по тому адресу.
     const box = await movedUser();
 
-    const text = renderText(await run({ command: 'plan', cwd: box.root }));
+    const text = renderText(await run({ command: 'plan', ...box.door }));
 
     expect(text).toContain('/home/node/.secrets');
     expect(text).toContain('/home/vscode/.secrets');
@@ -119,7 +119,7 @@ describe('ПЕРЕЕЗД ПОСЧИТАННОГО: настройка смени
   it('названо ДО плана: человек читает цену раньше решения', async () => {
     const box = await movedUser();
 
-    const text = renderText(await run({ command: 'plan', cwd: box.root }));
+    const text = renderText(await run({ command: 'plan', ...box.door }));
 
     expect(text.indexOf('ПОСЧИТАННОЕ')).toBeGreaterThan(-1);
     expect(text.indexOf('ПОСЧИТАННОЕ')).toBeLessThan(text.indexOf('шагов:'));
@@ -131,7 +131,7 @@ describe('ПЕРЕЕЗД ПОСЧИТАННОГО: настройка смени
     // исчезнет, — и настройку, от которой оно посчитано.
     const box = await movedUser();
 
-    const { derived } = soleRun(await run({ command: 'plan', cwd: box.root }));
+    const { derived } = soleRun(await run({ command: 'plan', ...box.door }));
 
     expect(derived.length).toBeGreaterThan(0);
     expect(new Set(derived.map((move) => move.key))).toEqual(
@@ -150,7 +150,7 @@ describe('ПЕРЕЕЗД ПОСЧИТАННОГО: настройка смени
     // нет, значит и говорить нечего.
     const box = await movedUser();
 
-    const { derived } = soleRun(await run({ command: 'plan', cwd: box.root }));
+    const { derived } = soleRun(await run({ command: 'plan', ...box.door }));
 
     expect(derived.some((move) => move.placed.includes('typescript'))).toBe(
       false,
@@ -173,7 +173,7 @@ export function devboxName() { return 'weber-devbox'; }
 export function latestStableNode() { return '24'; }
 `);
 
-    const { derived } = soleRun(await run({ command: 'plan', cwd: box.root }));
+    const { derived } = soleRun(await run({ command: 'plan', ...box.door }));
 
     expect(derived.some((move) => move.placed === 'baser-devbox')).toBe(false);
     // Алиас при этом переезжает по-настоящему, и посчитанное от него названо:
@@ -195,7 +195,7 @@ export function latestStableNode() { return '24'; }
       tuning: { [DEVBOX_ID]: OMNIFIELD },
     });
 
-    const result = await run({ command: 'plan', cwd: consumer.root });
+    const result = await run({ command: 'plan', ...consumer.door });
 
     expect(soleRun(result).derived).toEqual([]);
     expect(renderText(result)).not.toContain('ПОСЧИТАННОЕ');
@@ -206,7 +206,7 @@ describe('ЧТО ОСТАЁТСЯ ЧЕЛОВЕКУ: дверь переписы�
   it('план говорит, что применением работа НЕ КОНЧИТСЯ', async () => {
     const box = await movedUser();
 
-    const text = renderText(await run({ command: 'plan', cwd: box.root }));
+    const text = renderText(await run({ command: 'plan', ...box.door }));
 
     expect(text).toContain('остаётся человеку');
     // Три утверждения, и каждое отвечает на свой конец находки: контейнер надо
@@ -223,7 +223,7 @@ describe('ЧТО ОСТАЁТСЯ ЧЕЛОВЕКУ: дверь переписы�
     // этот момент человек обязан прочитать, что контейнер живёт по-старому.
     const box = await movedUser();
 
-    const text = renderText(await run({ command: 'apply', cwd: box.root }));
+    const text = renderText(await run({ command: 'apply', ...box.door }));
 
     expect(text).toContain('применено и записано на диск — и только на диск');
     expect(text).toContain('остаётся человеку');
@@ -238,7 +238,7 @@ describe('ЧТО ОСТАЁТСЯ ЧЕЛОВЕКУ: дверь переписы�
     });
 
     const text = renderText(
-      await run({ command: 'apply', cwd: consumer.root }),
+      await run({ command: 'apply', ...consumer.door }),
     );
 
     expect(text).not.toContain('остаётся человеку');
@@ -252,7 +252,7 @@ describe('ЧТО ОСТАЁТСЯ ЧЕЛОВЕКУ: дверь переписы�
     // работать. Пересоздание при этом остаётся человеку ВСЕГДА.
     const box = await bumpedTemplate();
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
     const text = renderText(result);
 
     // Предмет наступил: файл, который уже лежал, будет переписан.
@@ -289,7 +289,7 @@ describe('ЧТО ИЗ ЧУЖОГО ФАЙЛА НЕ ВОСПРОИЗВЕДЁТС�
     // именно лишится. Теперь знает — и узнаёт это раньше `--confirm`.
     const box = occupied();
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
     const text = renderText(result);
     const [difference] = soleRun(result).differences;
 
@@ -315,7 +315,7 @@ describe('ЧТО ИЗ ЧУЖОГО ФАЙЛА НЕ ВОСПРОИЗВЕДЁТС�
     // именно поэтому механизм работает для любого: она сверяет строки.
     const box = occupied('# мой файл\nэто вообще не JSON\nи вторая строка\n');
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
     const [difference] = soleRun(result).differences;
 
     expect(difference.gone).toEqual([
@@ -333,7 +333,7 @@ describe('ЧТО ИЗ ЧУЖОГО ФАЙЛА НЕ ВОСПРОИЗВЕДЁТС�
     const lines = Array.from({ length: 40 }, (_, index) => `строка ${index}`);
     const box = occupied(`${lines.join('\n')}\n`);
 
-    const short = await run({ command: 'plan', cwd: box.root });
+    const short = await run({ command: 'plan', ...box.door });
     const [cut] = soleRun(short).differences;
 
     expect(cut.goneCount).toBe(40);
@@ -343,7 +343,7 @@ describe('ЧТО ИЗ ЧУЖОГО ФАЙЛА НЕ ВОСПРОИЗВЕДЁТС�
 
     const whole = await run({
       command: 'plan',
-      cwd: box.root,
+      ...box.door,
       difference: true,
     });
     const [full] = soleRun(whole).differences;
@@ -357,7 +357,7 @@ describe('ЧТО ИЗ ЧУЖОГО ФАЙЛА НЕ ВОСПРОИЗВЕДЁТС�
     // починить один вход и оставить открытым соседний — это не починка.
     consumer = installDevbox({ config: CONFIG, existing: { [LIVE]: THEIRS } });
 
-    const result = await run({ command: 'plan', cwd: consumer.root });
+    const result = await run({ command: 'plan', ...consumer.door });
 
     expect(soleRun(result).differences[0]?.gone).toContain(
       '  "forwardPorts": [3000, 4873],',
@@ -375,7 +375,7 @@ describe('ЧТО ИЗ ЧУЖОГО ФАЙЛА НЕ ВОСПРОИЗВЕДЁТС�
 
     const result = await run({
       command: 'plan',
-      cwd: box.root,
+      ...box.door,
       confirm: [LIVE],
     });
 
@@ -403,7 +403,7 @@ describe('ЧТО ИЗ ЧУЖОГО ФАЙЛА НЕ ВОСПРОИЗВЕДЁТС�
       templates: { 'harness.yaml': 'обвес: <%- "мой" %>\n' },
     });
 
-    const result = await run({ command: 'plan', cwd: consumer.root });
+    const result = await run({ command: 'plan', ...consumer.door });
     const agents = result.runs.find(
       (item) => item.source.id === 'omnifield/agents',
     );
@@ -424,7 +424,7 @@ describe('ЧТО ИЗ ЧУЖОГО ФАЙЛА НЕ ВОСПРОИЗВЕДЁТС�
     // (`tasker:BASER2-135`).
     const box = occupied();
 
-    const text = renderText(await run({ command: 'plan', cwd: box.root }));
+    const text = renderText(await run({ command: 'plan', ...box.door }));
 
     expect(text).toContain('чужой здесь тот файл, которым обвес НЕ владеет');
   });
@@ -436,10 +436,10 @@ describe('ЧТО ИЗ ЧУЖОГО ФАЙЛА НЕ ВОСПРОИЗВЕДЁТС�
     // невыполненное обещание, а ответ лежал в справке.
     const box = await placed();
 
-    const silent = await run({ command: 'plan', cwd: box.root });
+    const silent = await run({ command: 'plan', ...box.door });
     const asked = await run({
       command: 'plan',
-      cwd: box.root,
+      ...box.door,
       difference: true,
     });
 
@@ -463,10 +463,10 @@ describe('ЧТО ИЗ ЧУЖОГО ФАЙЛА НЕ ВОСПРОИЗВЕДЁТС�
       `${Array.from({ length: 40 }, (_, index) => `строка ${index}`).join('\n')}\n`,
     );
 
-    const short = await run({ command: 'plan', cwd: box.root });
+    const short = await run({ command: 'plan', ...box.door });
     const whole = await run({
       command: 'plan',
-      cwd: box.root,
+      ...box.door,
       difference: true,
     });
 

@@ -24,12 +24,12 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { run } from '../../baser-cli/src/index.ts';
 import {
   consumerConfig,
   installConsumer,
   LIVE,
   parseJsonc,
+  run,
   tuning,
 } from './packed.mjs';
 

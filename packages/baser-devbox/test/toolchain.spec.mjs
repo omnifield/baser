@@ -33,13 +33,14 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { run, soleRun } from '../../baser-cli/src/index.ts';
+import { soleRun } from '../../baser-cli/src/index.ts';
 import {
   consumerConfig,
   installConsumer,
   LIVE,
   packedManifest,
   parseJsonc,
+  run,
   tuning,
   tuningPath,
 } from './packed.mjs';

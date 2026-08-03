@@ -90,7 +90,7 @@ describe('ЦЕЛЬ ИТЕРАЦИИ: поставил пакет → позва�
   it('живой devcontainer.json (JSONC) ложится — класс файла больше не условие владения', async () => {
     const box = clean();
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     // Комментарии разрешены спецификацией Dev Containers, и обвес их несёт.
     // Раньше это упиралось в `unmarkable-dest`: доказать владение JSON-файлом
@@ -101,14 +101,14 @@ describe('ЦЕЛЬ ИТЕРАЦИИ: поставил пакет → позва�
     expect(box.read(LIVE)).toContain('// baser-devbox — Ф2');
 
     // Второй прогон сходится: артефакт с комментариями опознаётся своим.
-    expect((await run({ command: 'apply', cwd: box.root })).status).toBe(
+    expect((await run({ command: 'apply', ...box.door })).status).toBe(
       'converged',
     );
   });
 
   it('render: false ложится БАЙТ В БАЙТ — движок содержимого не трогает', async () => {
     const box = clean();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     const template = readFileSync(
       join(box.sourceRoot, 'template/devcontainer-lock.json'),
@@ -141,7 +141,7 @@ describe('СВЕРКА С ЖИВЫМ РЕПОЗИТОРИЕМ: baser стоит 
   it('оба артефакта совпадают с живыми БАЙТ В БАЙТ, без единого исключения', async () => {
     const box = asLive();
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('applied');
     // Ни `withoutLine`, ни списка прощённых строк: пока живой файл был
@@ -174,7 +174,7 @@ describe('переход: чистое дерево → обвес разлож�
   it('артефакт лёг на ДИСК и записан в манифест', async () => {
     const box = clean();
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('applied');
     expect(result.writes.map((write) => write.path).sort()).toEqual(
@@ -193,7 +193,7 @@ describe('переход: чистое дерево → обвес разлож�
 
   it('подстановка не экранирует под HTML — кавычка осталась кавычкой', async () => {
     const box = clean();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     const landed = box.read(LIVE) ?? '';
 
     expect(landed).not.toContain('&#34;');
@@ -204,10 +204,10 @@ describe('переход: чистое дерево → обвес разлож�
 describe('переход: тот же прогон второй раз', () => {
   it('сошлось — ни шага, и диск не тронут', async () => {
     const box = clean();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     const after = box.read(LIVE);
 
-    const again = await run({ command: 'apply', cwd: box.root });
+    const again = await run({ command: 'apply', ...box.door });
 
     // Операционное определение сходимости: второй прогон не порождает шагов.
     expect(again.status).toBe('converged');
@@ -220,13 +220,13 @@ describe('переход: тот же прогон второй раз', () => {
 describe('переход: пресет убран из файла настроек', () => {
   it('значение возвращается к дефолту обвеса, и артефакт догоняет', async () => {
     const box = clean();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     expect(box.read(LIVE)).toContain('--network=omnifield-gateway');
 
     // Пресет убирается ТАМ, где человек его и выбирал, — в файле на инструмент.
     box.tune(DEVBOX_ID, { presets: [] });
 
-    const plan = await run({ command: 'plan', cwd: box.root });
+    const plan = await run({ command: 'plan', ...box.door });
     const network = soleRun(plan).settings.find(
       (setting) => setting.key === 'network',
     );
@@ -234,7 +234,7 @@ describe('переход: пресет убран из файла настрое
     expect(network?.chain).toEqual([{ kind: 'default', value: null }]);
     expect(network?.moved).toBe(false);
 
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     // Артефакт перегенерирован целиком: слой пресета не развернулся вовсе.
     expect(box.read(LIVE)).not.toContain('--network=');
     expect(box.read(LIVE)).not.toContain('mounts');
@@ -248,7 +248,7 @@ describe('переход: обвес обновился, дефолт подня
     // ожиданий, каждое из которых выглядит самостоятельным.
     const box = clean();
 
-    const result = await run({ command: 'plan', cwd: box.root });
+    const result = await run({ command: 'plan', ...box.door });
 
     const tag = soleRun(result).settings.find(
       (setting) => setting.key === 'imageTag',
@@ -259,13 +259,13 @@ describe('переход: обвес обновился, дефолт подня
 
   it('движение названо ДО применения, и артефакт догоняет эталон', async () => {
     const box = clean();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     expect(box.read(LIVE)).toContain(`typescript-node:${PINNED_NODE}`);
 
     box.updateResolvers(BUMPED_RESOLVERS);
 
     // Сначала ПЛАН: движение обязано быть названо до того, как что-то поедет.
-    const plan = await run({ command: 'plan', cwd: box.root });
+    const plan = await run({ command: 'plan', ...box.door });
     const tag = soleRun(plan).settings.find(
       (setting) => setting.key === 'imageTag',
     );
@@ -275,7 +275,7 @@ describe('переход: обвес обновился, дефолт подня
     // Названо — и не применено: команда `plan` дерева не трогает.
     expect(box.read(LIVE)).toContain(`typescript-node:${PINNED_NODE}`);
 
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     expect(box.read(LIVE)).toContain(`typescript-node:${MOVED_NODE}`);
   });
 
@@ -289,10 +289,10 @@ describe('переход: обвес обновился, дефолт подня
         },
       },
     });
-    await run({ command: 'apply', cwd: consumer.root });
+    await run({ command: 'apply', ...consumer.door });
 
     consumer.updateResolvers(BUMPED_RESOLVERS);
-    await run({ command: 'apply', cwd: consumer.root });
+    await run({ command: 'apply', ...consumer.door });
 
     // Дефолт под ним уехал вперёд — значение осталось: подниматься неоткуда,
     // движок в конфиг пользователя не пишет.
@@ -303,19 +303,19 @@ describe('переход: обвес обновился, дефолт подня
 describe('переход: артефакт правили руками', () => {
   it('перегенерируется целиком — правка не переживает, и это названо', async () => {
     const box = clean();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     const landed = box.read(LIVE) as string;
     box.write(LIVE, `${landed}\n// правка руками\n`);
 
-    const plan = await run({ command: 'plan', cwd: box.root });
+    const plan = await run({ command: 'plan', ...box.door });
     const [step] = soleRun(plan).plan?.steps ?? [];
 
     expect(step.reason).toBe('diverged');
     // Потери названы ДО применения: прежнее содержимое едет в плане данными.
     expect(step.previous).toContain('правка руками');
 
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     expect(box.read(LIVE)).toBe(landed);
   });
 });
@@ -323,7 +323,7 @@ describe('переход: артефакт правили руками', () => {
 describe('переход: запись ушла из раскладки', () => {
   it('артефакт снимается с ДИСКА, а не только из виртуального дерева', async () => {
     const box = clean();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     expect(box.exists(LIVE)).toBe(true);
 
     box.updateSource((block) => {
@@ -331,7 +331,7 @@ describe('переход: запись ушла из раскладки', () => 
       block['layout'] = layout.filter((item) => !item.src.endsWith('.ejs'));
     });
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(soleRun(result).plan?.steps[0].reason).toBe('orphan');
     expect(result.writes).toContainEqual({ path: LIVE, kind: 'DELETE' });
@@ -341,7 +341,7 @@ describe('переход: запись ушла из раскладки', () => 
     // И запись о снятом артефакте ушла вместе с ним: манифест, помнящий то,
     // чего нет, — это ровно та наклейка, которая устаревала и врала.
     expect(manifestOf(box).map((record) => record.dest)).toEqual([LOCK]);
-    expect((await run({ command: 'apply', cwd: box.root })).status).toBe(
+    expect((await run({ command: 'apply', ...box.door })).status).toBe(
       'converged',
     );
   });
@@ -350,7 +350,7 @@ describe('переход: запись ушла из раскладки', () => 
 describe('переход: запись разошлась с объявлением, а содержимое то же', () => {
   it('приведение записи — ШАГ, а не тихая правка на применении', async () => {
     const box = clean();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     const landed = box.read(LIVE);
 
     // Тот же шаблон под другим именем: артефакт выйдет байт в байт тем же, а
@@ -370,7 +370,7 @@ describe('переход: запись разошлась с объявлени�
       }
     });
 
-    const plan = await run({ command: 'plan', cwd: box.root });
+    const plan = await run({ command: 'plan', ...box.door });
 
     // Совпадение содержимого — НЕ повод промолчать: план, скрывший работу,
     // которую всё равно сделает, рапортует сходимость там, где её нет (Д10).
@@ -379,7 +379,7 @@ describe('переход: запись разошлась с объявлени�
     ).toEqual(['record/reclaimed']);
     expect(plan.status).toBe('pending');
 
-    const applied = await run({ command: 'apply', cwd: box.root });
+    const applied = await run({ command: 'apply', ...box.door });
 
     // Тронута ТОЛЬКО служебная запись: содержимое артефакта уже целевое.
     expect(applied.writes).toEqual([{ path: MANIFEST_PATH, kind: 'UPDATE' }]);
@@ -388,7 +388,7 @@ describe('переход: запись разошлась с объявлени�
       expect.objectContaining({ dest: LIVE, src: 'renamed.ejs' }),
     );
     // И сходится со второго прогона, а не колеблется вечно.
-    expect((await run({ command: 'apply', cwd: box.root })).status).toBe(
+    expect((await run({ command: 'apply', ...box.door })).status).toBe(
       'converged',
     );
   });
@@ -399,7 +399,7 @@ describe('переход: на месте артефакта лежит чужо
     const box = clean();
     box.write(LIVE, '// чужой файл\n{"name":"не наш"}\n');
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('blocked');
     expect(soleRun(result).plan?.conflicts[0].kind).toBe('foreign-dest');
@@ -416,7 +416,7 @@ describe('переход: на месте артефакта лежит чужо
     // Подтверждаем ОДИН артефакт из двух чужих.
     const result = await run({
       command: 'apply',
-      cwd: box.root,
+      ...box.door,
       confirm: [LIVE],
     });
 
@@ -430,7 +430,7 @@ describe('переход: на месте артефакта лежит чужо
     // Подтверждаем оба — и оба берутся во владение как усыновлённые.
     const both = await run({
       command: 'apply',
-      cwd: box.root,
+      ...box.door,
       confirm: [LIVE, LOCK],
     });
     expect(both.status).toBe('applied');
@@ -449,13 +449,13 @@ describe('переход: на месте артефакта лежит чужо
 describe('переход: служебная запись потеряна или битая', () => {
   it('ПОТЕРЯНА: движок объявляет артефакты чужими, а причину называет дверь', async () => {
     const box = clean();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     expect(box.exists(MANIFEST_PATH)).toBe(true);
 
     // Файл обязан коммититься. Убрали — и владение стало недоказуемым.
     box.remove(MANIFEST_PATH);
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     // Движок прав: без записи артефакты чужие, перезаписывать их молча нельзя.
     expect(result.status).toBe('blocked');
@@ -489,23 +489,23 @@ describe('переход: служебная запись потеряна ил�
     // Обещание в тексте отказа — такой же контракт, как код: непроверенное,
     // оно тихо протухнет, и человек пойдёт по нему в тупик.
     const box = clean();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
     box.remove(MANIFEST_PATH);
 
-    const blocked = await run({ command: 'apply', cwd: box.root });
+    const blocked = await run({ command: 'apply', ...box.door });
     const dests =
       soleRun(blocked).plan?.conflicts.map((conflict) => conflict.dest) ?? [];
 
     const fixed = await run({
       command: 'apply',
-      cwd: box.root,
+      ...box.door,
       confirm: dests,
     });
 
     expect(fixed.status).toBe('applied');
     expect(box.exists(MANIFEST_PATH)).toBe(true);
     // Запись родилась заново, и прогон следом сходится — владение вернулось.
-    expect((await run({ command: 'apply', cwd: box.root })).status).toBe(
+    expect((await run({ command: 'apply', ...box.door })).status).toBe(
       'converged',
     );
     // Содержимое при этом не пострадало: усыновление, а не перезапись вслепую.
@@ -523,7 +523,7 @@ describe('переход: служебная запись потеряна ил�
       existing: { [LIVE]: '{\n  "name": "свой, руками"\n}\n' },
     });
 
-    const blocked = await run({ command: 'plan', cwd: consumer.root });
+    const blocked = await run({ command: 'plan', ...consumer.door });
     const message =
       blocked.problems.find((problem) => problem.code === 'manifest-missing')
         ?.message ?? '';
@@ -538,7 +538,7 @@ describe('переход: служебная запись потеряна ил�
 
     const fixed = await run({
       command: 'apply',
-      cwd: consumer.root,
+      ...consumer.door,
       confirm: [LIVE],
     });
 
@@ -552,7 +552,7 @@ describe('переход: служебная запись потеряна ил�
   it('ПЕРВЫЙ ПРОГОН молчит: записи нет и там, а кричать не о чем', async () => {
     // То же отсутствие манифеста, но артефактов на диске нет — это норма, а не
     // потеря. Условие обязано их различать, иначе сообщение кричит каждому.
-    const result = await run({ command: 'plan', cwd: clean().root });
+    const result = await run({ command: 'plan', ...clean().door });
 
     expect(result.problems).toEqual([]);
     expect(result.status).toBe('pending');
@@ -564,7 +564,7 @@ describe('переход: служебная запись потеряна ил�
     // перестаёт читаться.
     consumer = installDevbox();
 
-    const result = await run({ command: 'plan', cwd: consumer.root });
+    const result = await run({ command: 'plan', ...consumer.door });
 
     expect(result.config.existed).toBe(false);
     expect(result.problems).toEqual([]);
@@ -573,11 +573,11 @@ describe('переход: служебная запись потеряна ил�
 
   it('БИТАЯ: отказ движка приходит СВОИМ кодом, а не «что-то не так»', async () => {
     const box = clean();
-    await run({ command: 'apply', cwd: box.root });
+    await run({ command: 'apply', ...box.door });
 
     box.write(MANIFEST_PATH, '{ это не JSON\n');
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('refused');
     const [problem] = result.problems;
@@ -606,7 +606,7 @@ describe('ПЕРВАЯ УСТАНОВКА В НЕПУСТОЙ РЕПОЗИТОР
   it('это НЕ потеря: человека не посылают искать то, чего не было', async () => {
     const box = occupied();
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('blocked');
     const named = result.problems.find(
@@ -629,7 +629,7 @@ describe('ПЕРВАЯ УСТАНОВКА В НЕПУСТОЙ РЕПОЗИТОР
   });
 
   it('оба выхода названы, и цена согласия названа вместе с ним', async () => {
-    const result = await run({ command: 'plan', cwd: occupied().root });
+    const result = await run({ command: 'plan', ...occupied().door });
     const message =
       result.problems.find((problem) => problem.code === 'first-install')
         ?.message ?? '';
@@ -649,7 +649,7 @@ describe('ПЕРВАЯ УСТАНОВКА В НЕПУСТОЙ РЕПОЗИТОР
     // Спасла его не формулировка, а сам отказ трогать чужой файл. Подстраховка
     // при этом снимается одним `--confirm`: поверивший снимает её ровно в тот
     // момент, когда теряет значения (`tasker:BASER2-106`).
-    const result = await run({ command: 'plan', cwd: occupied().root });
+    const result = await run({ command: 'plan', ...occupied().door });
     const message =
       result.problems.find((problem) => problem.code === 'first-install')
         ?.message ?? '';
@@ -662,7 +662,7 @@ describe('ПЕРВАЯ УСТАНОВКА В НЕПУСТОЙ РЕПОЗИТОР
   });
 
   it('ГРАНИЦА регулировки названа, и сверка стоит ДО подтверждения', async () => {
-    const result = await run({ command: 'plan', cwd: occupied().root });
+    const result = await run({ command: 'plan', ...occupied().door });
     const message =
       result.problems.find((problem) => problem.code === 'first-install')
         ?.message ?? '';
@@ -686,7 +686,7 @@ describe('ПЕРВАЯ УСТАНОВКА В НЕПУСТОЙ РЕПОЗИТОР
 
     const fixed = await run({
       command: 'apply',
-      cwd: box.root,
+      ...box.door,
       confirm: [LIVE],
     });
 
@@ -698,20 +698,22 @@ describe('ПЕРВАЯ УСТАНОВКА В НЕПУСТОЙ РЕПОЗИТОР
     expect(manifestOf(box)).toContainEqual(
       expect.objectContaining({ dest: LIVE, source: 'omnifield/devbox' }),
     );
-    expect((await run({ command: 'apply', cwd: box.root })).status).toBe(
+    expect((await run({ command: 'apply', ...box.door })).status).toBe(
       'converged',
     );
   });
 
   it('ОБЕЩАНИЕ 2: снял обвес — baser сюда больше не целится', async () => {
     const box = occupied();
-    await run({ command: 'plan', cwd: box.root });
+    await run({ command: 'plan', ...box.door });
 
     // Второй выход из сообщения. Он должен работать так же буквально, как
-    // первый, иначе выбор был бы предложен нечестно.
-    box.remove('node_modules/@omnifield/baser-devbox');
+    // первый, иначе выбор был бы предложен нечестно. «Снял обвес» теперь значит
+    // «перестал его называть»: поставку достаёт дверь, и каталог поставки
+    // называет человек (`tasker:BASER2-146`).
+    box.removeSource(DEVBOX_PACKAGE);
 
-    const result = await run({ command: 'apply', cwd: box.root });
+    const result = await run({ command: 'apply', ...box.door });
 
     expect(result.status).toBe('no-sources');
     expect(result.problems).toEqual([]);

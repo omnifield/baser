@@ -33,13 +33,13 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
-import { run } from '../../baser-cli/src/index.ts';
 import { containerEnv } from './env.mjs';
 import {
   consumerConfig,
   installConsumer,
   LIVE,
   parseJsonc,
+  run,
   tuning,
 } from './packed.mjs';
 

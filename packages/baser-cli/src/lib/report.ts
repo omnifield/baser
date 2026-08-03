@@ -24,6 +24,7 @@ import type {
   DoorCommand,
   DoorResult,
   SourceConfigReport,
+  SourceReport,
   SourceRun,
 } from './result.js';
 import type { DerivedMove } from './derived.js';
@@ -147,6 +148,7 @@ function renderRun(run: SourceRun, command: DoorResult['command']): string[] {
       ? `  пакет ${source.packageName} — версия не названа обвесом: ` +
         'в паспорт укладки ляжет "null"'
       : `  пакет ${source.packageName}@${source.packageVersion}`,
+    `  поставка ${describeSupply(source.supply)}`,
     `  шаблоны ${
       source.location.kind === 'in-tree'
         ? source.location.path
@@ -178,6 +180,45 @@ function renderRun(run: SourceRun, command: DoorResult['command']): string[] {
   lines.push(...renderDifferences(run.differences));
 
   return lines;
+}
+
+/**
+ * ОТКУДА ВЗЯЛАСЬ ПОСТАВКА — строкой, которую человек читает ДО применения.
+ *
+ * Поставку достаёт дверь (`kb:BASER2-22`), то есть версию выбирает она же, а не
+ * чужой лок-файл. Выбор, о котором человек узнаёт постфактум, — это молча
+ * поднятый дефолт другими словами, и лечится он тем же: движение называется
+ * раньше решения.
+ *
+ * Каждое из четырёх состояний говорит РАЗНОЕ действие, поэтому и печатается
+ * врозь: закреплённую версию двигают правкой перечня, взятую из паспорта —
+ * закреплением или снятием записи, последнюю — закреплением, а дев-петлю не
+ * двигают вовсе, она про каталог.
+ */
+function describeSupply(supply: SourceReport['supply']): string {
+  const store = supply.fetched
+    ? 'достали со склада'
+    : 'взята из кэша — на склад в этом прогоне не ходили';
+
+  switch (supply.origin.kind) {
+    case 'local':
+      return (
+        `каталог ${supply.origin.path} — дев-петля: назван флагом --source, ` +
+        'склад не спрашивали'
+      );
+    case 'pinned':
+      return `${supply.origin.version} — закреплена в baser.json; ${store}`;
+    case 'recorded':
+      return (
+        `${supply.origin.version} — этой версией уже разложено по паспорту ` +
+        `укладки; ${store}. Другую возьмёт только закреплённая в baser.json`
+      );
+    case 'latest':
+      return (
+        `${supply.origin.version} — ПОСЛЕДНЯЯ доступная на складе: в baser.json ` +
+        `версия не закреплена; ${store}. Применение закрепит её паспортом укладки`
+      );
+  }
 }
 
 /**
