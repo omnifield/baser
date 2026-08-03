@@ -388,6 +388,100 @@ describe('второй обвес при живой записи: отказ е�
   });
 });
 
+/**
+ * У КЛАССА ОДИН ИСТОЧНИК ТАМ, ГДЕ ДВИЖОК ЕГО СКАЗАЛ (`tasker:BASER2-143`).
+ *
+ * Движок называет класс полем записи конфликта (`tasker:BASER2-141`) — он его
+ * исполняет, значит он его и знает. Дверь до этой правки считала его сама,
+ * пересечением раскладок с путями отказов: два источника одной истины, которые
+ * сегодня отвечают одинаково и разойдутся молча.
+ *
+ * **Чего эта проба НЕ может и что вместо этого делает.** Развести ответы
+ * поведением сегодня нечем: класс в конфликте движок выводит из той же записи
+ * раскладки, которую читала дверь, — прогон, где они расходятся, не собирается.
+ * Поэтому проба берёт источником истины ОТВЕТ ДВИЖКА и пинует ОТНОШЕНИЕ: пути,
+ * названные в тексте положенными однажды, обязаны быть ровно теми, которые
+ * назвал полем `class` он. Дверь, вернувшаяся к собственному счёту, покраснеет
+ * в тот день, когда счёты разойдутся, — а не промолчит.
+ *
+ * Оба конца границы закрыты врозь, потому что и правило двустороннее: есть
+ * отказ — класс из него; отказа нет — дверь считает сама, спросить некого.
+ */
+describe('класс у отказов двери — слово движка, а не свой счёт', () => {
+  const MINE = 'product: weber\nzones:\n  cli: [packages/weber-cli]\n';
+
+  /** Смешанный набор: `placed-once` и `regenerated` в одном отказе. */
+  async function contested(): Promise<Consumer> {
+    consumer = installDevbox({ declareDependency: false, existing: {} });
+    consumer.installSource(AGENTS);
+    consumer.write(HARNESS, MINE);
+    consumer.write(POLICY, '# моя рамка\n');
+    return consumer;
+  }
+
+  it('КОНЕЦ ПЕРВЫЙ: движок класс назвал — текст говорит ровно его слово', async () => {
+    const box = await contested();
+
+    const blocked = await run({ command: 'plan', ...box.door });
+    const conflicts = (
+      runOf(blocked, AGENTS_ID).plan?.conflicts ?? []
+    ).filter((conflict) => conflict.kind === 'foreign-dest');
+
+    // Вход двери существует: без него разговора нет вовсе, и молчаливое
+    // «поля не оказалось» вернуло бы дверь к собственному счёту незаметно.
+    expect(conflicts.length).toBeGreaterThan(0);
+    for (const conflict of conflicts) {
+      expect(conflict.class).toBeDefined();
+    }
+
+    // Ожидание строится ИЗ ОТВЕТА ДВИЖКА, а не из объявления обвеса: иначе
+    // проба сверяла бы дверь с тем же материалом, от которого она уходит.
+    const once = conflicts
+      .filter((conflict) => conflict.class === 'placed-once')
+      .map((conflict) => conflict.dest);
+    const regenerated = conflicts
+      .filter((conflict) => conflict.class !== 'placed-once')
+      .map((conflict) => conflict.dest);
+    expect(once).toEqual([HARNESS]);
+    expect(regenerated).toEqual([POLICY]);
+
+    const message =
+      blocked.problems.find((problem) => problem.code === 'first-install')
+        ?.message ?? '';
+
+    // Цена названа врозь и поимённо — и стороны совпадают со словом движка.
+    expect(message).toContain(`Положенные однажды (${once.join(' · ')})`);
+    expect(message).toContain(`Перегенерируемые (${regenerated.join(' · ')})`);
+    expect(message).toContain('СОДЕРЖИМОЕ НЕ ИЗМЕНИТСЯ');
+
+    // И второй читатель того же слова — блок расхождения: `placed-once` в него
+    // не попадает вовсе, потому что содержимое такого артефакта не трогают.
+    const differences = runOf(blocked, AGENTS_ID).differences.map(
+      (item) => item.dest,
+    );
+    expect(differences).toEqual(regenerated);
+  });
+
+  it('КОНЕЦ ВТОРОЙ: отказа нет — дверь считает класс сама, спросить некого', async () => {
+    // Телеметрия «чем шёл прогон» пишется ДО всякого плана: конфликтов не
+    // существует, а ответ нужен. Собственное вычисление здесь не остаток и не
+    // дубль — снести его как повтор значит унести счётчик насовсем.
+    const box = withAgents();
+
+    const result = await run({ command: 'apply', ...box.door });
+
+    expect(
+      runOf(result, AGENTS_ID).plan?.conflicts.filter(
+        (conflict) => conflict.kind === 'foreign-dest',
+      ),
+    ).toEqual([]);
+    const sources = result.trace.find((span) => span.name === 'door.sources');
+    expect(
+      (sources?.detail?.['sources'] as { placedOnce: number }[])[0].placedOnce,
+    ).toBe(1);
+  });
+});
+
 describe('версия обвеса доезжает до паспорта укладки', () => {
   it('версия из манифеста пакета ложится в запись', async () => {
     const box = withAgents({ ...AGENTS, version: '1.4.2' });
