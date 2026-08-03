@@ -16,6 +16,7 @@ import { createTreeWithEmptyWorkspace } from '@nx/devkit/testing';
 import type { Declaration, LayoutEntry } from './declaration.js';
 import type { ManifestRecord } from './manifest.js';
 import { MANIFEST_PATH, readManifest, serializeManifest } from './manifest.js';
+import type { CanonSource } from './source.js';
 
 export interface WorkspaceFixtureOptions {
   readonly layout: readonly LayoutEntry[];
@@ -83,6 +84,75 @@ export function createWorkspace(
       },
       layout: options.layout,
     },
+  };
+}
+
+/**
+ * Адрес поставки, забранной в кэш СНАРУЖИ локации (`tasker:BASER2-146`).
+ *
+ * Абсолютный, а не «просто другой каталог»: репо-относительным путём он
+ * невыразим, и ровно это движок проверяет, принимая источник вне дерева.
+ */
+export const OUTSIDE_ROOT = '/var/cache/omnifield/canon-kit/1.0.0/content';
+
+export interface OutsideWorkspaceFixture extends WorkspaceFixture {
+  /** Порт содержимого — им дверь подаёт достанутую поставку. */
+  readonly source: CanonSource;
+}
+
+/**
+ * Дерево, чей источник лежит ЗАВЕДОМО СНАРУЖИ (`tasker:BASER2-150`).
+ *
+ * Шаблоны в дерево не засеваются вовсе — в этом весь сценарий: содержимое живёт
+ * там, куда его положила доставка, и приезжает движку портом. Засеять их «на
+ * всякий случай» значило бы проверять не тот случай: план сошёлся бы и через
+ * дерево, и проба перестала бы отличать принятый внешний источник от источника,
+ * незаметно прочитанного изнутри.
+ */
+export function createOutsideWorkspace(
+  options: WorkspaceFixtureOptions & { readonly at?: string },
+): OutsideWorkspaceFixture {
+  const tree = createTreeWithEmptyWorkspace();
+  const at = options.at ?? OUTSIDE_ROOT;
+  const files = options.sources ?? {};
+
+  for (const [path, content] of Object.entries(options.existing ?? {})) {
+    tree.write(path, content);
+  }
+  if (options.manifest !== undefined) {
+    tree.write(
+      MANIFEST_PATH,
+      serializeManifest(
+        new Map(options.manifest.map((record) => [record.dest, record])),
+      ),
+    );
+  }
+
+  return {
+    tree,
+    source: createMapSource(files, at),
+    declaration: {
+      source: {
+        id: options.sourceId ?? SOURCE_ID,
+        contentRoot: { outside: at },
+        version:
+          options.sourceVersion === undefined
+            ? SOURCE_VERSION
+            : options.sourceVersion,
+      },
+      layout: options.layout,
+    },
+  };
+}
+
+/** Порт содержимого поверх карты «путь шаблона → текст». */
+export function createMapSource(
+  files: Readonly<Record<string, string>>,
+  at: string,
+): CanonSource {
+  return {
+    read: (src) => files[src] ?? null,
+    describe: (src) => `${at}/${src}`,
   };
 }
 

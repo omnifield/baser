@@ -20,6 +20,7 @@ export type {
   Declaration,
   LayoutEntry,
   MaterializationSource,
+  OutsideTree,
 } from './lib/declaration.js';
 
 export {
