@@ -239,6 +239,13 @@ describe('сторона потребителя: что обязательно',
     expect(result.value.sources[0].version).toBeUndefined();
   });
 
+  it('sources[].channel — НЕобязателен: отсутствие значит «канал не назван»', () => {
+    const result = parseConsumerConfig(consumerConfig());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.sources[0].channel).toBeUndefined();
+  });
+
   it('пустой перечень законен — репозиторий без обвесов это не отказ', () => {
     const result = parseConsumerConfig(consumerConfig({ sources: [] }));
     expect(result.ok).toBe(true);

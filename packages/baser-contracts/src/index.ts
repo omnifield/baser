@@ -21,6 +21,7 @@
  */
 
 export {
+  CHANNEL_SINCE,
   FORM_VERSION,
   MAP_TYPE_SINCE,
   MIN_FORM_VERSION,

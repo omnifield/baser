@@ -10,6 +10,7 @@ import {
 } from './config.js';
 import { codesOf, consumerConfig, sourceConfigFile } from './form.fixture.js';
 import {
+  CHANNEL_SINCE,
   FORM_VERSION,
   MIN_FORM_VERSION,
   PINNED_VERSION_SINCE,
@@ -223,6 +224,142 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
         consumerConfig({
           formVersion: FORM_VERSION,
           sources: [{ use: '@нет/такого-пакета', version: '999.999.999' }],
+        }),
+      );
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  describe('метка канала', () => {
+    it('ПРИНИМАЕТСЯ и доезжает до читателя формы', () => {
+      // Локация говорит «дай последнее из дев-канала», не зная номера: раньше
+      // сказать это было нечем — были точный номер и его отсутствие
+      // (`kb:BASER3-26`).
+      const result = parseConsumerConfig(
+        consumerConfig({
+          formVersion: CHANNEL_SINCE,
+          sources: [{ use: '@omnifield/baser-devbox', channel: 'dev' }],
+        }),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.sources[0]).toEqual({
+        use: '@omnifield/baser-devbox',
+        channel: 'dev',
+      });
+    });
+
+    it('ОТСУТСТВИЕ ЗАКОННО — метка не обязательнее закрепления', () => {
+      const result = parseConsumerConfig(
+        consumerConfig({ formVersion: FORM_VERSION }),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.sources[0].channel).toBeUndefined();
+    });
+
+    it('ВМЕСТЕ С НОМЕРОМ ЗАКОННЫ ОБА, и оба доезжают целыми', () => {
+      // Кто кого бьёт, называет ДВЕРЬ и говорит это вслух. Форме довольно
+      // разобрать оба и отдать наверх: отдав половину, она решила бы молча то,
+      // что решается названно.
+      const result = parseConsumerConfig(
+        consumerConfig({
+          formVersion: CHANNEL_SINCE,
+          sources: [
+            { use: '@omnifield/baser-devbox', version: '0.2.0', channel: 'dev' },
+          ],
+        }),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.sources[0]).toEqual({
+        use: '@omnifield/baser-devbox',
+        version: '0.2.0',
+        channel: 'dev',
+      });
+    });
+
+    it('МЕТКА В КОНФИГЕ ФОРМЫ 4 — «подними formVersion», а не «поля не знаю»', () => {
+      // Ровно то, ради чего ревизия и поднята: прежний baser назвал бы `channel`
+      // опечаткой и отправил человека искать её там, где её нет.
+      const problems = refusals({
+        formVersion: CHANNEL_SINCE - 1,
+        sources: [{ use: '@omnifield/baser-devbox', channel: 'dev' }],
+      });
+      expect(codesOf(problems)).toEqual([
+        `form-version-unsupported @ ${CONSUMER_CONFIG_PATH}.sources[0].channel`,
+      ]);
+      expect(problems[0].message).toContain('обнови baser');
+      expect(problems[0].message).toContain(
+        `подними "formVersion" до ${CHANNEL_SINCE}`,
+      );
+    });
+
+    it('и так же — в конфиге БЕЗ версии формы: молчание значит самую старую', () => {
+      expect(
+        codesOf(
+          refusals({
+            sources: [{ use: '@omnifield/baser-devbox', channel: 'dev' }],
+          }),
+        ),
+      ).toEqual([
+        `form-version-unsupported @ ${CONSUMER_CONFIG_PATH}.sources[0].channel`,
+      ]);
+    });
+
+    it('МУСОР ВМЕСТО МЕТКИ — свой код, а не «версия непригодна»', () => {
+      // Пустая строка, номер и то, что склад прочитает как диапазон версий:
+      // метка и номер делят у склада одно пространство имён, поэтому меткой,
+      // начинающейся с цифры, канала не назвать (сверено с npm dist-tag,
+      // 2026-08-04).
+      for (const channel of ['', '  ', '1.2.3', 'v1.4', '^1.2.0', 'dev/next']) {
+        const problems = refusals({
+          formVersion: FORM_VERSION,
+          sources: [{ use: '@omnifield/baser-devbox', channel }],
+        });
+        expect([channel, codesOf(problems)]).toEqual([
+          channel,
+          [`invalid-channel @ ${CONSUMER_CONFIG_PATH}.sources[0].channel`],
+        ]);
+      }
+      expect(
+        refusals({
+          formVersion: FORM_VERSION,
+          sources: [{ use: '@omnifield/baser-devbox', channel: '1.2.3' }],
+        })[0].message,
+      ).toContain('закрепляется полем "version"');
+    });
+
+    it('живые метки склада меткой и остаются', () => {
+      for (const channel of ['dev', 'latest', 'next', 'beta', 'next-major']) {
+        const result = parseConsumerConfig(
+          consumerConfig({
+            formVersion: FORM_VERSION,
+            sources: [{ use: '@omnifield/baser-devbox', channel }],
+          }),
+        );
+        expect([channel, result.ok]).toEqual([channel, true]);
+      }
+    });
+
+    it('метку строкой, а не числом', () => {
+      expect(
+        codesOf(
+          refusals({
+            formVersion: FORM_VERSION,
+            sources: [{ use: '@omnifield/baser-devbox', channel: 2 }],
+          }),
+        ),
+      ).toEqual([`wrong-type @ ${CONSUMER_CONFIG_PATH}.sources[0].channel`]);
+    });
+
+    it('СУЩЕСТВОВАНИЕ КАНАЛА НЕ ПРОВЕРЯЕТСЯ — про метки знает склад', () => {
+      // «Такого канала нет» — ответ склада, и приходит он из другой зоны: этот
+      // вход не читает ни сети, ни файловой системы.
+      const result = parseConsumerConfig(
+        consumerConfig({
+          formVersion: FORM_VERSION,
+          sources: [{ use: '@нет/такого-пакета', channel: 'no-such-channel' }],
         }),
       );
       expect(result.ok).toBe(true);
