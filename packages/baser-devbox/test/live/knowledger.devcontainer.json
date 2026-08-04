@@ -1,0 +1,37 @@
+{
+  "name": "omnifield-devbox",
+  "image": "ghcr.io/omnifield/devbox:v2026.07.10",
+  "remoteUser": "vscode",
+  "initializeCommand": "docker network create omnifield-gateway 2>/dev/null || true",
+  "runArgs": ["--network=omnifield-gateway", "--network-alias=knowledger"],
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.secrets/claude",
+    "NPM_CONFIG_USERCONFIG": "/home/vscode/.secrets/npmrc",
+    "GIT_CONFIG_GLOBAL": "/home/vscode/.secrets/gitconfig",
+    "GH_CONFIG_DIR": "/home/vscode/.secrets/gh"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["biomejs.biome"],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": { "source.organizeImports.biome": "explicit" },
+        "[javascript]": { "editor.defaultFormatter": "biomejs.biome" },
+        "[javascriptreact]": { "editor.defaultFormatter": "biomejs.biome" },
+        "[typescript]": { "editor.defaultFormatter": "biomejs.biome" },
+        "[typescriptreact]": { "editor.defaultFormatter": "biomejs.biome" },
+        "[json]": { "editor.defaultFormatter": "biomejs.biome" },
+        "[jsonc]": { "editor.defaultFormatter": "biomejs.biome" },
+        "typescript.tsdk": "node_modules/typescript/lib"
+      }
+    }
+  },
+  "mounts": [
+    "source=omnifield-pnpm-store,target=/home/vscode/.local/share/pnpm/store,type=volume",
+    "source=omnifield-secrets,target=/home/vscode/.secrets,type=volume",
+    "source=omnifield-registry,target=/omnifield-registry,type=volume",
+    "source=knowledger-data,target=/data/knowledger,type=volume"
+  ],
+  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.local/share/pnpm/store /home/vscode/.secrets && sudo chown vscode:vscode /omnifield-registry && sudo mkdir -p /data/knowledger && sudo chown -R vscode:vscode /data/knowledger && mkdir -p \"$CLAUDE_CONFIG_DIR\" && { [ -f \"$CLAUDE_CONFIG_DIR/.claude.json\" ] || printf '%s\\n' '{\"hasCompletedOnboarding\":true,\"hasTrustDialogAccepted\":true,\"theme\":\"dark\"}' > \"$CLAUDE_CONFIG_DIR/.claude.json\"; }",
+  "postStartCommand": "node scripts/devbox-publish.mjs; node scripts/devbox-services.mjs up"
+}
