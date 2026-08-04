@@ -8,6 +8,12 @@
   "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
   "remoteUser": "node",
 
+  // Сеть omnifield-gateway создаётся ДО контейнера и НА ХОСТЕ: войти в несуществующую сеть
+  // докер не даёт, и первый девбокс на чистой машине без этой строки не встаёт. Команда
+  // идемпотентна — сеть уже есть, значит не сделано ничего. Внутри контейнера здесь ещё
+  // нет ничего: его самого нет.
+  "initializeCommand": "docker network create omnifield-gateway 2>/dev/null || true",
+
   // Канон-чистые инварианты (kb:DEVOPSER-3): peer-alias в общей сети omnifield-gateway
   // (видят tasker/knowledger по имени), host-gateway, НОЛЬ host-портов (single-origin —
   // наружу только дверь :8080; verdaccio :4873 остаётся внутренним), контейнер переживает
