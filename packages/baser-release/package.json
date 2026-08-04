@@ -1,6 +1,6 @@
 {
   "name": "@omnifield/baser-release",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Инструмент выпуска baser: гейт номеров — ломающее изменение не уедет в реестр патчем, включая предвыпускные номера",
   "license": "MIT",
   "type": "module",
