@@ -90,12 +90,19 @@ function published(version: string, content: string): string {
  * заход и делался. Изображать «локацию на Go» файлом на Go незачем: значение
  * имеет отсутствие нашего, а не присутствие чужого.
  */
-function location(sources: readonly unknown[], at = 'location'): string {
+function location(
+  sources: readonly unknown[],
+  at = 'location',
+  // Форма НАЗЫВАЕТСЯ пробой, а не берётся из текущей: перечни форм 2–4 живут у
+  // потребителей и обязаны разбираться дальше (`tasker:BASER2-177`). Метка
+  // канала приехала формой 5, и записи с ней называют её сами.
+  formVersion = 4,
+): string {
   const root = join(box ?? '', at);
   mkdirSync(root, { recursive: true });
   writeFileSync(
     join(root, 'baser.json'),
-    `${JSON.stringify({ formVersion: 4, sources }, null, 2)}\n`,
+    `${JSON.stringify({ formVersion, sources }, null, 2)}\n`,
   );
   return root;
 }
@@ -359,6 +366,224 @@ describe('ЦЕПОЧКА ВЕРСИИ: что берём и почему — с�
       kind: 'pinned',
       version: '0.2.0',
     });
+  });
+});
+
+/**
+ * МЕТКА КАНАЛА: локация берёт дев-сборку, НЕ ЗНАЯ ЕЁ НОМЕРА (`kb:BASER3-26`).
+ *
+ * Предмет здесь один и он не про синтаксис: **перечень не меняется, а поставка
+ * меняется.** Ровно этого не умела дверь с двумя режимами («последняя
+ * стабильная» и «точный номер») — и на этом встал первый эталонный переезд
+ * (`tasker:BASER2-171`): чтобы взять дев-сборку, приходилось гнаться за её
+ * номером и править перечень на каждый выпуск.
+ *
+ * Склад здесь настоящий, и метка на нём тоже настоящая: `dist-tags` в описи
+ * пакета, которые менеджер читает сам. Изобразить движущийся указатель моком
+ * значило бы проверить наши представления о нём.
+ */
+describe('МЕТКА КАНАЛА: поставка берётся по указателю, а не по номеру', () => {
+  /** Перечень, называющий метку: форма 5 — та, которой метка приехала. */
+  function byChannel(channel: string, extra: Record<string, unknown> = {}) {
+    return location([{ use: SUPPLY, channel, ...extra }], 'location', 5);
+  }
+
+  it('локация берёт дев-сборку, НЕ ЗНАЯ её номера', async () => {
+    published('0.1.0', '{"stable": true}\n');
+    published('0.2.0-dev.1', '{"dev": true}\n');
+    // Метка ставится отдельным действием — так же, как выпуском в канал.
+    store?.tag(SUPPLY, 'dev', '0.2.0-dev.1');
+    const root = byChannel('dev');
+
+    const result = await run({ command: 'apply', cwd: root, cache: cache() });
+    const source = supplyOf(result);
+
+    expect(result.status).toBe('applied');
+    expect(source.supply.origin).toEqual({
+      kind: 'channel',
+      channel: 'dev',
+      version: '0.2.0-dev.1',
+    });
+    // Взята именно дев-сборка, а не последняя стабильная: содержимое своё.
+    expect(source.packageVersion).toBe('0.2.0-dev.1');
+    expect(readFileSync(join(root, DEST), 'utf-8')).toBe('{"dev": true}\n');
+  });
+
+  /**
+   * МЕТКА ПЕРЕЕХАЛА — и локация поехала за ней, не тронув ни символа в перечне.
+   *
+   * Это и есть то, ради чего поле существует. Проба судит два утверждения
+   * сразу: указатель движется (новая сборка приезжает сама) и запись паспорта
+   * его НЕ ЗАПИРАЕТ — иначе локация навсегда осталась бы на первой дев-сборке,
+   * которую поставила, то есть получила бы отказ на единственную свою просьбу.
+   */
+  it('метка ПЕРЕЕХАЛА — следующий прогон берёт новую сборку, перечень не тронут', async () => {
+    published('0.2.0-dev.1', '{"dev": 1}\n');
+    store?.tag(SUPPLY, 'dev', '0.2.0-dev.1');
+    const root = byChannel('dev');
+    await run({ command: 'apply', cwd: root, cache: cache() });
+    const before = readFileSync(join(root, 'baser.json'), 'utf-8');
+
+    published('0.2.0-dev.2', '{"dev": 2}\n');
+    store?.tag(SUPPLY, 'dev', '0.2.0-dev.2');
+    const again = await run({ command: 'apply', cwd: root, cache: cache() });
+
+    expect(supplyOf(again).supply.origin).toEqual({
+      kind: 'channel',
+      channel: 'dev',
+      version: '0.2.0-dev.2',
+    });
+    expect(readFileSync(join(root, DEST), 'utf-8')).toBe('{"dev": 2}\n');
+    // Перечень не менялся: номера в нём нет и не появилось.
+    expect(readFileSync(join(root, 'baser.json'), 'utf-8')).toBe(before);
+  });
+
+  it('ПАСПОРТ УКЛАДКИ фиксирует НОМЕР, а не метку', async () => {
+    published('0.2.0-dev.1', '{"dev": 1}\n');
+    store?.tag(SUPPLY, 'dev', '0.2.0-dev.1');
+    const root = byChannel('dev');
+
+    await run({ command: 'apply', cwd: root, cache: cache() });
+
+    const passport = readFileSync(join(root, 'baser.lock.json'), 'utf-8');
+    const manifest = JSON.parse(passport) as {
+      artifacts: { source: string; version: string }[];
+    };
+    expect(manifest.artifacts).toContainEqual(
+      expect.objectContaining({ source: SUPPLY_ID, version: '0.2.0-dev.1' }),
+    );
+    // Метки в паспорте нет ВООБЩЕ: она сдвинется, и та же укладка дала бы
+    // другое содержимое — воспроизводимости бы не осталось.
+    expect(passport).not.toContain('channel');
+  });
+
+  it('паспорт метку НЕ БЬЁТ: она про сегодня, а он про «чем уже разложено»', async () => {
+    published('0.1.0', '{"stable": true}\n');
+    published('0.2.0-dev.1', '{"dev": 1}\n');
+    store?.tag(SUPPLY, 'dev', '0.2.0-dev.1');
+    const root = byChannel('dev');
+    // Локация уже разложена стабильной — и всё равно поедет за меткой.
+    recorded(root, '0.1.0');
+
+    const result = await run({ command: 'plan', cwd: root, cache: cache() });
+
+    expect(supplyOf(result).supply.origin).toEqual({
+      kind: 'channel',
+      channel: 'dev',
+      version: '0.2.0-dev.1',
+    });
+  });
+
+  it('ВЫБОР НАЗВАН ДО ПРИМЕНЕНИЯ: и метка, и номер за ней', async () => {
+    published('0.2.0-dev.1', '{"dev": 1}\n');
+    store?.tag(SUPPLY, 'dev', '0.2.0-dev.1');
+
+    const planned = await run({
+      command: 'plan',
+      cwd: byChannel('dev'),
+      cache: cache(),
+    });
+    const text = renderText(planned);
+
+    // Одной метки мало: под ней завтра будет другая сборка. Одного номера —
+    // тоже: он не отличит закреплённую укладку от движущейся.
+    expect(text).toContain('ВЗЯТО ПО МЕТКЕ КАНАЛА');
+    expect(text).toContain('"dev"');
+    expect(text).toContain('0.2.0-dev.1');
+  });
+
+  it('ТОЧНЫЙ НОМЕР БЬЁТ МЕТКУ — и проигравшая метка названа вслух', async () => {
+    published('0.1.0', '{"stable": true}\n');
+    published('0.2.0-dev.1', '{"dev": 1}\n');
+    store?.tag(SUPPLY, 'dev', '0.2.0-dev.1');
+    const root = byChannel('dev', { version: '0.1.0' });
+
+    const result = await run({ command: 'plan', cwd: root, cache: cache() });
+
+    expect(supplyOf(result).supply.origin).toEqual({
+      kind: 'pinned',
+      version: '0.1.0',
+      beatsChannel: 'dev',
+    });
+    // Молча выбрать одно из двух слов человека нельзя: написавший channel ждёт
+    // дев-сборку и обязан узнать, почему её нет, из ответа — а не по содержимому.
+    const text = renderText(result);
+    expect(text).toContain('бьёт метку канала');
+    expect(text).toContain('"dev"');
+  });
+
+  it('МЕТКА СПРАШИВАЕТСЯ КАЖДЫЙ ПРОГОН — кэш экономит скачивание, а не вопрос', async () => {
+    published('0.2.0-dev.1', '{"dev": 1}\n');
+    store?.tag(SUPPLY, 'dev', '0.2.0-dev.1');
+    const root = byChannel('dev');
+    await run({ command: 'plan', cwd: root, cache: cache() });
+    store?.forgetRequests();
+
+    const again = await run({ command: 'plan', cwd: root, cache: cache() });
+
+    // Утверждение ПРО СКЛАД: его спросили, хотя поставка уже лежала в кэше.
+    expect(store?.requests()).toBeGreaterThan(0);
+    expect(supplyOf(again).supply.fetched).toBe(false);
+  });
+
+  /**
+   * ТОТ ЖЕ ЗАПРЕТ, ЧТО И У «КАКАЯ ПОСЛЕДНЯЯ» (`tasker:BASER2-161`).
+   *
+   * Менеджер при сетевой ошибке отдаёт устаревшую запись вместо отказа —
+   * погашенный склад отвечает `200 (cache stale)`. Для метки это ложь того же
+   * рода и на том же месте: указатель по построению движется, и вчерашний ответ
+   * про него — вчерашний. Проба судит различимость: склад погашен, кэш
+   * менеджера прогрет ЭТИМ ЖЕ прогоном (тот же адрес, тот же порт).
+   */
+  it('погашенный склад на прогретом кэше: отказ, а не вчерашний номер метки', async () => {
+    published('0.2.0-dev.1', '{"dev": 1}\n');
+    store?.tag(SUPPLY, 'dev', '0.2.0-dev.1');
+    const root = byChannel('dev');
+    const warm = await run({ command: 'plan', cwd: root, cache: cache() });
+    expect(supplyOf(warm).supply.origin).toEqual({
+      kind: 'channel',
+      channel: 'dev',
+      version: '0.2.0-dev.1',
+    });
+
+    await store?.shutdown();
+    const again = await run({ command: 'plan', cwd: root, cache: cache() });
+
+    expect(again.status).toBe('refused');
+    expect(again.problems[0].code).toBe('supply-unreachable');
+    // Номер из кэша не выдан за сегодняшний, и вопрос назван тем, каким был.
+    const text = renderText(again);
+    expect(text).not.toContain('ВЗЯТО ПО МЕТКЕ КАНАЛА');
+    expect(again.problems[0].message).toContain('метка "dev"');
+  });
+
+  /**
+   * НЕИЗВЕСТНЫЙ КАНАЛ — ОТКАЗ, А НЕ ТИХИЙ ОТКАТ НА СТАБИЛЬНУЮ.
+   *
+   * Откат выглядел бы как удачный прогон: локация разложена, кодов нет, а
+   * содержимое не то, что просили. Человек узнал бы об этом по последствиям —
+   * то есть тогда, когда объяснять их будет уже нечем.
+   */
+  it('метки у пакета нет: названы причина и метки, которые ЕСТЬ', async () => {
+    published('0.1.0', '{"stable": true}\n');
+    published('0.2.0-dev.1', '{"dev": 1}\n');
+    store?.tag(SUPPLY, 'dev', '0.2.0-dev.1');
+    const root = byChannel('development');
+
+    const result = await run({ command: 'apply', cwd: root, cache: cache() });
+
+    expect(result.status).toBe('refused');
+    const [problem] = result.problems;
+    expect(problem.code).toBe('supply-channel-unknown');
+    // Метки, которые есть, — названы: «dev» вместо «development» видно сразу.
+    expect(problem.message).toContain('dev');
+    expect(problem.message).toContain('latest');
+    // Отказ ведёт в перечень, а не за токеном: склад на связи и пакет знает.
+    expect(problem.message).not.toContain('токен');
+    expect(problem.at).toBe('baser.json.sources[0].use');
+    // И отката не случилось: на диске ничего.
+    expect(existsSync(join(root, DEST))).toBe(false);
+    expect(renderText(result)).not.toContain('ПОСЛЕДНЯЯ доступная');
   });
 });
 

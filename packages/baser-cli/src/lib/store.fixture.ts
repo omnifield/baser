@@ -62,6 +62,7 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -100,6 +101,16 @@ export interface FakeStore {
   forgetRequests(): void;
   /** Выкладывает версию поставки; возвращает каталог, из которого её собрали. */
   publish(supply: StoreSupply): string;
+  /**
+   * Ставит МЕТКУ КАНАЛА на версию — тот самый движущийся указатель.
+   *
+   * Отдельным действием от выкладки, потому что в жизни это и есть отдельное
+   * действие (`npm dist-tag add`): выпуск в канал двигает метку, а не рождает
+   * её вместе с версией. Проба, у которой метка приезжала бы с публикацией, не
+   * смогла бы показать главного — что метка ПЕРЕЕХАЛА на новую сборку, пока
+   * перечень локации не изменился ни на символ.
+   */
+  tag(packageName: string, channel: string, version: string): void;
   /** Гасит склад, не убирая выложенного: так выглядит «склад недоступен». */
   shutdown(): Promise<void>;
   close(): Promise<void>;
@@ -137,6 +148,9 @@ const server = createServer((request, response) => {
 
   const name = path.slice(1);
   const number = (value) => value.split(/[.\\-+]/).map((part) => parseInt(part, 10) || 0);
+  const tagged = existsSync(join(dir, flat(name) + '.tags.json'))
+    ? JSON.parse(readFileSync(join(dir, flat(name) + '.tags.json'), 'utf-8'))
+    : {};
   const versions = readdirSync(dir)
     .filter((file) => file.startsWith(flat(name) + '@') && file.endsWith('.json'))
     .map((file) => JSON.parse(readFileSync(join(dir, file), 'utf-8')))
@@ -159,7 +173,7 @@ const server = createServer((request, response) => {
     JSON.stringify({
       _id: name,
       name,
-      'dist-tags': { latest: versions[versions.length - 1].version },
+      'dist-tags': { latest: versions[versions.length - 1].version, ...tagged },
       versions: Object.fromEntries(versions.map((item) => [item.version, item])),
     }),
   );
@@ -259,6 +273,16 @@ export async function startStore(): Promise<FakeStore> {
         })}\n`,
       );
       return source;
+    },
+    tag(packageName, channel, version) {
+      const file = join(shelf, `${flat(packageName)}.tags.json`);
+      const tags = existsSync(file)
+        ? (JSON.parse(readFileSync(file, 'utf-8')) as Record<string, string>)
+        : {};
+      writeFileSync(
+        file,
+        `${JSON.stringify({ ...tags, [channel]: version }, null, 2)}\n`,
+      );
     },
     async shutdown() {
       if (!alive) {
