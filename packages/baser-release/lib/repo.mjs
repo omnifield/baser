@@ -102,7 +102,7 @@ export function releasedVersions(root, name) {
 }
 
 /**
- * Ломающие коммиты, задевшие каталог пакета, с указанного тега.
+ * Ломающие коммиты, задевшие каталог пакета, в окне истории `tag..until`.
  *
  * ГРАНИЦА, НАЗВАННАЯ ВСЛУХ: коммит с чужой зоной в заголовке для этого пакета
  * не считается ломающим, даже если задел его файлы. Дыра здесь есть и она
@@ -111,16 +111,23 @@ export function releasedVersions(root, name) {
  * а это не работа гейта версий; зато scope, не совпавший ни с одним пакетом
  * (`repo`, `harness`), считается общим и учитывается везде.
  *
+ * ВЕРХ ОКНА по умолчанию — `HEAD`: гейт судит то, что уезжает сейчас, и другого
+ * верха у него не бывает. Названный явно, он даёт ЗАКРЫТОЕ окно между двумя
+ * выпущенными тегами — набор коммитов в нём уже не изменится, и следующий
+ * выпуск не перепишет вердикт задним числом. Ради этого свойства верх и
+ * появился параметром: на нём стоят пробы на живой истории (`BASER2-176`).
+ *
  * @param {string} root
  * @param {string} tag
  * @param {{dir: string, zone: string}} pkg
  * @param {ReadonlySet<string>} zones
+ * @param {string} [until] верх окна — тег или ревизия; по умолчанию `HEAD`
  */
-export function breakingSince(root, tag, pkg, zones) {
+export function breakingSince(root, tag, pkg, zones, until = 'HEAD') {
   const log = git(
     root,
     'log',
-    `${tag}..HEAD`,
+    `${tag}..${until}`,
     '--format=%H%x1f%s%x1f%b%x1e',
     '--',
     pkg.dir,
