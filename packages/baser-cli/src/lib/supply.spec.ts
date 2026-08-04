@@ -398,6 +398,73 @@ describe('НЕДОСТУПНЫЙ СКЛАД — названный отказ, �
     expect(result.problems[0].message).not.toContain('токен');
   });
 
+  /**
+   * ВОПРОС ПРО СЕГОДНЯШНИЙ ДЕНЬ НЕ ОТВЕЧАЕТСЯ ВЧЕРАШНИМ ЧИСЛОМ.
+   *
+   * Проба соседнего склада (`tasker:BASER2-156`) показала механику: менеджер
+   * кэширует ответы склада по URL, а при сетевой ошибке отдаёт устаревшую
+   * запись вместо отказа — погашенный склад отвечает `200`. Для пробы это был
+   * флейк, для двери на живой машине это ЛОЖЬ: «ПОСЛЕДНЯЯ доступная» печатается,
+   * не спросив склад.
+   *
+   * Изоляцией кэша, как у склада пробы, здесь не лечится: дверь работает на
+   * машине человека с его кэшем, и кэш там обещан — он экономит скачивание.
+   * Проба поэтому судит РАЗЛИЧИМОСТЬ: склад погашен, кэш менеджера прогрет тем
+   * же прогоном (тот же адрес, тот же порт) — и ответа «последняя» не выдаётся.
+   */
+  it('НЕЗАКРЕПЛЁННАЯ версия на прогретом кэше: погашенный склад — отказ, а не вчерашнее число', async () => {
+    published('0.1.0', '{"tool": true}\n');
+    const root = location([{ use: SUPPLY }]);
+    // Прогрев: этот прогон спрашивает склад, и его ответ ложится в кэш менеджера.
+    const warm = await run({ command: 'plan', cwd: root, cache: cache() });
+    expect(supplyOf(warm).supply.origin).toEqual({
+      kind: 'latest',
+      version: '0.1.0',
+    });
+
+    await store?.shutdown();
+    const again = await run({ command: 'plan', cwd: root, cache: cache() });
+
+    expect(again.status).toBe('refused');
+    expect(again.problems[0].code).toBe('supply-unreachable');
+    // Число из кэша не выдано за сегодняшнее: поставка в нашем кэше лежит, а
+    // «последняя» — это вопрос про склад, и склада нет.
+    expect(renderText(again)).not.toContain('ПОСЛЕДНЯЯ доступная');
+  });
+
+  /**
+   * МЕНЕДЖЕР, НАСТРОЕННЫЙ НЕ ХОДИТЬ НА СКЛАД, — состояние, которое стало видимым.
+   *
+   * Пока «какая последняя» отвечалось из кэша, настройка `offline` молча меняла
+   * ответ двери: склад не спрашивали, число печатали. Теперь вопрос идёт мимо
+   * кэша — и настройка обязана назваться, а не притвориться оборванной связью:
+   * человек, которому сказали «склад не ответил», пойдёт чинить сеть, которой не
+   * касался.
+   */
+  it('менеджер настроен НЕ ходить на склад: отказ называет offline, а не связь', async () => {
+    published('0.1.0', '{"tool": true}\n');
+    const root = location([{ use: SUPPLY }]);
+    const was = process.env['npm_config_offline'];
+    process.env['npm_config_offline'] = 'true';
+
+    try {
+      const result = await run({ command: 'plan', cwd: root, cache: cache() });
+
+      expect(result.status).toBe('refused');
+      const [problem] = result.problems;
+      expect(problem.code).toBe('supply-unreachable');
+      expect(problem.message).toContain('offline');
+      // Выход назван оба: закрепить версию либо снять настройку.
+      expect(problem.message).toContain('sources[].version');
+    } finally {
+      if (was === undefined) {
+        delete process.env['npm_config_offline'];
+      } else {
+        process.env['npm_config_offline'] = was;
+      }
+    }
+  });
+
   it('прогретый кэш переживает падение склада — оффлайн работает', async () => {
     published('0.1.0', '{"tool": true}\n');
     const root = location([{ use: SUPPLY, version: '0.1.0' }]);
