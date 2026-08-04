@@ -71,6 +71,7 @@ import { checkSingleProvider } from './providers.js';
 import { resolveSettings, type ComputeDefault } from './settings.js';
 import { checkTemplate } from './template.js';
 import {
+  CHANNEL_SINCE,
   FORM_VERSION,
   MAP_TYPE_SINCE,
   PINNED_VERSION_SINCE,
@@ -407,33 +408,53 @@ describe('проба формы: два обвеса-фикстуры сразу
     expect(resolved('kit', { settings: { tools: {} } })['tools']).toEqual({});
   });
 
-  it('ФОРМЫ 2, 3 И 4 ЖИВУТ РЯДОМ: подъём не требует правки от соседа', () => {
+  it('ФОРМЫ 2, 3 И 5 ЖИВУТ РЯДОМ: подъём не требует правки от соседа', () => {
     // Набор поднялся до 3 ради составного типа, заготовка осталась на 2, а
-    // перечень поставленного уехал на 4 ради закрепления версии — и всё это
+    // перечень поставленного уехал на 5 ради метки канала — и всё это
     // разбирается одним и тем же baser'ом. Ровно это и обещает MIN_FORM_VERSION:
     // граница двигается за ПЕРЕЕЗДОМ полей, а не за номером.
     expect(declaration('kit').formVersion).toBe(MAP_TYPE_SINCE);
     expect(declaration('seed').formVersion).toBe(2);
     expect(declaration('seed').settings['areas'].type).toBe('list');
 
-    // Объявление обвеса форма 4 не тронула ни на одно поле: прибавление целиком
-    // на стороне потребителя, и ни один выпущенный обвес от него не правится.
-    expect(installed().formVersion).toBe(PINNED_VERSION_SINCE);
+    // Объявление обвеса ни форма 4, ни форма 5 не тронули ни на одно поле:
+    // прибавление целиком на стороне потребителя, и ни один выпущенный обвес от
+    // этих подъёмов не правится.
+    expect(installed().formVersion).toBe(CHANNEL_SINCE);
     expect(declaration('kit').settings['tools'].type).toBe('map');
   });
 
-  it('ЗАКРЕПЛЕНИЕ ВЕРСИИ: один обвес закреплён, второй — нет, и оба законны', () => {
-    // Отсутствие поля — не пропуск, а состояние «не закреплено»: дверь возьмёт
-    // последнюю доступную, назовёт её в плане до применения и закрепит в
-    // паспорте (решение architect, `tasker:BASER2-145`). Что дверь делает со
-    // значением, форма не решает — она его принимает и судит пригодность.
+  it('НОМЕР И МЕТКА — РАЗНЫЕ ПОЛЯ: один обвес закреплён, второй назван каналом', () => {
+    // Номер это адрес содержимого (под ним ровно одна сборка, навсегда), метка —
+    // указатель, который двигается (`kb:BASER3-26`). Разные обещания живут в
+    // разных полях: иначе читающий перечень не скажет, воспроизводим он, не
+    // разбирая строку. Что дверь делает со значением, форма не решает — она его
+    // принимает и судит пригодность.
     const [набор, заготовка] = installed().sources;
 
     expect(набор).toEqual({ use: TOOLS.kit, version: '1.0.0' });
-    expect(заготовка).toEqual({ use: TOOLS.seed });
+    expect(заготовка).toEqual({ use: TOOLS.seed, channel: 'dev' });
     // Реестра этот вход не видит: сходство с версией манифеста фикстуры —
-    // свойство самой фикстуры, а не проверки.
+    // свойство самой фикстуры, а не проверки. Про метку `dev` он не знает и
+    // подавно: про каналы знает только склад, и спрашивает его дверь.
     expect(manifest('kit')['version']).toBe('1.0.0');
+  });
+
+  it('НОМЕР И МЕТКА ВМЕСТЕ ЗАКОННЫ — кого бьёт кто, называет дверь', () => {
+    // Форме довольно разобрать оба поля и отдать наверх целыми: «номер бьёт
+    // метку» — правило двери, и сказать его вслух обязана она.
+    const оба = parseConsumerConfig({
+      formVersion: CHANNEL_SINCE,
+      sources: [{ use: TOOLS.kit, version: '1.0.0', channel: 'dev' }],
+    });
+
+    expect(оба.ok).toBe(true);
+    if (!оба.ok) return;
+    expect(оба.value.sources[0]).toEqual({
+      use: TOOLS.kit,
+      version: '1.0.0',
+      channel: 'dev',
+    });
   });
 
   it('СВЕРКА НЕ ПРОЩАЕТ НИЧЕГО: уложенное сходится с эталоном байт в байт', () => {
@@ -701,10 +722,47 @@ describe('проба отказов: каждый случай называет�
     });
     expect(назвался3.ok).toBe(false);
     if (назвался3.ok) return;
+    // Обе записи названы, а не первая: три опечатки это три опечатки, и чинить
+    // их по одному прогону на штуку человека никто не заставляет.
     expect(codesOf(назвался3.problems)).toEqual([
       `form-version-unsupported @ ${CONSUMER_CONFIG_PATH}.sources[0].version`,
+      `form-version-unsupported @ ${CONSUMER_CONFIG_PATH}.sources[1].channel`,
     ]);
     expect(назвался3.problems[0].message).toContain('обнови baser');
+  });
+
+  it('МЕТКА КАНАЛА В ПЕРЕЧНЕ ФОРМЫ 4: сказано, что поднять', () => {
+    // Живой перечень фикстуры, названный прежним номером. Закрепление версии тот
+    // baser уже знает, а метку канала — ещё нет: сказать про неё он обязан
+    // «обнови baser», а не «конфиг такого поля не знает».
+    const назвался4 = parseConsumerConfig({
+      ...(readJson(join(consumer, CONSUMER_CONFIG_PATH)) as Record<
+        string,
+        unknown
+      >),
+      formVersion: PINNED_VERSION_SINCE,
+    });
+
+    expect(назвался4.ok).toBe(false);
+    if (назвался4.ok) return;
+    expect(codesOf(назвался4.problems)).toEqual([
+      `form-version-unsupported @ ${CONSUMER_CONFIG_PATH}.sources[1].channel`,
+    ]);
+    expect(назвался4.problems[0].message).toContain(
+      `подними "formVersion" до ${CHANNEL_SINCE}`,
+    );
+  });
+
+  it('НОМЕР ВМЕСТО МЕТКИ: канал — указатель, а не адрес содержимого', () => {
+    const номером = parseConsumerConfig({
+      formVersion: FORM_VERSION,
+      sources: [{ use: TOOLS.kit, channel: '1.0.0' }],
+    });
+
+    expect(номером.ok).toBe(false);
+    if (номером.ok) return;
+    expect(номером.problems[0].code).toBe('invalid-channel');
+    expect(номером.problems[0].message).toContain('закрепляется полем "version"');
   });
 
   it('ДИАПАЗОН ВМЕСТО ВЕРСИИ: закреплением он не является', () => {
