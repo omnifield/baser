@@ -1,10 +1,19 @@
 {
   "extends": "../../tsconfig.base.json",
-  "files": [],
-  "include": [],
-  "references": [
-    {
-      "path": "./tsconfig.lib.json"
-    }
-  ]
+  "compilerOptions": {
+    // Инструмент НЕ СОБИРАЕТСЯ: CI запускает ровно те файлы, что лежат в пакете
+    // (иначе джобу гейта понадобилась бы установка зависимостей и сборка).
+    // Поэтому здесь не сборка, а только проверка: типы описаны JSDoc'ом и
+    // проверяются по нему, на диск не выходит ничего.
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "emitDeclarationOnly": false,
+    "types": ["node"]
+  },
+  "include": ["bin/**/*.mjs", "lib/**/*.mjs"],
+  "exclude": ["**/*.spec.mjs"]
 }
