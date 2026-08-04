@@ -64,7 +64,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node tools/release-guard.mjs
+      # Гейт живёт в пакете `@omnifield/baser-release` — он инструмент продукта, а
+      # не скрипт репозитория (`tasker:BASER2-158`). Форма джоба от переезда не
+      # меняется: инструмент zero-deps и не собирается, поэтому установки
+      # зависимостей здесь по-прежнему нет — отсюда его секунды и независимость
+      # от реестра с токенами.
+      - run: node packages/baser-release/bin/release-guard.mjs
 
   main:
     runs-on: ubuntu-latest

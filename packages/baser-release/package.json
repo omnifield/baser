@@ -1,28 +1,41 @@
 {
   "name": "@omnifield/baser-release",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Инструмент выпуска baser: гейт номеров — ломающее изменение не уедет в реестр патчем, включая предвыпускные номера",
+  "license": "MIT",
   "type": "module",
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./lib/index.mjs",
+  "bin": {
+    "baser-release-guard": "./bin/release-guard.mjs"
+  },
   "exports": {
     "./package.json": "./package.json",
-    ".": {
-      "@omnifield/baser-source": "./src/index.ts",
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
-    }
+    ".": "./lib/index.mjs"
   },
   "files": [
-    "dist",
-    "!**/*.tsbuildinfo"
+    "bin",
+    "lib",
+    "!**/*.spec.mjs"
   ],
-  "dependencies": {
-    "tslib": "^2.3.0"
-  },
   "publishConfig": {
     "access": "public"
+  },
+  "nx": {
+    "targets": {
+      "typecheck": {
+        "//": "Инструмент не собирается, поэтому проверка типов здесь — не сборка деклараций, а `tsc` по JSDoc (`checkJs`). Плагин типового пакета такую форму отключает («noEmit»), и цель объявлена явно, чтобы `pnpm verify` не терял зону молча.",
+        "executor": "nx:run-commands",
+        "cache": true,
+        "inputs": [
+          "{projectRoot}/**/*.mjs",
+          "{projectRoot}/tsconfig.json",
+          "{workspaceRoot}/tsconfig.base.json"
+        ],
+        "options": {
+          "cwd": "{projectRoot}",
+          "command": "tsc -p tsconfig.json"
+        }
+      }
+    }
   }
 }
