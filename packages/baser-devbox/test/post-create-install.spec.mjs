@@ -97,6 +97,12 @@ const NO_TTY = /ABORTED_REMOVE_MODULES_DIR/;
 /** Флаг, снимающий вопрос. Часть НАШЕГО дефолта, а не подмешивание в чужое. */
 const FLAG = '--config.confirmModulesPurge=false';
 
+/** Отказ pnpm в локации, где ставить нечего: им и рвалось всё постсоздание. */
+const NO_MANIFEST = /ERR_PNPM_NO_PKG_MANIFEST/;
+
+/** Пропуск, СКАЗАННЫЙ вслух — тем же голосом, что и потери тулчейна. */
+const SKIPPED = /\[devbox\] package\.json в корне нет/;
+
 let consumer = null;
 let boxes = [];
 
@@ -248,6 +254,54 @@ function installedElsewhere() {
 }
 
 /**
+ * Локация БЕЗ МАНИФЕСТА НОДЫ — ходовой случай, а не экзотика.
+ *
+ * `tasker`, `knowledger`, `chater` — Go-репозитории, `world` — точка входа без
+ * пакетов вовсе (`tasker:BASER2-188`, поймано первым же подъёмом мира). Здесь
+ * это Go-репозиторий: `go.mod` есть, `package.json` нет ни в каком виде.
+ *
+ * Тулчейн объявлен НАРОЧНО: постсоздание начинается проверкой потерь, и проба
+ * обязана мерить цепочку в том виде, в каком она у такого репозитория и будет,
+ * — с предупреждением про `go` впереди установки, а не в стерильной пустоте.
+ */
+function withoutNodeManifest() {
+  const box = mkdtempSync(join(tmpdir(), 'baser-devbox-no-manifest-'));
+  boxes.push(box);
+  const root = join(box, 'tasker');
+  mkdirSync(root, { recursive: true });
+  writeFileSync(
+    join(root, 'go.mod'),
+    'module github.com/omnifield/tasker\n\ngo 1.24\n',
+  );
+
+  const userconfig = join(box, 'npmrc');
+  writeFileSync(userconfig, '');
+  return {
+    root,
+    env: containerEnv({
+      NPM_CONFIG_USERCONFIG: userconfig,
+      NPM_CONFIG_STORE_DIR: join(box, 'store'),
+    }),
+  };
+}
+
+/**
+ * Установка ДО гарда — то есть ровно вчерашний дефолт, вырезанный из сегодняшнего.
+ *
+ * Написать его в пробе константой значило бы держать дефолт в двух местах и
+ * доказывать совпадение с самой собой; вырезанный — он мёртв ровно в тот день,
+ * когда гарда в дефолте не станет, и контроль скажет об этом вслух.
+ */
+function withoutGuard(step) {
+  const bare = /^if \[ -f package\.json \]; then (.+?); else /.exec(step)?.[1];
+  expect(
+    bare,
+    `гарда в дефолте нет — контролю нечего снимать, и он ничего не доказывает:\n${step}`,
+  ).toBeTruthy();
+  return bare;
+}
+
+/**
  * Шаг постсоздания — так, как его запускает контейнер.
  *
  * `stdin` открыт и пуст, своя группа процессов (pnpm поднимает свой пин отдельным
@@ -341,4 +395,84 @@ describe('ПОСТСОЗДАНИЕ В НЕИНТЕРАКТИВНОЙ СРЕДЕ:
       'confirmModulesPurge',
     );
   }, 30_000);
+});
+
+describe('ЛОКАЦИЯ БЕЗ МАНИФЕСТА НОДЫ: ставить нечего — это не ошибка', () => {
+  it('постсоздание доходит до конца ЦЕЛИКОМ, а пропуск назван вслух', async () => {
+    // Раскладка без пресета: томов нет, scope не назван — значит вся цепочка
+    // исполнима здесь, и меряется именно она, а не вырезанный из неё шаг.
+    const { json } = await materialize();
+    const box = withoutNodeManifest();
+
+    const attempt = await postCreate(json.postCreateCommand, box);
+
+    expect(attempt.completed, attempt.output).toBe(true);
+    expect(attempt.output).toMatch(SKIPPED);
+    // Молчание здесь хуже отказа: человек не отличит «пропущено» от «сломалось».
+    expect(attempt.output).not.toMatch(NO_MANIFEST);
+  }, 120_000);
+
+  it('НЕГАТИВНЫЙ КОНТРОЛЬ: без гарда та же локация роняет ВСЮ цепочку', async () => {
+    const artifact = await materialize();
+    const step = installStep(artifact);
+    const yesterday = artifact.json.postCreateCommand.replace(
+      step,
+      withoutGuard(step),
+    );
+
+    const attempt = await postCreate(yesterday, withoutNodeManifest());
+
+    expect(attempt.completed, attempt.output).toBe(false);
+    expect(attempt.output).toMatch(NO_MANIFEST);
+  }, 120_000);
+
+  it('ПЕРЕОПРЕДЕЛЕНИЕ РАБОТАЕТ ПОВЕРХ: чужая команда гарда НЕ получает', async () => {
+    // Ровно тот случай, ради которого гард живёт в дефолте, а не в шаблоне:
+    // Go-репозиторий, задавший свою установку, `package.json` не имеет ПО
+    // ПОСТРОЕНИЮ — оберни обвес чужую команду проверкой манифеста, и она молча
+    // не выполнилась бы у того, кто её и написал.
+    const artifact = await materialize({ installCommand: 'go mod download' });
+
+    expect(installStep(artifact)).toBe('go mod download');
+    expect(artifact.json.postCreateCommand).not.toContain('package.json');
+  }, 30_000);
+});
+
+describe('ЦЕПОЧКА ПОСТСОЗДАНИЯ: шаг без предмета не существует, а не падает', () => {
+  it('ассистент БЕЗ тома кредов: seed не кладётся, цепочка доходит до конца', async () => {
+    // `$CLAUDE_CONFIG_DIR` ставит секрет-модель, то есть `secretsVolume`. Без
+    // тома переменная пуста, а `mkdir -p ""` отвечает кодом 1 — и `&&` роняет
+    // постсоздание ДО установки (`tasker:BASER2-188` П5).
+    const { json } = await materialize({ installAssistant: true });
+
+    expect(json.postCreateCommand).not.toContain('CLAUDE_CONFIG_DIR');
+
+    const attempt = await postCreate(
+      json.postCreateCommand,
+      withoutNodeManifest(),
+    );
+    expect(attempt.completed, attempt.output).toBe(true);
+  }, 120_000);
+
+  it('НЕГАТИВНЫЙ КОНТРОЛЬ: тот же seed в той же среде рвёт цепочку', async () => {
+    // Шаг берётся из раскладки, где он законен (том кредов есть), и гоняется в
+    // среде, где переменной нет, — то есть контроль меряет ровно тот разрыв, а
+    // не переписанную в пробу строку.
+    const withVolume = await materialize({
+      installAssistant: true,
+      secretsVolume: 'omnifield-secrets',
+    });
+    const seed = withVolume.json.postCreateCommand
+      .split(' && ')
+      .find((step) => step.startsWith('mkdir -p "$CLAUDE_CONFIG_DIR"'));
+    expect(seed, withVolume.json.postCreateCommand).toBeTruthy();
+
+    const attempt = await postCreate(
+      `${seed} && echo ДОШЛИ-ДО-УСТАНОВКИ`,
+      withoutNodeManifest(),
+    );
+
+    expect(attempt.completed, attempt.output).toBe(false);
+    expect(attempt.output).not.toContain('ДОШЛИ-ДО-УСТАНОВКИ');
+  }, 120_000);
 });
