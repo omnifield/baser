@@ -13,42 +13,12 @@ permissions:
   contents: read
   packages: read
 
-jobs:
-  # Заголовок PR — это и есть сообщение коммита в `main`: мержим сквошем, и в историю
-  # уходит заголовок, а не коммиты внутри ветки. Дважды за 2026-07-29 туда уехало
-  # «Feat/form v2», унеся с собой в том числе пометку ломающего изменения.
-  #
-  # Цена не косметическая: `nx.json` включает `version.conventionalCommits`, то есть
-  # версии и changelog выводятся из заголовков. Заголовок без типа не поднимет версию,
-  # а `!` внутри тела сквоша не сделает мажор (`tasker:BASER2-66`).
-  pr-title:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Заголовок PR — по Conventional Commits
-        env:
-          TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          if printf '%s' "$TITLE" | grep -qE '^(feat|fix|chore|docs|test|refactor|perf|build|ci|revert)\([a-z0-9-]+\)!?: .+'; then
-            echo "Заголовок в порядке: $TITLE"
-            exit 0
-          fi
-          echo "::error::Заголовок PR не по Conventional Commits: «$TITLE»"
-          echo ""
-          echo "Мы мержим сквошем — этот заголовок станет коммитом в main, и по нему"
-          echo "nx release выводит версию и changelog. Без типа и зоны изменение"
-          echo "останется невидимым для выпуска, а ломающее не поднимет мажор."
-          echo ""
-          echo "Форма: <тип>(<зона>): <что сделано> — например"
-          echo "  feat(materialize): класс артефакта в паспорте укладки (BASER2-51)"
-          echo "  fix(cli): дверь не сочиняет версию, которой обвес не назвал"
-          echo "  chore(harness): адрес сервисов через VPN-контур"
-          echo ""
-          echo "Ломающее изменение помечается восклицательным знаком: feat(devbox)!: ..."
-          echo "Типы: feat · fix · chore · docs · test · refactor · perf · build · ci · revert"
-          echo "Зона обязательна — по ней видно, чьё изменение."
-          exit 1
+# Гейт заголовка PR стоял здесь до `tasker:BASER2-184` и уехал в `pr-title.yml`.
+# Причина — события: типы задаются на весь workflow, а гейту нужен `edited`
+# (правка заголовка), которого нет среди умолчаний. Оставь он тут — каждая правка
+# заголовка гоняла бы и `main` с установкой, сборкой и пробами.
 
+jobs:
   # Номер выпуска обязан называть цену изменения. На нулевых мажорах `nx release`
   # поднимает патч и фиче, и ломающему (проверено прогоном 2026-08-01), поэтому
   # бамп назначается руками — а гейт держит то, что дисциплине не отдают:
@@ -100,3 +70,10 @@ jobs:
       # там dist лежит с прошлых прогонов, и зелень держится на устаревших артефактах.
       # Не `nx -t test`: у @nx/vitest дефолт — watch-режим, в CI он не заканчивается.
       - run: pnpm exec vitest run
+      # Пробы зоны `git` — отдельным вызовом, и это не забывчивость корня.
+      # Зона живёт в `.github`, а обход и nx, и корневого `vitest.workspace.ts`
+      # dot-каталоги не берёт (проверено 2026-08-05: `nx show projects` зоны не
+      # знает, `vitest run --project git-pipeline` отвечает «no projects
+      # matched»). Значит зона гоняет свои пробы сама — своим воркфлоу и своим
+      # pre-commit, а не ждёт, пока её подцепит чужой файл (`tasker:BASER2-167`).
+      - run: pnpm exec vitest run --config .github/vitest.config.mts
