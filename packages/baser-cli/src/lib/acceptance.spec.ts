@@ -162,11 +162,21 @@ describe('СВЕРКА С ЖИВЫМ РЕПОЗИТОРИЕМ: baser стоит 
 
     expect(record?.source).toBe(DEVBOX_ID);
     expect(record?.class).toBe('regenerated');
+
     // И обвес объявлен поставленным — то есть станок сюда доедет и завтра.
-    expect(
-      (JSON.parse(liveArtifact('baser.json')) as { sources: unknown[] })
-        .sources,
-    ).toContainEqual({ use: DEVBOX_PACKAGE });
+    //
+    // Утверждение здесь ровно одно: в перечне ЕСТЬ запись про наш обвес. Какие
+    // ещё поля у этой записи есть — не предмет приёмки «репозиторий стоит на
+    // своём станке»: сверка на равенство объекту красила бы зону при каждом
+    // расширении формы, хотя проверяемый факт остался бы верным
+    // (`tasker:BASER2-183`, класс — `tasker:BASER2-176`). Форму записи судят
+    // там, где она предмет, — пробы формы и контрактов.
+    const declared = JSON.parse(liveArtifact('baser.json')) as {
+      sources: { use?: string }[];
+    };
+    expect(declared.sources.map((source) => source.use)).toContain(
+      DEVBOX_PACKAGE,
+    );
   });
 });
 
