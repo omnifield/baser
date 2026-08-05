@@ -1,6 +1,11 @@
 {
   "name": "@omnifield/baser-contracts",
   "version": "0.3.0-dev.1",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/omnifield/baser.git",
+    "directory": "packages/baser-contracts"
+  },
   "description": "Хвостовик baser: форма, которой обвес объявляет себя станку — раскладка, класс артефакта, настройки и пресеты",
   "type": "module",
   "main": "./dist/index.js",

@@ -3,6 +3,11 @@
   "version": "0.0.5-dev.1",
   "description": "Проверка «обвес подходит посадочному месту»: форма объявления обвеса и его поставка",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/omnifield/baser.git",
+    "directory": "packages/baser-check"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
