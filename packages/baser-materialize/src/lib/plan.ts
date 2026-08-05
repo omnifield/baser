@@ -67,7 +67,7 @@
  * `record`, а не молчание.
  */
 
-import type { Tree } from '@nx/devkit';
+import type { Tree } from './tree.js';
 import type { ArtifactClass } from './classes.js';
 import {
   ARTIFACT_CLASSES,

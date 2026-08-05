@@ -14,7 +14,7 @@
  * ненайденными шаблонами на каждой записи (`plan.ts`, `defaultSource`).
  */
 
-import type { Tree } from '@nx/devkit';
+import type { Tree } from './tree.js';
 import { joinRepoPath } from './paths.js';
 
 export interface CanonSource {
