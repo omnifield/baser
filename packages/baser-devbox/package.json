@@ -20,7 +20,8 @@
       "default": [
         "{projectRoot}/**/*",
         "sharedGlobals",
-        "{workspaceRoot}/.devcontainer/**/*"
+        "{workspaceRoot}/.devcontainer/**/*",
+        "{workspaceRoot}/.omnifield/omnifield-devbox.yaml"
       ]
     }
   },

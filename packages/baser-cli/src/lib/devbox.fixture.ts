@@ -54,7 +54,6 @@
  * Файл исключён из сборки пакета.
  */
 
-import { execFileSync } from 'node:child_process';
 import {
   cpSync,
   mkdirSync,
@@ -80,6 +79,7 @@ import {
   readManifest,
   type ManifestRecord,
 } from '@omnifield/baser-materialize';
+import { runSealed } from './sealed.fixture.js';
 import type { SupplyOverride } from './supply.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -109,7 +109,7 @@ function packedDevbox(): string {
   }
 
   const box = mkdtempSync(join(tmpdir(), 'baser-cli-pack-'));
-  execFileSync(
+  runSealed(
     'npm',
     ['pack', '--ignore-scripts', '--pack-destination', box, DEVBOX_SOURCE],
     { cwd: DEVBOX_SOURCE, stdio: 'pipe' },
@@ -119,7 +119,7 @@ function packedDevbox(): string {
   if (tarball === undefined) {
     throw new Error(`npm pack не оставил тарбол в ${box}`);
   }
-  execFileSync('tar', ['-xzf', join(box, tarball), '-C', box], {
+  runSealed('tar', ['-xzf', join(box, tarball), '-C', box], {
     stdio: 'pipe',
   });
 

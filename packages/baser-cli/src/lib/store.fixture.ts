@@ -59,7 +59,6 @@
  * ПОСТРОЕНИЮ, а не «маловероятно». Кэш человека заодно перестаёт засоряться.
  */
 
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -73,6 +72,11 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { FORM_VERSION } from '@omnifield/baser-contracts';
+import {
+  runSealed,
+  spawnSealed,
+  type ChildProcess,
+} from './sealed.fixture.js';
 
 /** Что выкладывается на склад: обвес как пакет. */
 export interface StoreSupply {
@@ -201,7 +205,7 @@ export async function startStore(): Promise<FakeStore> {
   const script = join(box, 'store.mjs');
   writeFileSync(script, SERVER);
 
-  const process_: ChildProcess = spawn('node', [script, shelf, journal], {
+  const process_: ChildProcess = spawnSealed('node', [script, shelf, journal], {
     stdio: ['ignore', 'pipe', 'inherit'],
   });
 
@@ -243,7 +247,7 @@ export async function startStore(): Promise<FakeStore> {
       writeSupply(source, supply);
 
       const packed = mkdtempSync(join(box, 'pack-'));
-      execFileSync(
+      runSealed(
         'npm',
         ['pack', '--ignore-scripts', '--pack-destination', packed, source],
         { cwd: source, stdio: 'pipe' },

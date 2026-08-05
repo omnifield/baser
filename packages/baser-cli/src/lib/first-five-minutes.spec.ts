@@ -16,7 +16,6 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
@@ -32,6 +31,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bundle } from './bundle.js';
+import { gitSealed, runSealed } from './sealed.fixture.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, '../../../..');
@@ -89,21 +89,16 @@ function repository(options: { manifest?: boolean; ignore?: boolean } = {}) {
   return repo;
 }
 
-function git(repo: string, ...args: string[]): string {
-  return execFileSync(
-    'git',
-    [
-      '-c',
-      'user.email=проба@baser',
-      '-c',
-      'user.name=проба',
-      '-c',
-      'commit.gpgsign=false',
-      ...args,
-    ],
-    { cwd: repo, encoding: 'utf-8' },
-  );
-}
+/**
+ * ГЕРМЕТИЧНЫЙ git — своего окружения у него нет (`tasker:BASER2-179`).
+ *
+ * Здесь стоял прямой `execFileSync`, и он наследовал git-переменные прогона.
+ * Под машинным `pre-commit` в связанном рабочем дереве это увело вложенный `git`
+ * в НАШ репозиторий: ветку унесло на три коммита пробы, основное дерево
+ * переключило в `bare`. Чистка живёт в `sealed.fixture.ts` и проверяется
+ * `sealed.spec.ts` — не дисциплиной вызова.
+ */
+const git = gitSealed;
 
 /** Что видит человек, набравший `git status` перед коммитом. */
 function status(repo: string): string[] {
@@ -138,10 +133,10 @@ function install(
     : placed(bundleDir, repo);
   try {
     return {
-      out: execFileSync(
+      out: runSealed(
         process.execPath,
         [join(here, 'install.mjs'), '--cwd', repo, ...args],
-        { encoding: 'utf-8', cwd: repo },
+        { cwd: repo },
       ),
       code: 0,
     };
@@ -192,14 +187,14 @@ describe('BASER2-33 · шебанг есть — бит исполнения о�
     const carried = box('carried');
 
     // Мы уносим бандл архивом — значит именно этот путь и обязан держать права.
-    execFileSync('tar', [
+    runSealed('tar', [
       '-cf',
       join(carried, 'bundle.tar'),
       '-C',
       dirname(into),
       basename(into),
     ]);
-    execFileSync('tar', ['-xf', join(carried, 'bundle.tar'), '-C', carried]);
+    runSealed('tar', ['-xf', join(carried, 'bundle.tar'), '-C', carried]);
 
     const unpacked = join(carried, basename(into));
     expect(
@@ -208,9 +203,7 @@ describe('BASER2-33 · шебанг есть — бит исполнения о�
 
     // И запуск НАПРЯМУЮ, без `node` в командной строке: ровно то движение,
     // которым человек упёрся в `Permission denied`.
-    const out = execFileSync(join(unpacked, 'install.mjs'), ['--help'], {
-      encoding: 'utf-8',
-    });
+    const out = runSealed(join(unpacked, 'install.mjs'), ['--help']);
     expect(out).toContain('install.mjs');
   });
 });
@@ -234,10 +227,7 @@ describe('BASER2-34 · Node на хосте — предусловие, а не 
     expect(readdirSync(empty)).toEqual([]);
 
     expect(() =>
-      execFileSync(join(into, 'install.mjs'), ['--help'], {
-        encoding: 'utf-8',
-        env: { PATH: empty },
-      }),
+      runSealed(join(into, 'install.mjs'), ['--help'], { env: { PATH: empty } }),
     ).toThrow();
 
     // И вторая половина утверждения: падает оно ИМЕННО от отсутствия Node, а не
@@ -245,8 +235,7 @@ describe('BASER2-34 · Node на хосте — предусловие, а не 
     // интерпретатора — и та же команда проходит. Без этой пары первая проверка
     // зеленела бы на любой поломке запуска.
     expect(
-      execFileSync(join(into, 'install.mjs'), ['--help'], {
-        encoding: 'utf-8',
+      runSealed(join(into, 'install.mjs'), ['--help'], {
         env: { PATH: `${empty}:${dirname(process.execPath)}` },
       }),
     ).toContain('install.mjs');
@@ -316,10 +305,7 @@ describe('BASER2-34 · Node на хосте — предусловие, а не 
     const bundleName = dirname(inside[1]);
     cpSync(into, join(repo, bundleName), { recursive: true });
 
-    const out = execFileSync(process.execPath, inside.slice(1), {
-      cwd: repo,
-      encoding: 'utf-8',
-    });
+    const out = runSealed(process.execPath, inside.slice(1), { cwd: repo });
     expect(out).toContain('план применим');
   });
 });
@@ -488,10 +474,7 @@ describe('BASER2-146 · ручная доставка не кладёт в ло�
       );
     });
 
-    const out = execFileSync(process.execPath, argv, {
-      cwd: repo,
-      encoding: 'utf-8',
-    });
+    const out = runSealed(process.execPath, argv, { cwd: repo });
 
     expect(out).toContain('сошлось');
     expect(out).not.toContain('обвесов не поставлено');
