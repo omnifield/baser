@@ -14,7 +14,6 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { execFileSync, spawnSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
@@ -32,6 +31,7 @@ import { fileURLToPath } from 'node:url';
 import { sourceConfigPath } from '@omnifield/baser-contracts';
 import { bundle } from './bundle.js';
 import { DOOR_SCHEMA_VERSION } from './schema.js';
+import { runSealed, streamsSealed } from './sealed.fixture.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, '../../../..');
@@ -224,10 +224,10 @@ describe('УНЕСЛИ И ЗАРАБОТАЛО', () => {
   /** Установщик — ОТДЕЛЬНЫМ процессом: только так вопрос задаётся честно. */
   function install(far: string, repo: string, ...args: string[]): string {
     try {
-      return execFileSync(
+      return runSealed(
         process.execPath,
         [join(far, 'install.mjs'), '--cwd', repo, ...args],
-        { encoding: 'utf-8', cwd: repo },
+        { cwd: repo },
       );
     } catch (cause) {
       return String((cause as { stdout?: string }).stdout ?? cause);
@@ -248,10 +248,10 @@ describe('УНЕСЛИ И ЗАРАБОТАЛО', () => {
   ): { parsed: unknown; raw: string } {
     let raw: string;
     try {
-      raw = execFileSync(
+      raw = runSealed(
         process.execPath,
         [join(far, 'install.mjs'), '--cwd', repo, '--json', ...args],
-        { encoding: 'utf-8', cwd: repo, stdio: ['ignore', 'pipe', 'ignore'] },
+        { cwd: repo, stdio: ['ignore', 'pipe', 'ignore'] },
       );
     } catch (cause) {
       raw = String((cause as { stdout?: string }).stdout ?? cause);
@@ -298,10 +298,10 @@ describe('УНЕСЛИ И ЗАРАБОТАЛО', () => {
   it('--json: человек не остаётся без рассказа — он уходит в stderr', () => {
     const { far, repo } = carried();
 
-    const streams = spawnSync(
+    const streams = streamsSealed(
       process.execPath,
       [join(far, 'install.mjs'), '--cwd', repo, '--plan', '--json'],
-      { encoding: 'utf-8', cwd: repo },
+      { cwd: repo },
     );
 
     // Уводить прозу в никуда было бы починкой за счёт человека: он по-прежнему
