@@ -3,6 +3,11 @@
   "version": "0.9.0",
   "description": "Обвес девбокса: .devcontainer как шаблон с пресетом omnifield",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/omnifield/baser.git",
+    "directory": "packages/baser-devbox"
+  },
   "type": "module",
   "exports": {
     "./package.json": "./package.json",
