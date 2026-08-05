@@ -9,7 +9,6 @@
   "devDependencies": {
     "@nx/js": "23.1.0",
     "@nx/vitest": "23.1.0",
-    "@omnifield/baser-devbox": "workspace:*",
     "@omnifield/brainer-harness": "0.2.0",
     "@swc/helpers": "~0.5.18",
     "@types/node": "^22.0.0",
