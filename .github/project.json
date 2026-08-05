@@ -1,0 +1,11 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "git-pipeline",
+  "projectType": "application",
+  "sourceRoot": ".github",
+  "targets": {
+    "test": {
+      "command": "vitest run --config .github/vitest.config.mts"
+    }
+  }
+}
