@@ -90,7 +90,7 @@ import {
   type MaterializationPlan,
   type TraceRecorder,
 } from '@omnifield/baser-materialize';
-import { createRepoTree, type RepoTree } from './tree.js';
+import { createRepoTree, type ChangeKind, type RepoTree } from './tree.js';
 import { DOOR_SCHEMA_VERSION } from './schema.js';
 import {
   DoorProblemLog,
@@ -125,6 +125,13 @@ import { recoverPlacedValues, type PlacedValue } from './previous.js';
 import { derivedMoves, type DerivedMove } from './derived.js';
 import { differenceOf, type ArtifactDifference } from './difference.js';
 import { loadDefaults, resolveValues, type SettingMovement } from './values.js';
+import {
+  describeRefusal,
+  unwritable,
+  whoRuns,
+  type Runner,
+  type WriteRefusal,
+} from './writable.js';
 import type {
   ConfigReport,
   DoorCommand,
@@ -433,6 +440,37 @@ async function runInRepo(
   // от второго обвеса, который просто лёг раньше.
   const hadManifest = tree.exists(MANIFEST_PATH);
 
+  // ── 2а. ПАСПОРТ УКЛАДКИ — ВХОДНАЯ проверка, наравне с чтением конфига.
+  //
+  // Он лежит на диске, и дверь переписывает его КАЖДЫМ применением: если писать
+  // в него нечем, здесь не применится ничего и никогда — сколько бы поставок мы
+  // ни достали и сколько бы шаблонов ни собрали (`tasker:BASER2-190`). Значит и
+  // спрашивать надо здесь, до склада и до плана: отказ, который дешевле и
+  // раньше, ещё и не тратит чужой трафик.
+  //
+  // Отказывают обе команды. `plan` не пишет ничего, но отвечает он не про себя,
+  // а про то, что случится при применении.
+  const runner = whoRuns();
+  if (hadManifest) {
+    const denied = trace.span(
+      'door.writable',
+      () => unwritable(repo.root, [{ path: MANIFEST_PATH, kind: 'UPDATE' }]),
+      // Спан повторяется в прогоне дважды и различается ДАННЫМИ, а не порядком
+      // — тем же приёмом, каким различаются поставки (`detail.source`): работа
+      // одна и та же, а вопросы разные, и прогон, подорожавший на одном из них,
+      // обязан указывать на него, а не на «где-то в проверке прав».
+      { subject: 'manifest', paths: 1 },
+    );
+    if (denied.length > 0) {
+      log.add(
+        'manifest-unwritable',
+        MANIFEST_PATH,
+        manifestRefusal(denied[0], runner),
+      );
+      return refused(session, log.list());
+    }
+  }
+
   // ── 3. Поставки и объявления ВСЕХ обвесов перечня.
   //
   // Разбор идёт по всему перечню и не встаёт на первом непригодном: две
@@ -676,6 +714,31 @@ async function runInRepo(
   const work =
     drafts.some((draft) => hasWork(draft) || draft.config.creates) || creates;
 
+  // ── 7. МОГУ ЛИ Я ЗАПИСАТЬ ТО, ЧТО НАСЧИТАЛ — до применения и у обеих команд.
+  //
+  // Список берётся ОДИН раз и служит обеим работам сразу: расхождения с диском
+  // считаются чтением каждого файла, и спросить их дважды значило бы удвоить
+  // поход на диск ради второй копии одного ответа.
+  //
+  // Место выбрано так, чтобы человек прочитал отказ ВМЕСТЕ с планом: `refused`
+  // уносит в ответ всё, что дверь успела узнать, — значит план уже посчитан,
+  // напечатан и объяснён, а строка «эти пути записать не выйдет» стоит рядом с
+  // ним, а не вместо него (`tasker:BASER2-190`).
+  const pending = tree.listChanges();
+  const denied = trace.span(
+    'door.writable',
+    () =>
+      unwritable(
+        repo.root,
+        pending.map((change) => ({ path: change.path, kind: change.type })),
+      ),
+    { subject: 'writes', paths: pending.length },
+  );
+  if (denied.length > 0) {
+    log.add('path-unwritable', repo.root, writeRefusal(denied, runner));
+    return refused(session, log.list(), drafts);
+  }
+
   if (options.command === 'plan') {
     // `plan` не пишет — значит и записей у него нет. Что ЛЯЖЕТ, читается из
     // `runs[].plan.steps` и `config.creates`; дублировать это третьим списком
@@ -692,7 +755,7 @@ async function runInRepo(
   // Сходимость отделена от применения ровно так же, как у движка отделена от
   // пустоты: «применено» на дереве, где применять было нечего, — это отчёт о
   // работе, которой не было.
-  const writes = changesOf(tree);
+  const writes = changesOf(pending);
   if (writes.length === 0) {
     return { ...base, status: 'converged', trace: trace.snapshot() };
   }
@@ -1528,6 +1591,71 @@ function diagnoseForeignDests(
 }
 
 /**
+ * ЧЕМ ЧИНЯТ ЧУЖОЕ ВЛАДЕНИЕ — и почему это делает человек, а не дверь.
+ *
+ * Абзац общий на оба отказа записи и общий не ради краткости: правило тут одно,
+ * а две его копии разъехались бы молча — первая же правка досталась бы одному
+ * входу из двух.
+ *
+ * **`sudo` дверь не зовёт и владение не выравнивает.** Она пишет файлы, а не
+ * администрирует машину: тихая смена владельца — сюрприз хуже отказа, а
+ * равняться на `imageUser` обвеса она не вправе вовсе, это чужая настройка
+ * (`tasker:BASER2-190`). Поэтому починка НАЗЫВАЕТСЯ, а делает её человек — и
+ * называются обе, потому что верна бывает любая: файл мог остаться от другого
+ * пользователя (тогда владение возвращают), а мог принадлежать ему законно
+ * (тогда дверь зовут от него).
+ */
+const HOW_TO_FIX =
+  'Владение дверь не трогает и sudo не зовёт: она пишет файлы, а не ' +
+  'администрирует машину, и молчаливая смена владельца была бы сюрпризом хуже ' +
+  'отказа. Чинится снаружи двери, и починки две — верная зависит от того, чей ' +
+  'это файл на самом деле: либо верни владение себе (chown, скорее всего от ' +
+  'суперпользователя), либо зови дверь от того пользователя, которому файл ' +
+  'принадлежит';
+
+/**
+ * ПАСПОРТ УКЛАДКИ ЗАПИСАТЬ НЕЧЕМ — отказ про инструмент, а не про артефакт.
+ *
+ * Разница с соседним отказом существенная, и текст обязан её нести: там не
+ * лягут названные файлы ЭТОГО прогона, здесь не применится ничего и никогда —
+ * паспорт переписывается каждым применением.
+ */
+function manifestRefusal(refusal: WriteRefusal, runner: Runner): string {
+  return (
+    `паспорт укладки "${MANIFEST_PATH}" записать не выйдет: ` +
+    `${describeRefusal(refusal, runner)}. Проверено ДО применения, на диск не ` +
+    'ушло ничего. Это не про один артефакт: паспорт дверь переписывает КАЖДЫМ ' +
+    'применением, и пока запись в него невозможна, в этой локации не применится ' +
+    `ничего. ${HOW_TO_FIX}`
+  );
+}
+
+/**
+ * ЧТО ИМЕННО НЕ ЛЯЖЕТ — поимённо и с причиной у каждого пути.
+ *
+ * Один отказ на весь список, а не по отказу на путь: причина у пачки бывает
+ * общая (один закрытый каталог останавливает всё, что в него целится), и
+ * повторить её на каждый файл значило бы сделать перечень нечитаемым ровно там,
+ * где его читают. Порядок — тот, в котором пути пришли от дерева.
+ */
+function writeRefusal(
+  refusals: readonly WriteRefusal[],
+  runner: Runner,
+): string {
+  const blocked = refusals.reduce(
+    (count, refusal) => count + refusal.paths.length,
+    0,
+  );
+  return (
+    `записать не выйдет: путей ${blocked}, и вот почему каждый — ` +
+    `${refusals.map((refusal) => describeRefusal(refusal, runner)).join(' · ')}. ` +
+    'Проверено ДО применения: на диск не ушло НИЧЕГО, включая пути, с которыми ' +
+    'всё в порядке, — применение проходит целиком либо никак. ' +
+    HOW_TO_FIX
+  );
+}
+
+/**
  * ЧЕГО ДВЕРЬ НЕ ДЕЛАЛА: твой файл она НЕ ЧИТАЛА (`tasker:BASER2-106`).
  *
  * Абзац общий на все отказы, которые ведут к `--confirm`, и общий он не ради
@@ -1636,10 +1764,10 @@ function describeSource(
  * Список СОСТОЯВШИХСЯ записей, а не намерений: у `plan` он пуст по построению,
  * потому что `plan` не пишет. Намерения читаются из `plan.steps`.
  */
-function changesOf(tree: RepoTree): WriteReport[] {
-  return tree
-    .listChanges()
-    .map((change) => ({ path: change.path, kind: change.type }));
+function changesOf(
+  pending: readonly { path: string; type: ChangeKind }[],
+): WriteReport[] {
+  return pending.map((change) => ({ path: change.path, kind: change.type }));
 }
 
 function shell(session: Session): Omit<DoorResult, 'status'> {
