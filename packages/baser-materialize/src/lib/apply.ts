@@ -12,7 +12,7 @@
  * мутации, и при сбое на любом шаге дерево возвращается в исходное состояние.
  */
 
-import type { Tree } from '@nx/devkit';
+import type { Tree } from './tree.js';
 import { BaserMaterializeError } from './errors.js';
 import type { MaterializationPlan, PlanConflict, PlanStep } from './plan.js';
 import { isApplicable } from './plan.js';
