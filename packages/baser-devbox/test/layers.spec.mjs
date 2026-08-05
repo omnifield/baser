@@ -84,11 +84,15 @@ describe('слой УНИВЕРСАЛЬНОЕ: тот же обвес без п�
     // Дефолт неинтерактивен целиком: вопрос pnpm про снос модулей вешает
     // постсоздание намертво, а отвечать в контейнере некому
     // (`tasker:BASER2-125`, исполняется в `post-create-install.spec.mjs`).
-    expect(
-      json.postCreateCommand.endsWith(
-        'pnpm install --frozen-lockfile --config.confirmModulesPurge=false',
-      ),
-    ).toBe(true);
+    expect(json.postCreateCommand).toContain(
+      'pnpm install --frozen-lockfile --config.confirmModulesPurge=false',
+    );
+    // И БЕЗОПАСЕН К ОТСУТСТВИЮ МАНИФЕСТА: локация, где ставить нечего, — это
+    // нормальное состояние, а не отказ, роняющий всё постсоздание разом
+    // (`tasker:BASER2-188`, исполняется там же). Установка при этом остаётся
+    // ПОСЛЕДНИМ шагом — инвариант зоны, по которому пробы отрезают её хвост.
+    expect(json.postCreateCommand.endsWith('; fi')).toBe(true);
+    expect(json.postCreateCommand).toContain('if [ -f package.json ]; then');
     expect(json.postCreateCommand).toContain('command -v uv');
   });
 
