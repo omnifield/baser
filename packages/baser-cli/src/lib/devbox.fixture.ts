@@ -59,7 +59,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync,
   existsSync,
@@ -79,7 +78,7 @@ import {
   readManifest,
   type ManifestRecord,
 } from '@omnifield/baser-materialize';
-import { runSealed } from './sealed.fixture.js';
+import { inject } from 'vitest';
 import type { SupplyOverride } from './supply.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -87,44 +86,23 @@ const here = dirname(fileURLToPath(import.meta.url));
 /** Корень ЭТОГО репозитория — из него берётся живой `.devcontainer`. */
 export const REPO_ROOT = resolve(here, '../../../..');
 
-/** Исходный каталог настоящего обвеса — из него собирается тарбол. */
-const DEVBOX_SOURCE = join(REPO_ROOT, 'packages/baser-devbox');
-
 export const DEVBOX_PACKAGE = '@omnifield/baser-devbox';
-
-let packed: string | null = null;
 
 /**
  * Каталог с содержимым тарбола: то и только то, что уедет потребителю.
  *
- * Собирается один раз на процесс — не ради скорости, а ради того, чтобы все
- * пробы файла говорили про ОДИН И ТОТ ЖЕ состав пакета.
+ * **Собирается ОДИН РАЗ НА ПРОГОН и снаружи проб** (`packed.setup.ts`), а
+ * сюда приезжает готовым. Раньше сборка была ленивой и памятилась на модуль —
+ * то есть повторялась в каждом файле проб, и платила за неё ПЕРВАЯ проба файла.
+ * Замерено: 264 мс против 1 мс у второй, до 739 мс под нагрузкой; конвейер
+ * ловил на этом красное по таймауту (`tasker:BASER2-189`).
  *
- * `--ignore-scripts` — обвес контент, а не код: собирать ему нечего, и молчаливо
- * исполнить чужой скрипт ради фикстуры мы не согласны.
+ * Состав пакета от этого стал общим не только на файл, но и на весь прогон:
+ * все пробы зоны говорят про ОДИН И ТОТ ЖЕ тарбол — то самое свойство, ради
+ * которого сборка памятилась, только теперь без лотереи «кто первый».
  */
 function packedDevbox(): string {
-  if (packed !== null) {
-    return packed;
-  }
-
-  const box = mkdtempSync(join(tmpdir(), 'baser-cli-pack-'));
-  runSealed(
-    'npm',
-    ['pack', '--ignore-scripts', '--pack-destination', box, DEVBOX_SOURCE],
-    { cwd: DEVBOX_SOURCE, stdio: 'pipe' },
-  );
-
-  const tarball = readdirSync(box).find((name) => name.endsWith('.tgz'));
-  if (tarball === undefined) {
-    throw new Error(`npm pack не оставил тарбол в ${box}`);
-  }
-  runSealed('tar', ['-xzf', join(box, tarball), '-C', box], {
-    stdio: 'pipe',
-  });
-
-  packed = join(box, 'package');
-  return packed;
+  return inject('packedDevbox');
 }
 
 /** Разобранный `package.json` ОПУБЛИКОВАННОГО обвеса — вместе с блоком `baser`. */

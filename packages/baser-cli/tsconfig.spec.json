@@ -19,6 +19,7 @@
     "src/**/*.test.ts",
     "src/**/*.spec.ts",
     "src/**/*.fixture.ts",
+    "src/**/*.setup.ts",
     "src/**/*.test.tsx",
     "src/**/*.spec.tsx",
     "src/**/*.test.js",

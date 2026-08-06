@@ -273,7 +273,13 @@ describe('правило распространяется на ВСЕ пробы
       if (entry.isDirectory()) {
         return probes(path);
       }
-      return entry.name.endsWith('.spec.ts') || entry.name.endsWith('.fixture.ts')
+      // Подготовка прогона (`*.setup.ts`) под тем же правилом, что и пробы, и
+      // по той же причине: она тоже зовёт `npm`, и унаследованное окружение
+      // хука увело бы его работать в чужой репозиторий (`tasker:BASER2-189`
+      // принёс первый такой файл — обвес собирается один раз на прогон).
+      return entry.name.endsWith('.spec.ts') ||
+        entry.name.endsWith('.fixture.ts') ||
+        entry.name.endsWith('.setup.ts')
         ? [path]
         : [];
     });
