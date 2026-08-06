@@ -130,7 +130,7 @@ describe.skipIf(SUPERUSER)('артефакт, в который писать н�
     // ему законно принадлежать.
     expect(result.problems[0].message).toContain('chown');
     expect(result.problems[0].message).toContain(
-      'зови дверь от того пользователя',
+      'зови консоль от того пользователя',
     );
 
     // На диск не ушло НИЧЕГО: применение проходит целиком либо никак.

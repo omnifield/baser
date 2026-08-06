@@ -34,12 +34,28 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  installDevbox,
+  DEVBOX_PACKAGE,
+  type Consumer,
+} from './devbox.fixture.js';
+import { renderText } from './report.js';
+import { run } from './run.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 /** Отменённая пара слов. Ищется по корню — «детали» и «патрона» тоже. */
 const CANCELLED = /детал|патрон/i;
+
+/**
+ * Выведенное из языка слово (`kb:BASER3-29`, решение user 2026-08-06).
+ *
+ * Ищется НАЧАЛО слова, а не подстрока: «подвернувшийся» несёт те же буквы и к
+ * словарю отношения не имеет — проба, красневшая на нём, учила бы обходить себя,
+ * а не держать слово.
+ */
+const RETIRED = /(?<![А-Яа-яЁё])двер/gi;
 
 /** Модули, уезжающие в `dist`: те же исключения, что в `tsconfig.lib.json`. */
 function shippedModules(dir: string): string[] {
@@ -91,11 +107,6 @@ describe('словарь зоны', () => {
       .description;
     const readme = readFileSync(join(ROOT, 'README.md'), 'utf-8');
 
-    // Ищется НАЧАЛО слова, а не подстрока: «подвернувшийся» несёт те же буквы и
-    // к словарю отношения не имеет — проба, красневшая на нём, учила бы обходить
-    // себя, а не держать слово.
-    const RETIRED = /(?<![А-Яа-яЁё])двер/gi;
-
     expect(description).not.toMatch(RETIRED);
     // README называет отменённое слово РОВНО ОДИН раз — в «Словаре», где
     // объясняет замену: тем же правилом, что и отменённая пара «деталь ·
@@ -118,5 +129,97 @@ describe('словарь зоны', () => {
         null,
       ]);
     }
+  });
+});
+
+/**
+ * ВЫВЕДЕННОЕ СЛОВО СУДИТСЯ ПО ВЫХОДУ, А НЕ ПО ИСХОДНИКУ (`tasker:BASER2-204`).
+ *
+ * Справка и README вычищены раньше (`tasker:BASER2-201`), и там проба смотрит на
+ * текст напрямую — он и есть продукт. У прогона иначе: печатаемая строка
+ * собирается из кусков, а рождаемый файл настроек и вовсе не лежит в исходнике
+ * целиком. Поиск по `src` ответил бы про НАМЕРЕНИЕ зоны, а человек читает то,
+ * что вышло, — поэтому здесь прогоняется настоящий прогон, и судится его вывод.
+ *
+ * Внутренние комментарии этими пробами не судятся намеренно: они уезжают своей
+ * работой (`tasker:BASER2-203`), и смешать их сюда значило бы получить красноту
+ * там, где читателя нет.
+ */
+describe('выведенное слово не доезжает до человека', () => {
+  const CONFIG = { formVersion: 2, sources: [{ use: DEVBOX_PACKAGE }] };
+  const DEVBOX_ID = 'omnifield/devbox';
+  const LIVE = '.devcontainer/devcontainer.json';
+
+  let consumer: Consumer | null = null;
+
+  afterEach(() => {
+    consumer?.cleanup();
+    consumer = null;
+  });
+
+  it('ни одна печатаемая строка прогона: укладка, сходимость, переезд, отказ', async () => {
+    consumer = installDevbox({
+      config: CONFIG,
+      tuning: { [DEVBOX_ID]: { presets: ['omnifield'] } },
+    });
+
+    // Четыре прогона, потому что печатают они РАЗНОЕ. Одного мало: блок
+    // «остаётся человеку» появляется только на переезде, а отказ — только там,
+    // где на пути обвеса лежит чужой файл.
+    const said: Record<string, string> = {
+      план: renderText(await run({ command: 'plan', ...consumer.door })),
+      укладка: renderText(await run({ command: 'apply', ...consumer.door })),
+      сходимость: renderText(await run({ command: 'plan', ...consumer.door })),
+    };
+
+    // Переезд значения: заполненный пользователь образа двигает и посчитанные
+    // от него адреса томов — тот самый прогон с блоком «остаётся человеку».
+    consumer.tune(DEVBOX_ID, {
+      presets: ['omnifield'],
+      settings: { imageUser: 'vscode' },
+    });
+    said['переезд'] = renderText(
+      await run({ command: 'plan', ...consumer.door }),
+    );
+    expect(said['переезд']).toContain('остаётся человеку');
+
+    // Отказ: на пути обвеса лежит чужой файл — самый читаемый текст зоны,
+    // потому что человек упирается в него в первые пять минут. Конфига тут нет
+    // намеренно: так это и выглядит у того, кто ставит обвес впервые.
+    consumer.cleanup();
+    consumer = installDevbox({
+      existing: { [LIVE]: '{\n  "name": "мой старый девбокс"\n}\n' },
+    });
+    said['отказ'] = renderText(
+      await run({ command: 'plan', ...consumer.door }),
+    );
+    expect(said['отказ']).toContain('первая установка в непустой репозиторий');
+
+    for (const [scenario, text] of Object.entries(said)) {
+      // Имя прогона едет в утверждение: красная проба обязана называть, какой
+      // именно вывод сказал лишнее, а не сообщать, что где-то в зоне что-то есть.
+      expect([scenario, text.match(RETIRED)]).toEqual([scenario, null]);
+    }
+
+    // Обратная половина — там, где предмет есть: инструмент называет себя не в
+    // каждом прогоне, и требовать слова от всех значило бы судить не замену, а
+    // разговорчивость. На переезде он себя называет, и называет консолью.
+    expect(said['переезд']).toContain(
+      'докер консоль не зовёт и контейнерами не управляет',
+    );
+  });
+
+  it('рождённый файл настроек — на живом рождении, а не в шаблоне', async () => {
+    consumer = installDevbox({ config: CONFIG });
+
+    await run({ command: 'apply', ...consumer.door });
+
+    // Читается ровно то, что человек откроет: файл с диска, а не строка из
+    // `renderSourceConfig`. Комментарии в нём — первое, что он читает про
+    // инструмент, и читает раньше любой доки.
+    const born = consumer.readTuning(DEVBOX_ID);
+    expect(born).not.toBeNull();
+    expect(born).not.toMatch(RETIRED);
+    expect(born).toContain('Файл родила консоль');
   });
 });

@@ -225,7 +225,7 @@ export function bundle(source: string, options: BundleOptions): BundleReport {
             'bundle-runtime-failed',
             file,
             'запускаемый файл бандла не собран — нечего вкладывать. ' +
-              'Собери пакет двери (tsc) до сборки бандла',
+              'Собери пакет консоли (tsc) до сборки бандла',
           );
           continue;
         }
@@ -269,7 +269,7 @@ export function bundle(source: string, options: BundleOptions): BundleReport {
           'bundle-not-self-contained',
           file,
           `импорт "${name}" не резолвится внутри бандла: унесённый бандл упал бы ` +
-            'на первом же прогоне у человека. Добавь пакет в замыкание зависимостей двери',
+            'на первом же прогоне у человека. Добавь пакет в замыкание зависимостей консоли',
         );
       }
       return ourJavascript(target).length + runtime.length;

@@ -268,14 +268,14 @@ export function createRepoTree(root: string): RepoTree {
      */
     rename(): never {
       throw new Error(
-        'дерево двери не умеет rename: движок его не зовёт. ' +
+        'дерево консоли не умеет rename: движок его не зовёт. ' +
           'Появилась нужда — реализуй явно, а не молчаливой заглушкой',
       );
     },
 
     changePermissions(): never {
       throw new Error(
-        'дерево двери не умеет changePermissions: движок его не зовёт. ' +
+        'дерево консоли не умеет changePermissions: движок его не зовёт. ' +
           'Права задаются при записи (`write(..., { mode })`)',
       );
     },
