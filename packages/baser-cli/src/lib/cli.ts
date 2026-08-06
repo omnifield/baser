@@ -10,7 +10,12 @@
  * поэтому в CI команда ведёт себя ровно как у человека
  * (`tasker:BASER2-18`, `tasker:BASER2-20`).
  *
- * ## Две семьи команд, и они разные
+ * ## Три семьи команд, и они разные
+ *
+ * **Привязка поставки** — `add` (`tasker:BASER2-201`). Объявляет поставку в
+ * локации и тут же применяет её: привязка модуля означает, что он заработал.
+ * Механики здесь нет вовсе — способность «объявить» живёт в движке
+ * (`kb:BASER3-33`), применение уже написано, а `add.ts` их складывает.
  *
  * **Материализация** — `plan` и `apply`. Две фазы разнесены не флагами одной
  * команды, а двумя командами, потому что читаемость плана ДО применения —
@@ -31,14 +36,23 @@ import { checkPackage, type CheckReport } from '@omnifield/baser-check';
 import { FORM_VERSION } from '@omnifield/baser-contracts';
 import { OUTPUT_SCHEMA_VERSION } from '@omnifield/baser-materialize';
 import { packPackage, type PackReport } from '@omnifield/baser-pack';
+import { add, addExitCode, type AddResult } from './add.js';
 import { bundle, BUNDLE_SCHEMA_VERSION, type BundleReport } from './bundle.js';
-import { renderBundle, renderCheck, renderPack, renderText } from './report.js';
+import {
+  renderAdd,
+  renderBundle,
+  renderCheck,
+  renderPack,
+  renderText,
+} from './report.js';
 import { run } from './run.js';
 import type { SupplyOverride } from './supply.js';
 import { DOOR_SCHEMA_VERSION } from './schema.js';
 import { exitCodeOf, type DoorResult } from './result.js';
 
-export const USAGE = `baser — дверь материализации и подготовка обвеса
+export const USAGE = `baser — консоль материализации и подготовка обвеса
+
+  baser add <пакет>  объявить поставку в локации и применить её
 
   baser plan    показать план, ничего не применяя
   baser apply   применить план и записать на диск
@@ -48,15 +62,28 @@ export const USAGE = `baser — дверь материализации и по�
   baser bundle <каталог обвеса> --into <куда>   собрать запускаемый бандл
 
   --json            отдать ответ данными (любая команда)
-  --cwd <path>      корень репозитория потребителя — plan, apply
+  --cwd <path>      корень репозитория потребителя — add, plan, apply
+  --channel <метка> взять последнее из канала, не зная номера ("dev") — add
+  --version <номер> закрепить поставку на точной версии ("1.2.3") — add;
+                    БЕЗ команды — версии схем: консоли, формы, вывода движка, бандла
   --confirm <dest>  отдать чужой артефакт во владение обвесу, поимённо — plan, apply
   --difference      расхождение с чужим файлом целиком, без усечения — plan, apply
   --source <имя>=<каталог>  взять поставку из каталога, а не со склада — plan, apply
   --into <path>     каталог выдачи — pack, bundle
-  --version         версии схем: двери, формы, вывода движка, бандла
   --help            это сообщение
 
-Поставку достаёт САМА дверь — тем же пакетным менеджером, в кэш снаружи твоей
+add ОБЪЯВЛЯЕТ поставку и тут же ПРИМЕНЯЕТ её: привязка означает, что модуль
+заработал, и второй командой это не делается. Объявления в локации нет — оно
+создаётся; поставка уже объявлена — запись не дублируется, а смена закрепления
+называется вслух. Метка канала и точный номер разом — отказ: что из двух
+закрепление, вызов не сказал.
+
+Применение отказало — объявление ОСТАЁТСЯ на диске, и это не след неудачи:
+чинится названная причина, а повторяется тот же вызов. Конфликт владения так и
+разрешается — подтверждение (--confirm) адресуется УЖЕ объявленной поставке, и
+откат объявления сделал бы починку невозможной.
+
+Поставку достаёт САМА консоль — тем же пакетным менеджером, в кэш снаружи твоей
 локации ($BASER_CACHE, иначе $XDG_CACHE_HOME/baser, иначе ~/.cache/baser). В
 локации от этого не появляется ни склада, ни лока, ни записи в твоём манифесте:
 объявлять обвес зависимостью больше не нужно, и на локации не на ноде ничего
@@ -86,11 +113,12 @@ export const USAGE = `baser — дверь материализации и по�
 артефакт записывается в паспорт укладки, а содержимое не трогается вовсе.
 Класс каждого спорного артефакта называет отказ, который просит подтверждения.
 
-Вопросов пользователю дверь не задаёт: не заполнено — работает дефолт.
+Вопросов пользователю консоль не задаёт: не заполнено — работает дефолт.
 Код возврата: 0 сделано либо нечего делать · 1 конфликт владения · 2 отказ.`;
 
 /** Что произвёл вызов. Семьи команд разные, и ответы у них тоже разные. */
 export type CliResult =
+  | { readonly kind: 'add'; readonly add: AddResult }
   | { readonly kind: 'door'; readonly door: DoorResult }
   | { readonly kind: 'check'; readonly check: CheckReport }
   | { readonly kind: 'pack'; readonly pack: PackReport }
@@ -123,6 +151,23 @@ export async function cli(
     exitCode,
     result,
   });
+
+  if (parsed.command === 'add') {
+    // Ни одного решения по дороге: имя пакета и закрепление уезжают способности
+    // движка как есть, а «объявить и применить» — это `add.ts`, а не разбор
+    // argv (`tasker:BASER2-201`).
+    const result = await add({
+      use: parsed.target,
+      ...(parsed.channel === null ? {} : { channel: parsed.channel }),
+      ...(parsed.version === null ? {} : { version: parsed.version }),
+      cwd: parsed.cwd ?? cwd,
+    });
+    return emit(
+      { kind: 'add', add: result },
+      renderAdd(result),
+      addExitCode(result),
+    );
+  }
 
   if (parsed.command === 'plan' || parsed.command === 'apply') {
     const door = await run({
@@ -164,6 +209,11 @@ export async function cli(
 /** Машинный ответ — сам отчёт механики, без обёртки двери поверх него. */
 function payload(result: CliResult): unknown {
   switch (result.kind) {
+    case 'add':
+      // Механик здесь две — объявление и применение, — и ответ отдаёт обе
+      // целыми (`AddResult`). Своей обёртки поверх них консоль не изобретает:
+      // и то, и другое едет ровно так, как его отдала своя зона.
+      return result.add;
     case 'door':
       return result.door;
     case 'check':
@@ -175,10 +225,24 @@ function payload(result: CliResult): unknown {
   }
 }
 
-type Command = 'plan' | 'apply' | 'check' | 'pack' | 'bundle';
+type Command = 'add' | 'plan' | 'apply' | 'check' | 'pack' | 'bundle';
 
-/** Командам подготовки нужен каталог обвеса; `pack` и `bundle` — ещё и `--into`. */
-const NEEDS_TARGET: readonly Command[] = ['check', 'pack', 'bundle'];
+/**
+ * Чем команда зовётся позиционно — и как это НАЗЫВАЕТСЯ в отказе.
+ *
+ * Слово здесь не украшение: командам подготовки подают каталог на диске, а
+ * `add` — имя пакета, которого на диске может не быть вовсе. Общее «ждёт ОДИН
+ * каталог обвеса» отправило бы человека искать папку там, где нужна строка.
+ */
+const POSITIONAL: Readonly<Record<Command, string | null>> = {
+  add: 'ОДНО имя пакета поставки',
+  plan: null,
+  apply: null,
+  check: 'ОДИН каталог обвеса',
+  pack: 'ОДИН каталог обвеса',
+  bundle: 'ОДИН каталог обвеса',
+};
+
 const NEEDS_INTO: readonly Command[] = ['pack', 'bundle'];
 
 /**
@@ -192,6 +256,7 @@ const NEEDS_INTO: readonly Command[] = ['pack', 'bundle'];
  * `--json` не перечисляется: он есть у всех и означает у всех одно.
  */
 const FLAGS_BY_COMMAND: Readonly<Record<Command, readonly string[]>> = {
+  add: ['--cwd', '--channel', '--version'],
   plan: ['--cwd', '--confirm', '--difference', '--source'],
   apply: ['--cwd', '--confirm', '--difference', '--source'],
   check: [],
@@ -220,7 +285,11 @@ type ParsedArgv =
       readonly difference: boolean;
       /** Дев-петля: поставки, названные каталогом вместо склада. */
       readonly sources: readonly SupplyOverride[];
-      /** Каталог обвеса для команд подготовки. */
+      /** Метка канала, которой закрепляется поставка у `add`. */
+      readonly channel: string | null;
+      /** Точный номер, которым закрепляется поставка у `add`. */
+      readonly version: string | null;
+      /** Позиционный аргумент: каталог обвеса либо имя пакета поставки. */
       readonly target: string;
       /** Каталог выдачи для `pack` и `bundle`. */
       readonly into: string;
@@ -244,7 +313,22 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
     };
   }
 
-  if (argv.includes('--version')) {
+  // `--version` НОСИТ ДВА СМЫСЛА, и разводятся они принадлежностью команде.
+  //
+  // Своим он был всегда — «версии схем», — а поставка закрепляется на точной
+  // версии тем же словом: так это поле называется и в перечне (`sources[].version`),
+  // и у способности движка (`declareSupply.parameters`). Переименовать его у
+  // консоли значило бы завести второе имя одному факту — ровно то, чего зона не
+  // делает нигде.
+  //
+  // Поэтому смысл выбирает КОМАНДА, а не порядок аргументов: у `add` флаг её
+  // собственный (`FLAGS_BY_COMMAND`), у всех прочих вызовов — прежний общий.
+  // Механика та же, что и у «флаг принадлежит команде», и другого места, где
+  // это решалось бы, не заводится.
+  const head = argv[0];
+  const claimed =
+    isCommand(head) && FLAGS_BY_COMMAND[head].includes('--version');
+  if (!claimed && argv.includes('--version')) {
     const versions = {
       doorSchemaVersion: DOOR_SCHEMA_VERSION,
       formVersion: FORM_VERSION,
@@ -266,6 +350,8 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
   let json = false;
   let cwd: string | null = null;
   let into: string | null = null;
+  let channel: string | null = null;
+  let version: string | null = null;
   let difference = false;
   const confirm: string[] = [];
   const sources: SupplyOverride[] = [];
@@ -307,7 +393,9 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
       flag === '--cwd' ||
       flag === '--confirm' ||
       flag === '--into' ||
-      flag === '--source'
+      flag === '--source' ||
+      flag === '--channel' ||
+      flag === '--version'
     ) {
       if (!FLAGS_BY_COMMAND[command].includes(flag)) {
         return foreign(flag);
@@ -328,6 +416,13 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
         into = argument;
       } else if (flag === '--confirm') {
         confirm.push(argument);
+      } else if (flag === '--channel') {
+        // Метка и номер здесь только СОБИРАЮТСЯ. Что бывает, когда названы оба,
+        // решает движок своим `pin-ambiguous`: второе такое же решение, принятое
+        // разбором argv, разошлось бы с первым молча (`kb:BASER3-33`).
+        channel = argument;
+      } else if (flag === '--version') {
+        version = argument;
       } else {
         // Значение флага — ПАРА «имя пакета = каталог», и разбор её требует:
         // «--source packages/baser-devbox» не сказал бы, к какой записи перечня
@@ -360,17 +455,17 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
     };
   }
 
-  const wantsTarget = NEEDS_TARGET.includes(command);
-  if (wantsTarget && positional.length !== 1) {
+  const wants = POSITIONAL[command];
+  if (wants !== null && positional.length !== 1) {
     return {
       ok: false,
       stdout:
-        `команда "${command}" ждёт ОДИН каталог обвеса` +
+        `команда "${command}" ждёт ${wants}` +
         `${positional.length > 1 ? `, получено ${positional.length}` : ''}.\n\n${USAGE}\n`,
       exitCode: 2,
     };
   }
-  if (!wantsTarget && positional.length > 0) {
+  if (wants === null && positional.length > 0) {
     return {
       ok: false,
       stdout: `команда "${command}" не ждёт позиционных аргументов.\n\n${USAGE}\n`,
@@ -393,13 +488,16 @@ function parseArgv(argv: readonly string[]): ParsedArgv {
     confirm,
     difference,
     sources,
+    channel,
+    version,
     target: positional[0] ?? '',
     into: into ?? '',
   };
 }
 
-function isCommand(value: string): value is Command {
+function isCommand(value: string | undefined): value is Command {
   return (
+    value === 'add' ||
     value === 'plan' ||
     value === 'apply' ||
     value === 'check' ||

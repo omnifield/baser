@@ -6,7 +6,7 @@
     "url": "git+https://github.com/omnifield/baser.git",
     "directory": "packages/baser-cli"
   },
-  "description": "Дверь baser: зовёт станок и кладёт обвес на диск — план называет движение до применения",
+  "description": "Консоль baser: зовёт станок и кладёт обвес на диск — план называет движение до применения",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",

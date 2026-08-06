@@ -48,6 +48,13 @@ export type { SupplyOrigin, SupplyOverride } from './lib/supply.js';
 export { run } from './lib/run.js';
 export type { RunOptions } from './lib/run.js';
 
+// ПРИВЯЗКА ПОСТАВКИ (`tasker:BASER2-201`). Наружу уезжает механика целиком:
+// `add` зовут не только из терминала, но и из гейта, скрипта и — дальше — из
+// интерфейса, ровно как `run`. Способность при этом остаётся в движке: здесь
+// только раннер, который даёт ей дерево и кладёт объявление на диск.
+export { add, addExitCode } from './lib/add.js';
+export type { AddOptions, AddResult } from './lib/add.js';
+
 export { cli, USAGE } from './lib/cli.js';
 export type { CliOutcome, CliResult } from './lib/cli.js';
 
@@ -66,6 +73,7 @@ export { createRepoTree } from './lib/tree.js';
 export type { ChangeKind, RepoTree } from './lib/tree.js';
 
 export {
+  renderAdd,
   renderBundle,
   renderCheck,
   renderPack,
