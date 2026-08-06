@@ -8,14 +8,21 @@
  * пользовательской и новой версии файла нет ни под каким флагом; владение
  * продукта выражается форком источника — снаружи движка.
  *
- * **Вход подаётся готовой структурой.** Движок не читает ни манифестов, ни
- * конфигов и не знает, из каких файлов их собрали: настоящая декларация размазана
- * по трём файлам — объявление обвеса, перечень поставленного и настройки
- * инструмента, — и склеивает их дверь (`declaration.ts`, `README.md`,
- * `packages/baser-contracts/README.md`). Файловой системы движок не касается
- * вовсе — он работает с виртуальным деревом, и форма этого дерева объявлена
- * здесь же портом на шести методах (`lib/tree.ts`): поставка движка не тянет
- * потребителю ни `@nx/devkit`, ни `nx` (`tasker:BASER2-181`).
+ * **Вход ФАЗ подаётся готовой структурой.** План и применение не читают ни
+ * манифестов, ни конфигов и не знают, из каких файлов их собрали: настоящая
+ * декларация размазана по трём файлам — объявление обвеса, перечень
+ * поставленного и настройки инструмента, — и склеивает их дверь
+ * (`declaration.ts`, `README.md`, `packages/baser-contracts/README.md`).
+ *
+ * **У способностей вход другой, и это не отмена правила** (`tasker:BASER2-200`).
+ * Способность «объявить поставку» перечень читает, потому что она его ПИШЕТ:
+ * дописать запись в файл, который отказываешься прочесть, значит либо переписать
+ * поверх чужого, либо угадать его содержимое (`lib/supply.ts`).
+ *
+ * Файловой системы движок не касается вовсе — он работает с виртуальным деревом,
+ * и форма этого дерева объявлена здесь же портом на шести методах
+ * (`lib/tree.ts`): поставка движка не тянет потребителю ни `@nx/devkit`, ни `nx`
+ * (`tasker:BASER2-181`).
  */
 
 export type { Tree } from './lib/tree.js';
@@ -84,6 +91,29 @@ export {
   applyPlan,
 } from './lib/apply.js';
 export type { ApplyOptions, ApplyReport } from './lib/apply.js';
+
+export type {
+  Capability,
+  CapabilityParameter,
+  CapabilityParameterType,
+  CapabilityProblem,
+  CapabilityProblemCode,
+  CapabilityResult,
+  CapabilityRunOptions,
+  CapabilitySpec,
+} from './lib/capability.js';
+
+export {
+  DECLARE_SUPPLY_NAME,
+  declareSupply,
+  describeSupplyChange,
+} from './lib/supply.js';
+export type {
+  DeclareSupplyInput,
+  DeclareSupplyOutcome,
+  SupplyChange,
+  SupplyPin,
+} from './lib/supply.js';
 
 export { createTrace } from './lib/trace.js';
 export type { TraceOptions, TraceRecorder, TraceSpan } from './lib/trace.js';
