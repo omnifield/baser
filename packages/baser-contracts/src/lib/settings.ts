@@ -20,6 +20,7 @@ import {
 } from './config.js';
 import { byBytes } from './paths.js';
 import { ProblemLog, type FormResult } from './problems.js';
+import { describeCause, isThenable } from './resolvers.js';
 import {
   describeShape,
   describeValue,
@@ -72,6 +73,11 @@ export interface ResolverContext {
  * «Последняя стабильная» от этого не пропадает — она пинится В САМОМ ОБВЕСЕ при
  * выпуске. Тогда версия рантайма двигается вместе с версией обвеса: видно в
  * диффе, видно в ревью, воспроизводимо на любой машине.
+ *
+ * **Резолвер предупреждения — ДРУГОЕ обещание** (`warning.ts`, форма 7): ему
+ * смотреть на посадочное место не только можно, но и нужно, потому что его
+ * ответ никуда не записывается. Механизм загрузки у них один, обещания разные —
+ * поэтому и порты разные.
  */
 export type SettingResolver = (ctx: ResolverContext) => SettingValue;
 
@@ -282,16 +288,4 @@ function compute(
   }
 
   return { ok: true, value };
-}
-
-function isThenable(value: unknown): boolean {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as { then?: unknown }).then === 'function'
-  );
-}
-
-function describeCause(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
 }

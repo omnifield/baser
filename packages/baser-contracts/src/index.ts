@@ -27,6 +27,7 @@ export {
   MAP_TYPE_SINCE,
   MIN_FORM_VERSION,
   PINNED_VERSION_SINCE,
+  WARNING_SINCE,
 } from './lib/version.js';
 export type { FormVersion } from './lib/version.js';
 
@@ -106,6 +107,9 @@ export type {
   SettingOrigin,
   SettingResolver,
 } from './lib/settings.js';
+
+export { resolveWarning } from './lib/warning.js';
+export type { ComputeWarning, SourceWarning } from './lib/warning.js';
 
 export { checkTemplate } from './lib/template.js';
 
