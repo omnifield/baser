@@ -7,6 +7,10 @@
     },
     {
       "use": "@omnifield/brainer-harness"
+    },
+    {
+      "use": "@omnifield/baser-git",
+      "version": "0.1.0-dev.1"
     }
   ]
 }
