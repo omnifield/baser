@@ -42,6 +42,7 @@ import {
   FORM_VERSION,
   MAP_TYPE_SINCE,
   MIN_FORM_VERSION,
+  WARNING_SINCE,
 } from './version.js';
 
 /** Ключ блока самообъявления в `package.json` обвеса. */
@@ -131,6 +132,18 @@ export interface SourceHead {
 export interface SourceDeclaration {
   readonly formVersion: number;
   readonly source: SourceHead;
+  /**
+   * ВЫЧИСЛЯЕМОЕ ПРЕДУПРЕЖДЕНИЕ — что обвес говорит человеку в момент применения
+   * (форма 7, `warning.ts`). Резолвер возвращает текст либо ничего.
+   *
+   * **Живёт на объявлении, а не на записи раскладки, и это решение** (`warning.ts`):
+   * предупреждение описывает не артефакт, а исход применения ОБВЕСА в этой
+   * локации. Отсутствие поля — рабочее состояние: обвесу нечего сказать.
+   *
+   * Звать резолвер разбор не умеет и не должен: этот вход ничего не исполняет.
+   * Зовёт его дверь через порт `ComputeWarning`, а сюда приезжает только ссылка.
+   */
+  readonly warningFrom?: ResolverRef;
   readonly settings: Readonly<Record<string, SettingSpec>>;
   readonly presets: Readonly<Record<string, PresetSpec>>;
   readonly layout: readonly LayoutEntry[];
@@ -139,6 +152,7 @@ export interface SourceDeclaration {
 const BLOCK_FIELDS = new Set([
   'formVersion',
   'source',
+  'warningFrom',
   'settings',
   'presets',
   'layout',
@@ -153,13 +167,7 @@ const SETTING_FIELDS = new Set([
   'defaultFrom',
 ]);
 const PRESET_FIELDS = new Set(['title', 'values']);
-const LAYOUT_FIELDS = new Set([
-  'src',
-  'dest',
-  'render',
-  'class',
-  'executable',
-]);
+const LAYOUT_FIELDS = new Set(['src', 'dest', 'render', 'class', 'executable']);
 
 /**
  * Снятые и не заведённые поля, у которых есть НАЗВАННАЯ замена.
@@ -253,6 +261,12 @@ export function parseSourceDeclaration(
   namedUnknownFields(log, value, BLOCK_FIELDS, at);
 
   const source = parseSource(log, value['source'], `${at}.source`);
+  const warningFrom = parseWarningFrom(
+    log,
+    value['warningFrom'],
+    `${at}.warningFrom`,
+    formVersion,
+  );
   const settings = parseSettings(
     log,
     value['settings'],
@@ -265,16 +279,15 @@ export function parseSourceDeclaration(
     `${at}.presets`,
     settings,
   );
-  const layout = parseLayout(
-    log,
-    value['layout'],
-    `${at}.layout`,
-    formVersion,
-  );
+  const layout = parseLayout(log, value['layout'], `${at}.layout`, formVersion);
 
   return log.result(() => ({
     formVersion,
     source,
+    // Поля нет — его нет и в разобранном объявлении, а не `undefined` рядом с
+    // остальными: «обвесу нечего сказать» и «обвес сказал ничто» это одно и то
+    // же состояние, и второй формы у него быть не должно.
+    ...(warningFrom ? { warningFrom } : {}),
     settings,
     presets,
     layout,
@@ -656,6 +669,58 @@ function parseResolverRef(
   return { module: modulePath.path, member };
 }
 
+/**
+ * ССЫЛКА НА РЕЗОЛВЕР ПРЕДУПРЕЖДЕНИЯ — единственное место, где предупреждение
+ * умеет отказать.
+ *
+ * Разделение громкостей проходит ровно здесь, и оно не случайно
+ * (`tasker:BASER2-232` §«Что НЕ должно случиться»):
+ *
+ * - **непригодно ОБЪЯВЛЕНИЕ** — поле под старым номером формы, не строка, не
+ *   разбираемая ссылка `<файл>#<экспорт>` — обычный отказ разбора, до
+ *   применения. Тут непригоден сам обвес, и молчать об этом нельзя: автор
+ *   считал бы, что предупреждение объявлено, а его нет;
+ * - **не сработала ОБСТАНОВКА** — резолвер не нашёлся, бросил, вернул не то —
+ *   отказом НЕ является вовсе и разбирается в `warning.ts`, уже без нас.
+ *
+ * Сложив их в одну кучу, мы получили бы вторую громкость, ведущую себя как
+ * первая: обвес, попытавшийся сказать, ронял бы локацию сильнее молчащего.
+ *
+ * Ссылка разбирается ТЕМ ЖЕ `parseResolverRef`, что и вычисляемый дефолт:
+ * механизм загрузки резолверов один, второго мы не заводим.
+ *
+ * @returns ссылку либо `undefined` — поля нет либо оно уже названо отказом
+ */
+function parseWarningFrom(
+  log: ProblemLog,
+  value: unknown,
+  at: string,
+  formVersion: number,
+): ResolverRef | undefined {
+  if (value === undefined) {
+    // Обвесу нечего сказать — рабочее состояние, а не пропуск: до формы 7 так
+    // было у всех, и ни один выпущенный обвес от подъёма не правится.
+    return undefined;
+  }
+
+  // Отказ при ЛЮБОМ значении поля, как у исполняемости: под старым номером даже
+  // пригодная ссылка записана словом, которого та форма не знает.
+  if (formVersion < WARNING_SINCE) {
+    log.add(
+      'form-version-unsupported',
+      at,
+      `вычисляемое предупреждение приехало формой ${WARNING_SINCE}, а объявление ` +
+        `назвалось формой ${formVersion} — подними "formVersion" до ${WARNING_SINCE}. ` +
+        `Иначе baser, который формы ${WARNING_SINCE} не знает, назовёт предупреждение ` +
+        'опечаткой вместо «обнови baser», а снятое поле вернёт обвесу одну громкость: ' +
+        'промолчать либо уронить весь прогон',
+    );
+    return undefined;
+  }
+
+  return parseResolverRef(log, value, at) ?? undefined;
+}
+
 function parsePresets(
   log: ProblemLog,
   value: unknown,
@@ -850,12 +915,7 @@ function parseLayoutEntry(
     return null;
   }
 
-  const executable = parseExecutable(
-    log,
-    value['executable'],
-    at,
-    formVersion,
-  );
+  const executable = parseExecutable(log, value['executable'], at, formVersion);
   if (executable === null) {
     return null;
   }

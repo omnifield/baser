@@ -2,13 +2,15 @@
   "name": "@fixture/kit",
   "version": "1.0.0",
   "baser": {
-    "formVersion": 6,
+    "formVersion": 7,
 
     "source": {
       "id": "fixture/kit",
       "title": "Фикстура: обвес, у которого есть все слова формы",
       "contentRoot": "template"
     },
+
+    "warningFrom": "./warnings.mjs#hookNotWired",
 
     "settings": {
       "name": {

@@ -50,7 +50,7 @@
  */
 
 import { createRequire } from 'node:module';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -63,6 +63,7 @@ import {
 } from './config.js';
 import {
   readSourceDeclaration,
+  type ResolverRef,
   type SourceDeclaration,
 } from './declaration.js';
 import { codesOf, declarationBlock } from './form.fixture.js';
@@ -76,8 +77,10 @@ import {
   FORM_VERSION,
   MAP_TYPE_SINCE,
   PINNED_VERSION_SINCE,
+  WARNING_SINCE,
 } from './version.js';
 import type { SettingValue } from './values.js';
+import { resolveWarning, type SourceWarning } from './warning.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const examples = resolve(here, '../../examples');
@@ -97,19 +100,27 @@ const TOOLS = {
 } as const;
 type Tool = keyof typeof TOOLS;
 
-/** Резолверы обвеса — модуль его же пакета; загружает их дверь, не контракт. */
-const resolvers: Record<
-  string,
-  Record<string, (ctx: unknown) => SettingValue>
-> = {};
+/**
+ * Резолверы обвеса — модули его же пакета; загружает их ДВЕРЬ, не контракт.
+ *
+ * Ключ — `<обвес>/<модуль>`, как в самой ссылке объявления: резолверов у формы
+ * два (вычисляемый дефолт и вычисляемое предупреждение), и живут они в разных
+ * файлах. Разбирать ссылку и звать «какой-нибудь модуль» значило бы проверять не
+ * то, что делает дверь.
+ */
+const resolvers: Record<string, Record<string, (ctx: unknown) => unknown>> = {};
 let render: (template: string, values: Record<string, unknown>) => string;
 let parseYaml: (text: string) => unknown;
 
 beforeAll(async () => {
   for (const tool of Object.keys(TOOLS) as Tool[]) {
-    resolvers[tool] = (await import(
-      pathToFileURL(join(examples, tool, 'defaults.mjs')).href
-    )) as Record<string, (ctx: unknown) => SettingValue>;
+    for (const file of readdirSync(join(examples, tool)).filter((name) =>
+      name.endsWith('.mjs'),
+    )) {
+      resolvers[`${tool}/${file}`] = (await import(
+        pathToFileURL(join(examples, tool, file)).href
+      )) as Record<string, (ctx: unknown) => unknown>;
+    }
   }
 
   const require = createRequire(import.meta.url);
@@ -179,6 +190,48 @@ function tuning(tool: Tool): SourceConfig {
   return parsed.value;
 }
 
+/**
+ * Вызов резолвера обвеса — то, что делает дверь: найти модуль ПО ССЫЛКЕ и
+ * позвать экспорт с контекстом.
+ *
+ * Один загрузчик на оба порта: механизм у них общий, различаются обещания
+ * (`warning.ts`), а не способ дотянуться до функции.
+ */
+function callResolver(tool: Tool, ref: ResolverRef, root: string): unknown {
+  const module = resolvers[`${tool}/${ref.module}`];
+  if (!module) {
+    throw new Error(`модуль ${ref.module} обвес не привёз`);
+  }
+  const fn = module[ref.member];
+  if (!fn) {
+    throw new Error(`в ${ref.module} нет экспорта ${ref.member}`);
+  }
+  return fn({
+    repo: { name: CONSUMER_REPO, root },
+    source: {
+      id: declaration(tool).source.id,
+      packageName: TOOLS[tool],
+      // Версия приходит из манифеста пакета — вторым полем объявления она не
+      // заводится (`tasker:BASER2-10` §1) и бывает отсутствующей
+      // (`tasker:BASER2-69`).
+      version: (manifest(tool)['version'] as string | undefined) ?? null,
+    },
+  });
+}
+
+/**
+ * Что обвес говорит человеку в этой локации — сквозным путём, а не заглушкой.
+ *
+ * Резолвер грузится настоящим `import` из фикстуры и зовётся с настоящим
+ * контекстом: звено формы кончается ровно здесь, и отсюда дверь берёт готовое
+ * состояние (`tasker:BASER2-232`).
+ */
+function warning(tool: Tool, root: string = consumer): SourceWarning {
+  return resolveWarning(declaration(tool), (ref) =>
+    callResolver(tool, ref, root),
+  );
+}
+
 function resolved(
   tool: Tool,
   patch: Partial<SourceConfig> = {},
@@ -186,23 +239,8 @@ function resolved(
   const decl = declaration(tool);
   const config = { ...tuning(tool), ...patch };
 
-  const computeDefault: ComputeDefault = (ref) => {
-    const fn = resolvers[tool][ref.member];
-    if (!fn) {
-      throw new Error(`в ${ref.module} нет экспорта ${ref.member}`);
-    }
-    return fn({
-      repo: { name: CONSUMER_REPO, root: consumer },
-      source: {
-        id: decl.source.id,
-        packageName: TOOLS[tool],
-        // Версия приходит из манифеста пакета — вторым полем объявления она не
-        // заводится (`tasker:BASER2-10` §1) и бывает отсутствующей
-        // (`tasker:BASER2-69`).
-        version: (manifest(tool)['version'] as string | undefined) ?? null,
-      },
-    });
-  };
+  const computeDefault: ComputeDefault = (ref) =>
+    callResolver(tool, ref, consumer);
 
   const result = resolveSettings(decl, config, { computeDefault });
   if (!result.ok) {
@@ -410,21 +448,25 @@ describe('проба формы: два обвеса-фикстуры сразу
     expect(resolved('kit', { settings: { tools: {} } })['tools']).toEqual({});
   });
 
-  it('ФОРМЫ 2, 5 И 6 ЖИВУТ РЯДОМ: подъём не требует правки от соседа', () => {
-    // Набор уехал на 6 ради исполняемого артефакта, заготовка осталась на 2, а
-    // перечень поставленного стоит на 5 ради метки канала — и всё это
+  it('ФОРМЫ 2, 5 И 7 ЖИВУТ РЯДОМ: подъём не требует правки от соседа', () => {
+    // Набор уехал на 7 ради вычисляемого предупреждения, заготовка осталась на
+    // 2, а перечень поставленного стоит на 5 ради метки канала — и всё это
     // разбирается одним и тем же baser'ом. Ровно это и обещает MIN_FORM_VERSION:
     // граница двигается за ПЕРЕЕЗДОМ полей, а не за номером.
-    expect(declaration('kit').formVersion).toBe(EXECUTABLE_SINCE);
+    expect(declaration('kit').formVersion).toBe(WARNING_SINCE);
     expect(declaration('seed').formVersion).toBe(2);
     expect(declaration('seed').settings['areas'].type).toBe('list');
 
     // Номер объявления — СТАРШИЙ из тех, чем обвес пользуется, а не «номер на
     // каждую возможность»: составной тип приехал формой 3, исполняемость —
-    // формой 6, и набор объявился по старшей из двух.
+    // формой 6, предупреждение — формой 7, и набор объявился по старшей из трёх.
     expect(declaration('kit').settings['tools'].type).toBe('map');
+    expect(declaration('kit').layout[2].executable).toBe(true);
     expect(declaration('kit').formVersion).toBeGreaterThanOrEqual(
       MAP_TYPE_SINCE,
+    );
+    expect(declaration('kit').formVersion).toBeGreaterThanOrEqual(
+      EXECUTABLE_SINCE,
     );
 
     // Объявление обвеса формы 4 и 5 не тронули ни на одно поле: то прибавление
@@ -453,6 +495,34 @@ describe('проба формы: два обвеса-фикстуры сразу
     // этом программа. Класс — третья ось, и её она тоже не трогает.
     expect(хук?.render).toBe(true);
     expect(хук?.class).toBe('regenerated');
+  });
+
+  it('ОБВЕС ГОВОРИТ ЧЕЛОВЕКУ: живой резолвер доезжает до текста, прогон верный', () => {
+    // Сквозной путь, а не «поле есть»: резолвер фикстуры загружен настоящим
+    // `import`, позван с настоящим контекстом и посмотрел на настоящий каталог
+    // локации. Отсюда дверь берёт готовое состояние и печатает его в жанре
+    // «остаётся человеку» (`tasker:BASER2-226`).
+    const сказанное = warning('kit');
+
+    expect(сказанное.kind).toBe('said');
+    if (сказанное.kind !== 'said') return;
+    expect(сказанное.text).toContain('fixture/hooks.list');
+    // Условие — про ПОСАДОЧНОЕ МЕСТО, и знает его только обвес: ни форма, ни
+    // движок про чужие перечни хуков не знают по построению (`kb:BASER3-34`).
+    expect(existsSync(join(consumer, 'fixture/hooks.list'))).toBe(false);
+
+    // И главное: прогон при этом ВЕРНЫЙ. Укладка сходится с эталоном, значения
+    // разрешились, отказывать не за что — предупреждение отказом не является.
+    expect(materialize('kit', resolved('kit'))['fixture/hook.sh']).toBe(
+      readFileSync(join(consumer, 'fixture/hook.sh'), 'utf-8'),
+    );
+  });
+
+  it('ОБВЕС БЕЗ ПРЕДУПРЕЖДЕНИЯ МОЛЧИТ — и это не беда, а состояние', () => {
+    // Заготовка объявлена формой 2 и поля не знает вовсе. Разбирается как
+    // всегда, а на вопрос «что скажешь» отвечает «нечего».
+    expect(declaration('seed').warningFrom).toBeUndefined();
+    expect(warning('seed')).toEqual({ kind: 'none' });
   });
 
   it('НОМЕР И МЕТКА — РАЗНЫЕ ПОЛЯ: один обвес закреплён, второй назван каналом', () => {
@@ -658,6 +728,9 @@ describe('проба отказов: каждый случай называет�
     expect(прежний.ok).toBe(false);
     if (прежний.ok) return;
     expect(codesOf(прежний.problems)).toEqual([
+      // Предупреждение форме 2 незнакомо так же, как составной тип и
+      // исполняемость: копилка называет ВСЁ, что видит, а не первый пункт.
+      'form-version-unsupported @ package.json.baser.warningFrom',
       'form-version-unsupported @ package.json.baser.settings.env.type',
       'form-version-unsupported @ package.json.baser.settings.tools.type',
       // Настройка не разобралась — значит пресет выставляет то, чего в этом
@@ -668,7 +741,11 @@ describe('проба отказов: каждый случай называет�
       // ровно так же, как составной тип.
       'form-version-unsupported @ package.json.baser.layout[2].executable',
     ]);
-    expect(прежний.problems[0].message).toContain('подними "formVersion" до 3');
+    expect(
+      прежний.problems.find((problem) =>
+        problem.at.endsWith('settings.tools.type'),
+      )?.message,
+    ).toContain('подними "formVersion" до 3');
   });
 
   it('ИСПОЛНЯЕМОСТЬ В ОБЪЯВЛЕНИИ ФОРМЫ 5: сказано, что поднять', () => {
@@ -685,12 +762,37 @@ describe('проба отказов: каждый случай называет�
     expect(назвался5.ok).toBe(false);
     if (назвался5.ok) return;
     expect(codesOf(назвался5.problems)).toEqual([
+      // Предупреждение приехало ещё позже — форме 5 незнакомы оба слова.
+      'form-version-unsupported @ package.json.baser.warningFrom',
       'form-version-unsupported @ package.json.baser.layout[2].executable',
     ]);
-    expect(назвался5.problems[0].message).toContain(
+    const проИсполняемость = назвался5.problems[1];
+    expect(проИсполняемость.message).toContain(
       `подними "formVersion" до ${EXECUTABLE_SINCE}`,
     );
-    expect(назвался5.problems[0].message).toContain('обнови baser');
+    expect(проИсполняемость.message).toContain('обнови baser');
+  });
+
+  it('ПРЕДУПРЕЖДЕНИЕ В ОБЪЯВЛЕНИИ ФОРМЫ 6: сказано, что поднять', () => {
+    // Исполняемость тот baser уже знает, а предупреждение — ещё нет. Сказать
+    // про него он обязан «обнови baser», а не «форма такого поля не знает»:
+    // поверив второму, автор уберёт поле — и обвес вернётся к одной громкости,
+    // промолчать либо уронить весь прогон (`tasker:BASER2-226`).
+    const block = manifest('kit')['baser'] as Record<string, unknown>;
+    const назвался6 = readSourceDeclaration({
+      ...manifest('kit'),
+      baser: { ...block, formVersion: WARNING_SINCE - 1 },
+    });
+
+    expect(назвался6.ok).toBe(false);
+    if (назвался6.ok) return;
+    expect(codesOf(назвался6.problems)).toEqual([
+      'form-version-unsupported @ package.json.baser.warningFrom',
+    ]);
+    expect(назвался6.problems[0].message).toContain(
+      `подними "formVersion" до ${WARNING_SINCE}`,
+    );
+    expect(назвался6.problems[0].message).toContain('обнови baser');
   });
 
   it('РЕЖИМ ЧИСЛОМ: форма его не знает и отправляет к executable', () => {
@@ -847,7 +949,9 @@ describe('проба отказов: каждый случай называет�
     expect(номером.ok).toBe(false);
     if (номером.ok) return;
     expect(номером.problems[0].code).toBe('invalid-channel');
-    expect(номером.problems[0].message).toContain('закрепляется полем "version"');
+    expect(номером.problems[0].message).toContain(
+      'закрепляется полем "version"',
+    );
   });
 
   it('ДИАПАЗОН ВМЕСТО ВЕРСИИ: закреплением он не является', () => {
