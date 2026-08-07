@@ -34,6 +34,7 @@ const DECLARATION: SourceDeclaration = {
       dest: '.devcontainer/devcontainer.json',
       render: true,
       class: 'regenerated',
+      executable: false,
     },
   ],
 };
