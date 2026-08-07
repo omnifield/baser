@@ -611,7 +611,10 @@ describe('объявление обвеса', () => {
       const result = parse({
         layout: [
           { src: 'a.json', dest: 'a.json' },
-          { src: 'pre-commit', dest: '.githooks/pre-commit', executable: true },
+          // Адрес — тот, куда git смотрит сам: `.githooks/` живёт только при
+          // заданном `core.hooksPath` (`tasker:BASER2-195`), а образец пробы и
+          // доки формы читают как рекомендацию.
+          { src: 'pre-commit', dest: '.git/hooks/pre-commit', executable: true },
           { src: 'b.txt', dest: 'b.txt', executable: false },
         ],
       });
