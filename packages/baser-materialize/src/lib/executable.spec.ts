@@ -57,7 +57,8 @@ type Call =
       readonly method: 'setExecutable';
       readonly path: string;
       readonly executable: boolean;
-    };
+    }
+  | { readonly method: 'isExecutable'; readonly path: string };
 
 interface ProbeTree extends Tree {
   readonly calls: readonly Call[];
@@ -114,14 +115,19 @@ function passport(
 function probeTree(
   options: {
     readonly knowsMode?: boolean;
+    /** Умеет ли раннер ЧИТАТЬ режим; по умолчанию — умеет. */
+    readonly readsMode?: boolean;
     /** Что уже лежит в дереве потребителя, помимо шаблона. */
     readonly existing?: Readonly<Record<string, string>>;
+    /** Факт на «диске»: у каких путей бит стоит. */
+    readonly executable?: readonly string[];
   } = {},
 ): ProbeTree {
   const files = new Map<string, string>([
     [`${CONTENT_ROOT}/${TEMPLATE}`, SCRIPT],
     ...Object.entries(options.existing ?? {}),
   ]);
+  const bits = new Set(options.executable ?? []);
   const calls: Call[] = [];
 
   const tree = {
@@ -147,12 +153,28 @@ function probeTree(
     },
   };
 
+  const reading =
+    options.readsMode === false
+      ? {}
+      : {
+          isExecutable(path: string): boolean | null {
+            calls.push({ method: 'isExecutable', path });
+            return files.has(path) ? bits.has(path) : null;
+          },
+        };
+
   return options.knowsMode === false
-    ? tree
+    ? { ...tree, ...reading }
     : {
         ...tree,
+        ...reading,
         setExecutable(path: string, executable: boolean): void {
           calls.push({ method: 'setExecutable', path, executable });
+          if (executable) {
+            bits.add(path);
+          } else {
+            bits.delete(path);
+          }
         },
       };
 }
@@ -167,9 +189,24 @@ function materialize(
   return { tree, plan };
 }
 
-/** Вызовы порта по самому артефакту — без записи паспорта укладки. */
+/**
+ * Что порт СДЕЛАЛ с артефактом — без записи паспорта и без чтений.
+ *
+ * Чтение режима отделено от изменения намеренно: «спросили и ничего не сделали»
+ * и «не спрашивали вовсе» — разные утверждения, и путать их в одном списке
+ * значит не отличать сверку от работы.
+ */
 function callsForHook(tree: ProbeTree): readonly Call[] {
-  return tree.calls.filter((call) => call.path === HOOK);
+  return tree.calls.filter(
+    (call) => call.path === HOOK && call.method !== 'isExecutable',
+  );
+}
+
+/** Спрашивал ли движок факт с диска — и по каким путям. */
+function asked(tree: ProbeTree): readonly string[] {
+  return tree.calls
+    .filter((call) => call.method === 'isExecutable')
+    .map((call) => call.path);
 }
 
 function stepFor(plan: MaterializationPlan): PlanStep | undefined {
@@ -224,6 +261,7 @@ describe('таблица решения: объявленное против с�
           [HOOK]: SCRIPT,
           [MANIFEST_PATH]: passport({ hash: HASH, executable: true }),
         },
+        executable: [HOOK],
       }),
     );
 
@@ -270,6 +308,209 @@ describe('таблица решения: объявленное против с�
 
     expect(plan.status).toBe('converged');
     expect(callsForHook(tree)).toEqual([]);
+  });
+});
+
+/**
+ * ТРЕТЬЯ ВЕЛИЧИНА — ФАКТ НА ДИСКЕ (`tasker:BASER2-224`).
+ *
+ * Пара «объявлено × след» отвечает на вопрос «договорились ли мы с обвесом», но
+ * не на вопрос «работает ли файл». Между ними и жил случай, ради которого задача
+ * заведена: бит сбит на диске, обвес и паспорт согласны, прогон отвечает
+ * «сошлось» — а хук не запускается (`tasker:BASER2-190`: правка через
+ * `\\wsl.localhost` сбивала бит отслеживаемым файлам).
+ *
+ * Таблица решения `kb:BASER3-36` §2 фактом НЕ отменяется: чужой бит остаётся
+ * чужим при любом факте, и про него движок даже не спрашивает.
+ */
+describe('факт на диске — третья величина', () => {
+  it('бит сбит, объявлено «программа», след есть → бит ВОЗВРАЩАЕТСЯ', () => {
+    // Паспорт с объявлением согласен целиком: по прежней паре шага не было бы
+    // вовсе, и прогон отвечал бы «сошлось» на неработающем файле.
+    const { tree, plan } = materialize(
+      { src: TEMPLATE, dest: HOOK, executable: true },
+      probeTree({
+        existing: {
+          [HOOK]: SCRIPT,
+          [MANIFEST_PATH]: passport({ hash: HASH, executable: true }),
+        },
+        executable: [],
+      }),
+    );
+
+    expect(plan.status).toBe('pending');
+    expect(stepFor(plan)?.kind).toBe('chmod');
+    expect(stepFor(plan)?.reason).toBe('executable-drifted');
+    // Запись при этом НЕ приводится: она и так утверждает объявленное.
+    expect(stepFor(plan)?.restated).toBeUndefined();
+    expect(callsForHook(tree)).toEqual([
+      { method: 'setExecutable', path: HOOK, executable: true },
+    ]);
+  });
+
+  it('бит стоит, а не должен: снимается — и это тот же шаг', () => {
+    const { tree, plan } = materialize(
+      { src: TEMPLATE, dest: HOOK, executable: false },
+      probeTree({
+        existing: {
+          [HOOK]: SCRIPT,
+          [MANIFEST_PATH]: passport({ hash: HASH, executable: true }),
+        },
+        executable: [HOOK],
+      }),
+    );
+
+    expect(stepFor(plan)?.kind).toBe('chmod');
+    expect(callsForHook(tree)).toEqual([
+      { method: 'setExecutable', path: HOOK, executable: false },
+    ]);
+  });
+
+  it('бит стоит, СЛЕДА НЕТ — не трогаем и даже не спрашиваем', () => {
+    // Инвариант факт не отменяет: чужой бит — чужое состояние, и знать его
+    // движку незачем. «Не спросили» здесь утверждение не слабее, чем «не
+    // тронули»: спросив, мы завели бы величину, по которой нечего решать.
+    const { tree, plan } = materialize(
+      { src: TEMPLATE, dest: HOOK, executable: false },
+      probeTree({
+        existing: { [HOOK]: SCRIPT, [MANIFEST_PATH]: passport({ hash: HASH }) },
+        executable: [HOOK],
+      }),
+    );
+
+    expect(plan.status).toBe('converged');
+    expect(callsForHook(tree)).toEqual([]);
+    expect(asked(tree)).not.toContain(HOOK);
+  });
+
+  it('бит УЖЕ стоит, а следа нет: приводится одна запись, порт не зван', () => {
+    // Человек выставил бит сам, обвес теперь объявляет артефакт программой.
+    // Делать на файле нечего — он уже такой; но паспорт обязан перестать врать,
+    // что бит не наш. Работа над записью есть, работы над файлом нет.
+    const { tree, plan } = materialize(
+      { src: TEMPLATE, dest: HOOK, executable: true },
+      probeTree({
+        existing: { [HOOK]: SCRIPT, [MANIFEST_PATH]: passport({ hash: HASH }) },
+        executable: [HOOK],
+      }),
+    );
+
+    expect(stepFor(plan)?.kind).toBe('record');
+    expect(stepFor(plan)?.reason).toBe('reclaimed');
+    expect(stepFor(plan)?.restated).toEqual(['executable']);
+    expect(callsForHook(tree)).toEqual([]);
+    expect(recordFor(plan)?.executable).toBe(true);
+  });
+
+  it('всё сошлось — второй прогон не находит работы', () => {
+    const tree = probeTree({
+      existing: {
+        [HOOK]: SCRIPT,
+        [MANIFEST_PATH]: passport({ hash: HASH, executable: true }),
+      },
+      executable: [HOOK],
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration: declarationOf({
+        src: TEMPLATE,
+        dest: HOOK,
+        executable: true,
+      }),
+    });
+
+    expect(plan.status).toBe('converged');
+  });
+
+  it('сверка названа в трейсе — сколько своих, сколько разошлось', () => {
+    const tree = probeTree({
+      existing: {
+        [HOOK]: SCRIPT,
+        [MANIFEST_PATH]: passport({ hash: HASH, executable: true }),
+      },
+      executable: [],
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration: declarationOf({
+        src: TEMPLATE,
+        dest: HOOK,
+        executable: true,
+      }),
+    });
+
+    expect(
+      plan.trace.find((span) => span.name === 'plan.executable')?.detail,
+    ).toEqual({ owned: 1, drifted: 1, unknown: 0, port: 'reads' });
+  });
+
+  it('раннер, режим НЕ читающий: работает как работал и назван в трейсе', () => {
+    // Приёмка `tasker:BASER2-224` п. 4: читающего члена может не быть, и это
+    // законное состояние порта. Тогда сбитый бит не виден — сверка идёт по паре,
+    // как до третьей величины, — но молчанием это не остаётся.
+    const tree = probeTree({
+      readsMode: false,
+      existing: {
+        [HOOK]: SCRIPT,
+        [MANIFEST_PATH]: passport({ hash: HASH, executable: true }),
+      },
+      executable: [],
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration: declarationOf({
+        src: TEMPLATE,
+        dest: HOOK,
+        executable: true,
+      }),
+    });
+
+    expect(plan.status).toBe('converged');
+    expect(
+      plan.trace.find((span) => span.name === 'plan.executable')?.detail,
+    ).toEqual({ owned: 1, drifted: 0, unknown: 1, port: 'blind' });
+  });
+
+  it('раннер без чтения ВСЁ ЕЩЁ видит расхождение с паспортом', () => {
+    // Отсутствие факта не превращается в «считаем, что бит на месте»: это
+    // молчание было бы хуже прежнего поведения. Сверка падает обратно на пару
+    // «объявлено × след» — ровно то, чем движок жил до третьей величины
+    // (`tasker:BASER2-222`), и старый раннер не теряет ничего.
+    const tree = probeTree({
+      readsMode: false,
+      existing: {
+        [HOOK]: SCRIPT,
+        [MANIFEST_PATH]: passport({ hash: HASH }, 2),
+      },
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration: declarationOf({
+        src: TEMPLATE,
+        dest: HOOK,
+        executable: true,
+      }),
+    });
+
+    expect(plan.steps.map((step) => step.kind)).toEqual(['chmod']);
+    expect(stepFor(plan)?.executable).toBe(true);
+  });
+
+  it('прогон без своих битов события не носит вовсе', () => {
+    const tree = probeTree({
+      existing: { [HOOK]: SCRIPT, [MANIFEST_PATH]: passport({ hash: HASH }) },
+    });
+
+    const plan = computePlan({
+      tree,
+      declaration: declarationOf({ src: TEMPLATE, dest: HOOK }),
+    });
+
+    expect(plan.trace.map((span) => span.name)).not.toContain('plan.executable');
   });
 });
 
@@ -393,11 +634,11 @@ describe('мёртвая ветка «обвес промолчал» снята
 
     const silent = materialize(
       { src: TEMPLATE, dest: HOOK },
-      probeTree({ existing }),
+      probeTree({ existing, executable: [HOOK] }),
     );
     const said = materialize(
       { src: TEMPLATE, dest: HOOK, executable: false },
-      probeTree({ existing }),
+      probeTree({ existing, executable: [HOOK] }),
     );
 
     expect(silent.plan.steps).toEqual(said.plan.steps);
@@ -613,6 +854,11 @@ describe('сквозной путь: план доводится до бита �
         const mode = statSync(full(path)).mode & 0o777;
         chmodSync(full(path), executable ? mode | 0o111 : mode & ~0o111);
       },
+      // Читающая половина пары — ровно то, чем раннер отвечает движку про факт.
+      isExecutable: (path) =>
+        existsOnDisk(full(path))
+          ? (statSync(full(path)).mode & 0o111) !== 0
+          : null,
     };
 
     return { tree, root };
@@ -648,6 +894,46 @@ describe('сквозной путь: план доводится до бита �
 
     // Обвес объявил его программой. Содержимое не менялось ни на байт.
     const plan = run(tree, { src: TEMPLATE, dest: HOOK, executable: true });
+
+    expect(plan.steps.map((step) => step.kind)).toEqual(['chmod']);
+    expect(executableOnDisk(root, HOOK)).toBe(true);
+  });
+
+  it('СБИТЫЙ РУКАМИ БИТ ВОЗВРАЩАЕТСЯ — то, ради чего задача заведена', () => {
+    const { tree, root } = diskTree();
+
+    run(tree, { src: TEMPLATE, dest: HOOK, executable: true });
+    expect(executableOnDisk(root, HOOK)).toBe(true);
+
+    // Живой случай `tasker:BASER2-190`: правка через `\\wsl.localhost` сбивает
+    // бит отслеживаемому файлу. Содержимое и паспорт при этом в порядке.
+    chmodSync(join(root, HOOK), 0o644);
+    expect(executableOnDisk(root, HOOK)).toBe(false);
+
+    const plan = run(tree, { src: TEMPLATE, dest: HOOK, executable: true });
+
+    expect(plan.steps.map((step) => step.kind)).toEqual(['chmod']);
+    expect(executableOnDisk(root, HOOK)).toBe(true);
+    // Починенное сходится: приведение разовое, а не на каждый прогон.
+    expect(
+      run(tree, { src: TEMPLATE, dest: HOOK, executable: true }).status,
+    ).toBe('converged');
+  });
+
+  it('и возвращается даже там, где содержимое человек не трогал вовсе', () => {
+    // `placed-once`: содержимое не сверяется никогда, а режим — сверяется.
+    const { tree, root } = diskTree();
+    const entry: LayoutEntry = {
+      src: TEMPLATE,
+      dest: HOOK,
+      class: 'placed-once',
+      executable: true,
+    };
+
+    run(tree, entry);
+    chmodSync(join(root, HOOK), 0o644);
+
+    const plan = run(tree, entry);
 
     expect(plan.steps.map((step) => step.kind)).toEqual(['chmod']);
     expect(executableOnDisk(root, HOOK)).toBe(true);

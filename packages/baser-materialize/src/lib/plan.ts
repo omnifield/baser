@@ -142,6 +142,21 @@ export type PlanReason =
    * вовсе. Что именно разъехалось, шаг называет в `restated`.
    */
   | 'reclaimed'
+  /**
+   * РЕЖИМ ЛЕЖАЩЕГО ФАЙЛА разошёлся с объявленным (`tasker:BASER2-224`).
+   *
+   * Своя причина, а не `diverged`: там разошлось СОДЕРЖИМОЕ с тем, что даёт
+   * источник, а здесь содержимое и запись могут быть в полном порядке —
+   * разошёлся бит на диске. Прежде этот случай не имел ни причины, ни шага, ни
+   * имени: движок факта не видел и отвечал «сошлось» на артефакте, который
+   * перестал работать (`tasker:BASER2-190` — правка через `\\wsl.localhost`
+   * сбивала бит отслеживаемым файлам).
+   *
+   * Приходит с шагом `chmod`. Если заодно разошлась и запись, поля названы в
+   * `restated` — причина при этом остаётся эта: работа над файлом старше работы
+   * над паспортом.
+   */
+  | 'executable-drifted'
   /** Запись потеряла объявление в `layout`. */
   | 'orphan';
 
@@ -587,6 +602,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
 
   const steps: PlanStep[] = [];
   const conflicts: PlanConflict[] = [];
+  const mode: ModeTally = { owned: 0, drifted: 0, unknown: 0 };
   let notices: PlanNotice[] = [];
   const claimed = new Map<string, LayoutEntry>();
   /** Каталог пути → `dest`, ради которого он обязан быть каталогом. */
@@ -746,6 +762,7 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
             sourceVersion,
             manifest,
             confirmed: confirm.has(entry.dest),
+            mode,
           });
 
           if (outcome.step !== undefined) {
@@ -781,6 +798,21 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
       ).length,
     },
   );
+
+  // ЧЕМ СВЕРЯЛСЯ РЕЖИМ — данными, а не по факту молчания (`tasker:BASER2-224`).
+  // Событие есть, когда свой бит вообще был: у прогона без объявленных программ
+  // сверять нечего, и пустой счётчик он носить не обязан.
+  //
+  // `port: "blind"` — раннер режима не читает, и сверка неполная: расхождение
+  // видно только по паспорту, а сбитый на диске бит не виден вовсе. Это НЕ
+  // отказ — такой раннер работает как работал, — но и не молчание: разница между
+  // «сверено и сошлось» и «сверять было нечем» из плана не выводится никак.
+  if (mode.owned > 0) {
+    trace.event('plan.executable', {
+      ...mode,
+      port: mode.unknown === mode.owned ? 'blind' : 'reads',
+    });
+  }
 
   for (const dest of confirm) {
     if (consumed.has(dest)) {
@@ -974,25 +1006,79 @@ function recordedExecutable(known: ManifestRecord | null): boolean {
 }
 
 /**
- * ЧТО ДЕЛАЕМ С БИТОМ — таблица решения `kb:BASER3-36` §2 одним выражением.
+ * НАШ ЛИ ЭТОТ БИТ — вправе ли движок его вообще трогать.
  *
- * | объявлено | след   | результат                                  |
- * | --------- | ------ | ------------------------------------------ |
- * | `true`    | нет    | `{ executable: true }` — ставим            |
- * | `true`    | `true` | `{ executable: true }` — подтверждаем       |
- * | `false`   | `true` | `{ executable: false }` — снимаем, он наш   |
- * | `false`   | нет    | `{}` — НЕ ТРОГАЕМ вовсе                     |
+ * Таблица решения `kb:BASER3-36` §2 одним выражением: бит наш, если он объявлен
+ * (`true`) либо числится за нами следом. «Объявлено данными, следа нет» — не наш,
+ * и это ВЕСЬ инвариант: не наш бит не читается, не сверяется и не снимается, что
+ * бы ни лежало на диске. Так бит, выставленный человеком руками, переживает
+ * обновление по построению, а не по нашей милости.
+ */
+function ownedBit(entry: LayoutEntry, known: ManifestRecord | null): boolean {
+  return declaredExecutable(entry) || recordedExecutable(known);
+}
+
+/**
+ * ЧТО ДОНОСИТСЯ ДО ПОРТА при записи содержимого: `{}` — ничего.
  *
- * Последняя строка и есть весь инвариант: пустой объект означает, что порт не
- * будет позван ни с чем, — а значит бит, выставленный человеком руками, не
- * переживает обновления не по нашей милости, а по построению.
+ * Шаги `create` и `update` режим УТВЕРЖДАЮТ, а не сверяют: файл после них
+ * переписан, и каким режимом он лёг, знает раннер, а не движок. Утверждение
+ * идемпотентно — раннер, у которого бит уже такой, работы не увидит.
  */
 function modeOf(
   entry: LayoutEntry,
   known: ManifestRecord | null,
 ): { executable?: boolean } {
+  return ownedBit(entry, known)
+    ? { executable: declaredExecutable(entry) }
+    : {};
+}
+
+/**
+ * ФАКТ НА ДИСКЕ — третья величина расхождения (`tasker:BASER2-224`).
+ *
+ * Содержимое движок с диска читает и сверяет; не читать при этом режим значило
+ * бы проверять дрейф наполовину и молчать про вторую половину. Живой случай —
+ * `tasker:BASER2-190`: правка через `\\wsl.localhost` сбивала бит отслеживаемым
+ * файлам, и прогон отвечал «сошлось» ровно на том артефакте, который перестал
+ * работать (класс «лежит, но не работает», `kb:SANDBOX-5`).
+ *
+ * `null` — фактa НЕТ: порт читающего члена не имеет (раннер, написанный раньше)
+ * либо сказать ему нечего. Тогда сверять не с чем, и движок ведёт себя как вёл —
+ * по паре «объявлено × след», — а разницу называет в трейсе (`plan.executable`).
+ *
+ * Спрашивается ТОЛЬКО про свой бит: чужой мы не трогаем ни при каком факте,
+ * значит и знать его незачем. Это не экономия вызова, а та же граница владения.
+ */
+function factExecutable(tree: Tree, dest: string): boolean | null {
+  return tree.isExecutable === undefined ? null : tree.isExecutable(dest);
+}
+
+/**
+ * НУЖНО ЛИ ПРИВОДИТЬ БИТ — сверка тройки «объявлено × след × факт».
+ *
+ * Считается только для СВОЕГО бита (`ownedBit`), и это первое, что отсекается:
+ * таблица `kb:BASER3-36` §2 факта не отменяет, третья величина её уточняет, а не
+ * переписывает. Дальше — две сверки на выбор, и выбирает не движок, а раннер:
+ *
+ *   — **факт известен** — сверяем с ним: бит не тот, что объявлен, значит работа
+ *     есть, даже когда паспорт с объявлением согласен. Это и есть сбитый на
+ *     диске бит, который прежде не возвращался никогда (`tasker:BASER2-224`);
+ *   — **факта нет** (раннер читать режим не умеет) — сверяем со следом, как
+ *     сверяли до третьей величины. Не «считаем, что бит на месте» и не «на
+ *     всякий случай приводим каждый прогон»: первое молчит про расхождение,
+ *     второе не сходится никогда. Прежнее поведение честнее обоих, и то, что
+ *     сверка неполная, движок называет в трейсе.
+ */
+function driftedBit(
+  entry: LayoutEntry,
+  known: ManifestRecord | null,
+  fact: boolean | null,
+): boolean {
   const declared = declaredExecutable(entry);
-  return declared || recordedExecutable(known) ? { executable: declared } : {};
+  return fact === null
+    ? declared !== recordedExecutable(known)
+    : fact !== declared;
 }
 
 /** Отказ по записи, объявленной классом, которого движок не знает. */
@@ -1302,6 +1388,24 @@ interface EntryContext {
   readonly manifest: Manifest;
   /** Подтверждена ли перезапись чужого файла именно по ЭТОМУ `dest`. */
   readonly confirmed: boolean;
+  /**
+   * Счётчик сверки режима — общий на прогон, поэтому изменяемый.
+   *
+   * Считается ЗДЕСЬ, а не выводится потом из шагов: «сверено и сошлось» и
+   * «сверять было нечем» из плана не выводятся никак — оба выглядят как молчание,
+   * а различает их только тот, кто спрашивал порт (`plan.executable` в трейсе).
+   */
+  readonly mode: ModeTally;
+}
+
+/** Сколько битов сверили, сколько разошлось и сколько сверить не смогли. */
+interface ModeTally {
+  /** Артефакты, чей бит наш: объявлен либо числится следом. */
+  owned: number;
+  /** Из них — те, где факт на диске разошёлся с объявленным. */
+  drifted: number;
+  /** Из них — те, где факта не было: раннер режим читать не умеет. */
+  unknown: number;
 }
 
 /** Исход одной записи `layout`: не более одного шага и одного отказа. */
@@ -1325,7 +1429,8 @@ interface EntryOutcome {
  * владение это владение.
  */
 function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
-  const { tree, source, sourceId, sourceVersion, manifest, confirmed } = context;
+  const { tree, source, sourceId, sourceVersion, manifest, confirmed, mode } =
+    context;
 
   // Умолчание проставляется ЗДЕСЬ, в одном месте: дальше класс участвует в
   // записи паспорта укладки, и «не назван» ниже по коду уже не встречается.
@@ -1385,6 +1490,22 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
 
   const actual = tree.exists(entry.dest) ? tree.read(entry.dest, 'utf-8') : null;
 
+  // ТРЕТЬЯ ВЕЛИЧИНА — факт на диске (`tasker:BASER2-224`). Спрашивается один раз
+  // и только про СВОЙ бит: чужой не трогается ни при каком факте. У
+  // отсутствующего файла факта нет по определению — там ветка `create` ниже, и
+  // до этого места она не доходит.
+  const owned = actual !== null && ownedBit(entry, known);
+  const fact = owned ? factExecutable(tree, entry.dest) : null;
+  const bitDrift = owned && driftedBit(entry, known, fact);
+  if (owned) {
+    mode.owned += 1;
+    if (fact === null) {
+      mode.unknown += 1;
+    } else if (bitDrift) {
+      mode.drifted += 1;
+    }
+  }
+
   // Артефакта нет — кладём впервые. Запись при этом могла остаться от прошлого
   // прогона (файл снесли руками): она приводится тем же шагом.
   //
@@ -1425,20 +1546,26 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
     // за нами ещё нет (записи нет вовсе), поэтому объявленное `true` — ровно
     // первая строка таблицы решения: ставим бит. Объявленное «данные» тут не
     // делает ничего — снимать нечего, чужой бит остаётся чужим.
-    const adopted = modeOf(entry, known);
+    //
+    // ФАКТ УЧАСТВУЕТ И ЗДЕСЬ: у человеческого файла бит мог уже стоять — тогда
+    // приводить нечего, и шаг остаётся приведением одной записи. Сказать «привожу
+    // режим» там, где режим и так объявленный, значило бы отчитаться работой,
+    // которой нет.
     return {
       confirmationUsed: true,
       step:
         artifactClass === 'placed-once'
           ? {
-              kind: adopted.executable === undefined ? 'record' : 'chmod',
+              kind: bitDrift ? 'chmod' : 'record',
               dest: entry.dest,
               reason: 'adopted',
               src: entry.src,
               content: null,
               previous: actual,
               record,
-              ...adopted,
+              ...(bitDrift
+                ? { executable: declaredExecutable(entry) }
+                : {}),
             }
           : {
               kind: 'update',
@@ -1481,7 +1608,15 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
   // обязано быть шагом. Совпадение содержимого не повод молчать: устаревшая
   // запись переживает смену объявления и всплывает потом снятием не того файла.
   const restated = restatedFields(known, record);
-  if (restated.length > 0) {
+
+  // ДВА РАСХОЖДЕНИЯ, А НЕ ОДНО, и они независимы (`tasker:BASER2-224`):
+  //   — паспорт разошёлся с объявленным (`restated`) — работа над записью;
+  //   — бит на диске разошёлся с объявленным (`bitDrift`) — работа над файлом.
+  // Каждое из них само по себе повод для шага. Сбитый руками бит виден только
+  // вторым: паспорт с объявлением при этом согласен, и по прежней паре
+  // «объявлено × след» прогон отвечал «сошлось» на артефакте, который перестал
+  // работать.
+  if (restated.length > 0 || bitDrift) {
     // РАСХОЖДЕНИЕ ПО РЕЖИМУ — ДРУГОЙ ШАГ, а не то же приведение записи
     // (`kb:BASER3-36` §3). Все остальные поля живут только в паспорте, и шаг
     // честно обещает «сам артефакт остаётся как есть»; режим лежит на файле, и
@@ -1489,20 +1624,22 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
     //
     // Приводится при этом И запись: бит и его след меняются вместе, иначе
     // следующий прогон увидел бы то же расхождение и сделал бы то же самое.
-    const chmod = restated.includes('executable');
     return {
       step: {
-        kind: chmod ? 'chmod' : 'record',
+        kind: bitDrift ? 'chmod' : 'record',
         dest: entry.dest,
-        reason: 'reclaimed',
+        // Причина называет ПЕРВОПРИЧИНУ шага, а не то, что заодно приводится:
+        // расхождение бита старше расхождения записи — файл перестал работать,
+        // а запись всего лишь устарела.
+        reason: bitDrift ? 'executable-drifted' : 'reclaimed',
         src: entry.src,
         content: null,
         previous: actual,
         record,
-        restated,
-        // Только при расхождении: подтверждать порту бит, который и так наш и
-        // никуда не девался, значило бы звать порт на каждом приведении версии.
-        ...(chmod ? { executable: declaredExecutable(entry) } : {}),
+        ...(restated.length > 0 ? { restated } : {}),
+        // Только при расхождении БИТА: подтверждать порту режим, который и так
+        // объявленный, значило бы звать порт на каждом приведении версии.
+        ...(bitDrift ? { executable: declaredExecutable(entry) } : {}),
       },
     };
   }
