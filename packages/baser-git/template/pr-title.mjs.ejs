@@ -1,3 +1,11 @@
+<%
+// Перечень зон приезжает списком либо не приезжает вовсе. Пустой список и
+// незаполненная настройка — одно и то же состояние («перечень открыт»), и
+// разводить их значило бы завести различие, которого нет ни в одном правиле
+// ниже: зона из пустого перечня не бывает ни годной, ни негодной.
+const scopes = Array.isArray(titleScopes) ? titleScopes.filter((name) => String(name).trim() !== '') : [];
+const closed = scopes.length > 0;
+-%>
 #!/usr/bin/env node
 /**
  * ГЕЙТ ЗАГОЛОВКА PR: заголовок обязан быть сообщением коммита в главную ветку.
@@ -34,15 +42,15 @@ import { pathToFileURL } from 'node:url';
  * Типы, которые мы признаём. Список закрытый: незнакомый тип считалка версий
  * молча пропустит мимо выпуска, а не отвергнет.
  */
-export const TYPES = ["feat","fix","chore","docs","test","refactor","perf","build","ci","revert"];
+export const TYPES = <%- JSON.stringify(titleTypes) %>;
 
 /** Обязана ли быть названа зона. */
-export const SCOPE_REQUIRED = true;
+export const SCOPE_REQUIRED = <%- titleScopeRequired ? 'true' : 'false' %>;
 
 /**
  * Закрытый перечень зон; `null` — перечень открыт, годится любая по форме.
  */
-export const SCOPES = null;
+export const SCOPES = <%- closed ? JSON.stringify(scopes) : 'null' %>;
 
 /**
  * Форма заголовка: `<тип>(<зона>)!: <что сделано>`.
@@ -128,10 +136,15 @@ export function hint() {
   // `<зона>`: человек правит заголовок ПО ОБРАЗЦУ, и образец, который гейт не
   // пропускает, отправляет его на второй красный. Отсюда же две строки, а не
   // одна: вторая показывает пометку ломающего на живом примере.
+<% if (closed) { -%>
+  const first = SCOPES[0];
+  const second = SCOPES[1] ?? SCOPES[0];
+<% } else { -%>
   // Перечень открыт — имени зоны локации мы не знаем и не выдумываем его:
   // `core` в образце подписан как заполнитель прямо ниже.
   const first = 'core';
   const second = 'core';
+<% } -%>
   const breaking = TYPES.includes('feat') ? 'feat' : TYPES[0];
 
   const lines = [
@@ -142,8 +155,10 @@ export function hint() {
     'Форма: <тип>(<зона>): <что сделано> — например',
     `  ${TYPES[0]}(${first}): что сделано, одной фразой`,
     `  ${breaking}(${second})!: ломающее помечается восклицательным знаком`,
+<% if (!closed) { -%>
     '',
     'Вместо «core» подставь свою зону: по ней видно, чьё изменение.',
+<% } -%>
     '',
     `Типы: ${TYPES.join(' · ')}`,
   ];
