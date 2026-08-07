@@ -16,6 +16,7 @@
 
 import { execFileSync } from 'node:child_process';
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -45,6 +46,12 @@ export const GIT_PACKAGE = '@omnifield/baser-git';
 /** `dest` артефактов обвеса — они же адреса в живом репозитории. */
 export const RULE = '.github/scripts/pr-title.mjs';
 export const WORKFLOW = '.github/workflows/pr-title.yml';
+/**
+ * Машинный хук. Живого эталона в репозитории у него НЕТ и быть не может:
+ * `.git/` не версионируется, и файл приезжает не с клоном, а с применением.
+ * Поэтому судится он не совпадением строк, а попыткой коммита (`hook.spec.mjs`).
+ */
+export const HOOK = '.git/hooks/pre-commit';
 
 let packed = null;
 
@@ -184,6 +191,10 @@ export function installConsumer(options = {}) {
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, content);
     },
+    /** Сбить или вернуть права снаружи — то же, что сделала бы чужая ФС. */
+    chmod(path, mode) {
+      chmodSync(join(root, path), mode);
+    },
     cleanup() {
       locations.delete(root);
       rmSync(box, { force: true, recursive: true });
@@ -222,6 +233,53 @@ export function installConsumer(options = {}) {
 }
 
 let loaded = 0;
+
+/**
+ * НАСТОЯЩИЙ git-репозиторий в локации.
+ *
+ * Приёмка хука судится ПОПЫТКОЙ КОММИТА, а не наличием файла: «лежит» и
+ * «работает» — тот самый шов, ради которого задача и разводилась (git
+ * игнорирует хук без бита исполнения молча, с одним `hint`). Значит и git
+ * нужен настоящий, а не изображённый.
+ *
+ * Идентичность и подпись задаются локально: у машины, где бегут пробы, их может
+ * не быть вовсе, и коммит не состоялся бы по причине, к хуку не относящейся.
+ */
+export function initGit(root) {
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: root, stdio: 'pipe' });
+  git('init', '--quiet');
+  git('config', 'user.email', 'probe@example.invalid');
+  git('config', 'user.name', 'probe');
+  git('config', 'commit.gpgsign', 'false');
+  return git;
+}
+
+/**
+ * Попытка коммита: вердикт git'а и всё, что он сказал.
+ *
+ * Бросок наружу не выпускается — отвергнутый коммит здесь ОЖИДАЕМЫЙ исход, а не
+ * сбой пробы, и вердикт обязан быть значением, которое проба сравнивает.
+ */
+export function tryCommit(root, message = 'chore: проба') {
+  execFileSync('git', ['add', '-A'], { cwd: root, stdio: 'pipe' });
+  try {
+    return {
+      committed: true,
+      output: String(
+        execFileSync('git', ['commit', '-m', message], {
+          cwd: root,
+          stdio: 'pipe',
+        }),
+      ),
+    };
+  } catch (cause) {
+    return {
+      committed: false,
+      output: `${cause.stdout ?? ''}${cause.stderr ?? ''}`,
+    };
+  }
+}
 
 /**
  * Файл настроек текстом — ровно то, что человек написал бы руками.

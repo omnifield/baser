@@ -24,6 +24,7 @@ import {
 } from '../../baser-contracts/src/index.ts';
 import {
   GIT_PACKAGE,
+  HOOK,
   packedFiles,
   packedManifest,
   packedRoot,
@@ -58,18 +59,33 @@ describe('объявление пригодно по форме', () => {
     expect(decl.source.id).toBe('omnifield/git');
   });
 
-  it('кладёт ровно два артефакта, и оба — в обвязку репозитория', () => {
+  it('кладёт ровно три артефакта, и все — в обвязку репозитория', () => {
     const decl = declaration();
 
     expect(decl.layout.map((entry) => entry.dest).sort()).toEqual(
-      [RULE, WORKFLOW].sort(),
+      [RULE, WORKFLOW, HOOK].sort(),
     );
-    // Оба артефакта наши целиком: их содержимое — правило гейта, и переживать
+    // Все артефакты наши целиком: их содержимое — правило гейта, и переживать
     // выпуск обвеса правке руками здесь нечего.
     for (const entry of decl.layout) {
       expect(entry.class, entry.dest).toBe('regenerated');
       expect(entry.render, entry.dest).toBe(true);
     }
+  });
+
+  it('хук объявлен ИСПОЛНЯЕМЫМ, а остальные артефакты — нет', () => {
+    const decl = declaration();
+
+    // Объявление намерения и есть всё, чем обвес располагает: как бит ляжет на
+    // диск — обязательство порта, который пишет (`kb:BASER3-36`). Соврать здесь
+    // в другую сторону тоже нельзя: правило и поток — данные, а не программы, и
+    // лишний бит на них был бы правом, которого никто не просил.
+    const byDest = Object.fromEntries(
+      decl.layout.map((entry) => [entry.dest, entry.executable]),
+    );
+    expect(byDest[HOOK]).toBe(true);
+    expect(byDest[RULE]).toBe(false);
+    expect(byDest[WORKFLOW]).toBe(false);
   });
 
   it('каждый объявленный источник ЛЕЖИТ в тарболе', () => {
