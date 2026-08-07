@@ -112,7 +112,113 @@ describe('поставка движка не тянет потребителю n
   });
 });
 
+/**
+ * Дерево, чей `write` принимает третий параметр опций, — форма дерева двери
+ * (`packages/baser-cli/src/lib/tree.ts`: `write(path, content, { mode })`).
+ *
+ * Повторено ЗДЕСЬ структурно, потому что чужую зону эта проба не импортирует, а
+ * сломать её отсюда — может: режим, доехавший до порта третьим параметром
+ * `write` со СВОИМ мешком опций, отнял бы у такого дерева право подходить порту
+ * («has no properties in common» — мешки не пересекаются ни одним полем), и
+ * правка движка покрасила бы сборку двери. Отсюда и отдельный член порта
+ * (`tree.ts`, `setExecutable`), а не третий параметр.
+ */
+interface TreeWithWriteOptions {
+  read(filePath: string, encoding: 'utf-8'): string | null;
+  write(
+    filePath: string,
+    content: string,
+    options?: { mode?: number | string },
+  ): void;
+  exists(filePath: string): boolean;
+  isFile(filePath: string): boolean;
+  children(dirPath: string): string[];
+  delete(filePath: string): void;
+}
+
+function treeWithWriteOptions(
+  seed: Readonly<Record<string, string>>,
+): TreeWithWriteOptions {
+  const files = new Map(Object.entries(seed));
+  return {
+    read: (path) => files.get(path) ?? null,
+    write: (path, content) => {
+      files.set(path, content);
+    },
+    exists: (path) =>
+      files.has(path) ||
+      [...files.keys()].some((key) => key.startsWith(`${path}/`)),
+    isFile: (path) => files.has(path),
+    children: (dir) => [
+      ...new Set(
+        [...files.keys()]
+          .filter((key) => key.startsWith(`${dir}/`))
+          .map((key) => key.slice(dir.length + 1).split('/')[0]),
+      ),
+    ],
+    delete: (path) => {
+      files.delete(path);
+    },
+  };
+}
+
 describe('порт дерева — то же дерево, что у devkit', () => {
+  it('дерево с опциями записи (форма двери) подходит порту и движок на нём работает', () => {
+    const withOptions = treeWithWriteOptions({
+      'canon/hooks/pre-commit': '#!/bin/sh\npnpm verify\n',
+    });
+    // Присваивание — половина утверждения (его судит `typecheck`), прогон —
+    // вторая: подходящий по типам порт, на котором ничего не раскладывается,
+    // доказывал бы только форму.
+    const port: Tree = withOptions;
+
+    applyPlan(
+      port,
+      computePlan({
+        tree: port,
+        declaration: {
+          source: {
+            id: 'omnifield/git-kit',
+            contentRoot: 'canon',
+            version: '1.0.0',
+          },
+          layout: [{ src: 'hooks/pre-commit', dest: '.husky/pre-commit' }],
+        },
+      }),
+    );
+
+    expect(port.read('.husky/pre-commit', 'utf-8')).toBe(
+      '#!/bin/sh\npnpm verify\n',
+    );
+  });
+
+  it('дерево, не знающее про режим, порту подходит и раскладку с ним применяет', () => {
+    // Приёмка `tasker:BASER2-214`, пункт 3: раннер, написанный до режима,
+    // продолжает работать. Судится прогоном, а не рассуждением, — `FsTree`
+    // члена `setExecutable` не имеет, и объявленная исполняемость до диска не
+    // доезжает; чего применение делать НЕ имеет права, так это падать.
+    const tree: Tree = createTreeWithEmptyWorkspace();
+    tree.write('canon/hooks/pre-commit', '#!/bin/sh\npnpm verify\n');
+
+    const plan = computePlan({
+      tree,
+      declaration: {
+        source: { id: 'omnifield/git-kit', contentRoot: 'canon', version: '1.0.0' },
+        layout: [
+          { src: 'hooks/pre-commit', dest: '.husky/pre-commit', executable: true },
+        ],
+      },
+    });
+    const report = applyPlan(tree, plan);
+
+    expect(tree.read('.husky/pre-commit', 'utf-8')).toBe(
+      '#!/bin/sh\npnpm verify\n',
+    );
+    expect(
+      report.trace.find((span) => span.name === 'apply.executable')?.detail,
+    ).toEqual({ declared: 1, delivered: 0, port: 'blind' });
+  });
+
   it('настоящее дерево Nx подходит порту и движок на нём работает', () => {
     // Присваивание к типу порта — половина утверждения (её судит `typecheck`);
     // вторая половина — прогон движка через эту переменную: подходящий по типам
