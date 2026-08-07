@@ -9,9 +9,12 @@
  * составе пакета. Приём взят у зоны девбокса (`baser-devbox/test/packed.mjs`) —
  * там же разобрано, почему каталог поставки НАЗЫВАЕТСЯ каждому вызову двери.
  *
- * Короче он здесь по одной причине: у этого обвеса нет ни резолверов, ни
- * пресетов, ни второго живого потребителя, — значит и фикстуре нечего про них
- * знать. Всё, что у неё есть, зовут пробы этой зоны.
+ * Короче он здесь по одной причине: у этого обвеса нет ни пресетов, ни второго
+ * живого потребителя, — значит и фикстуре нечего про них знать. Резолвер у него
+ * теперь есть (`warning.mjs`, форма 7), но фикстуре и он не нужен: модуль
+ * приезжает в тарболе и грузится дверью сам, а подменять его было бы подменой
+ * ровно того, что зона и проверяет. Всё, что у фикстуры есть, зовут пробы этой
+ * зоны.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -30,7 +33,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { run as door } from '../../baser-cli/src/index.ts';
+import {
+  cli,
+  run as door,
+  SUPPLY_CACHE_ENV,
+} from '../../baser-cli/src/index.ts';
 import { FORM_VERSION } from '../../baser-contracts/src/index.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -139,6 +146,43 @@ export function run(options) {
     sources: [{ packageName: GIT_PACKAGE, path: location.supply }],
     cache: location.cache,
   });
+}
+
+/**
+ * Дверь, вызванная ЧЕРЕЗ argv — с тем, что увидит человек, и кодом возврата.
+ *
+ * `run` отдаёт ответ данными, а приёмка слова обвеса судит ДВА исхода сразу:
+ * напечатанный текст (его читают глазами) и число, которое увидит конвейер.
+ * Ни то, ни другое из `DoorResult` не выводится — печать и код живут в двери, —
+ * поэтому здесь зовётся её argv-поверхность, а не собирается второй отчёт.
+ *
+ * Кэш поставок уводится ПЕРЕМЕННОЙ, потому что через argv его назвать нечем:
+ * забыв про него, проба ушла бы на склад за опубликованным выпуском и мерила бы
+ * не этот обвес.
+ */
+export async function runCli(root, argv) {
+  const location = locations.get(root);
+  if (location === undefined) {
+    throw new Error(
+      `дверь зовут в локацию, которую фикстура не заводила: ${root}. ` +
+        'Собери её через installConsumer()',
+    );
+  }
+
+  const before = process.env[SUPPLY_CACHE_ENV];
+  process.env[SUPPLY_CACHE_ENV] = location.cache;
+  try {
+    return await cli(
+      [...argv, '--cwd', root, '--source', `${GIT_PACKAGE}=${location.supply}`],
+      PACKAGE_DIR,
+    );
+  } finally {
+    if (before === undefined) {
+      delete process.env[SUPPLY_CACHE_ENV];
+    } else {
+      process.env[SUPPLY_CACHE_ENV] = before;
+    }
+  }
 }
 
 /** `baser.json` потребителя — ЧТО поставлено, и больше ничего. */
