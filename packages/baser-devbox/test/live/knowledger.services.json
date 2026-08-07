@@ -1,0 +1,18 @@
+[
+  {
+    "name": "backend",
+    "cwd": ".",
+    "command": "env KNOWLEDGER_PORT=8040 KNOWLEDGER_DB=/data/knowledger/knowledger.db go run ./cmd/knowledger",
+    "port": 8040,
+    "healthUrl": "http://localhost:8040/knowledger/healthz",
+    "probeTimeoutMs": 120000
+  },
+  {
+    "name": "frontend",
+    "cwd": "web",
+    "command": "pnpm dev",
+    "port": 5173,
+    "healthUrl": "http://localhost:5173/knowledger/",
+    "probeTimeoutMs": 120000
+  }
+]

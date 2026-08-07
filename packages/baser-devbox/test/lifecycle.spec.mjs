@@ -208,19 +208,63 @@ describe('СЕТЬ: девбокс обеспечивает, что она ес�
   });
 });
 
-describe('ПОСЛЕ СТАРТА: точка есть, и она НЕ постсоздание', () => {
-  const START = 'node scripts/devbox-publish.mjs; node scripts/devbox-services.mjs up';
+/**
+ * ПРОЦЕССЫ ЛОКАЦИИ: КАРТА ИМЁН ВМЕСТО ОДНОЙ СТРОКИ (`tasker:BASER2-196`,
+ * решение `kb:BASER3-32`).
+ *
+ * Точка «после старта» была, а механика подъёма оставалась за репозиторием —
+ * и четыре продукта носили в себе по копии одного и того же раннера. Теперь
+ * локация объявляет свои процессы НАСТРОЙКОЙ, а раннер из репозитория уходит.
+ *
+ * Проверяется здесь форма и её края; что объектная форма делает С ПРОЦЕССАМИ
+ * (параллельно, без порядка и без проб готовности) — свойство ИНСТРУМЕНТА
+ * девконтейнеров, и меряется оно живым подъёмом, а не пробой: докера в прогоне
+ * проб нет и быть не должно. Сценарий подъёма — `test/live/README.md`.
+ */
+describe('ПОСЛЕ СТАРТА: локация объявляет свои ПРОЦЕССЫ, а не одну строку', () => {
+  /**
+   * Карта таскера — выведенная из ЕГО файлов, а не сочинённая примером.
+   *
+   * `publish` — то, что делает его `scripts/devbox-publish.mjs`: копия
+   * манифеста в общий том реестра. `backend` и `frontend` — две записи его
+   * `devbox.services.json` слово в слово (снимки — `test/live/`).
+   */
+  const PROCESSES = {
+    publish: 'cp omnifield.yaml /omnifield-registry/tasker.yaml',
+    backend:
+      'env TASKER_PORT=8030 TASKER_DB=/data/tasker/tasker.db go run ./cmd/tasker',
+    frontend: 'pnpm -C web dev',
+  };
 
-  it('команда едет как написана, в свою точку', async () => {
-    const { json } = await materialize({ settings: { startCommand: START } });
+  it('карта раскладывается в ОБЪЕКТНУЮ форму — ту, что спека завела ради параллельного запуска', async () => {
+    const { json } = await materialize({ settings: { startCommand: PROCESSES } });
 
-    expect(json.postStartCommand).toBe(START);
+    // Именно объект, а не строка и не список: строка ушла бы в один шелл
+    // последовательно, список — в exec без шелла. Параллельный запуск спека
+    // даёт только объектной формой.
+    expect(json.postStartCommand).toEqual(PROCESSES);
+    expect(typeof json.postStartCommand).toBe('object');
+    expect(Array.isArray(json.postStartCommand)).toBe(false);
+  });
+
+  it('РАННЕРА В РЕПОЗИТОРИИ БОЛЬШЕ НЕТ: ни одна команда не зовёт скрипт локации', async () => {
+    const { json } = await materialize({ settings: { startCommand: PROCESSES } });
+
+    // Ради этого всё и затевалось (`kb:BASER3-32`): раньше на точке висела пара
+    // СВОИХ скриптов продукта, и их копии у четырёх продуктов уже разъехались.
+    // Проверяется не «команд три», а то, что ни одна из них не уходит в
+    // `scripts/` репозитория.
+    for (const command of Object.values(json.postStartCommand)) {
+      expect(command, `команда всё ещё зовёт скрипт локации: ${command}`).not.toContain(
+        'scripts/',
+      );
+    }
   });
 
   it('УРОВНИ НЕ ПУТАЮТСЯ: startCommand не трогает постсоздание, installCommand — старт', async () => {
     const { json } = await materialize({
       settings: {
-        startCommand: START,
+        startCommand: PROCESSES,
         installCommand: 'pnpm install --frozen-lockfile',
       },
     });
@@ -231,17 +275,29 @@ describe('ПОСЛЕ СТАРТА: точка есть, и она НЕ пост�
     expect(json.postCreateCommand.endsWith('pnpm install --frozen-lockfile')).toBe(
       true,
     );
-    expect(json.postCreateCommand).not.toContain('devbox-publish');
-    expect(json.postStartCommand).toBe(START);
+    expect(json.postCreateCommand).not.toContain('go run');
+    expect(json.postStartCommand).toEqual(PROCESSES);
   });
 
-  it('не задана — ключа нет вовсе, а не пустая строка', async () => {
+  it('не задана — ключа нет вовсе, а не пустой объект', async () => {
     const { json, text } = await materialize();
 
     expect(json.postStartCommand).toBeUndefined();
     expect(text).not.toContain('postStartCommand');
     // Артефакт остаётся валидным JSON: хвостовая запятая — самая дешёвая поломка,
     // которую можно внести условным блоком в конце файла.
+    expect(json.postCreateCommand).toBeDefined();
+  });
+
+  it('ПУСТАЯ КАРТА — «процессов нет», сказанное значением: ключа нет, артефакт цел', async () => {
+    const { json, text } = await materialize({ settings: { startCommand: {} } });
+
+    // Те же два состояния пустоты, что у фич и томов (`kb:BASER3-7`): `null` —
+    // «не задано», `{}` — «задано и пусто». В артефакте они совпадают, и это не
+    // небрежность: пустой объект в `postStartCommand` инструмент считает
+    // отсутствием команды (число ключей), то есть ключ был бы шумом.
+    expect(json.postStartCommand).toBeUndefined();
+    expect(text).not.toContain('postStartCommand');
     expect(json.postCreateCommand).toBeDefined();
   });
 
@@ -254,11 +310,82 @@ describe('ПОСЛЕ СТАРТА: точка есть, и она НЕ пост�
     expect(json.postStartCommand).toBeUndefined();
   });
 
-  it('своя команда — своя неинтерактивность: обвес в неё не дописывает ничего', async () => {
+  it('свои команды — своя неинтерактивность: обвес в них не дописывает ничего', async () => {
     const { json } = await materialize({
-      settings: { startCommand: 'echo привет' },
+      settings: { startCommand: { привет: 'echo привет' } },
     });
 
-    expect(json.postStartCommand).toBe('echo привет');
+    expect(json.postStartCommand).toEqual({ привет: 'echo привет' });
+  });
+
+  it('ИМЯ С ПРОБЕЛОМ едет как есть: это ярлык вывода, а не идентификатор', async () => {
+    const { json } = await materialize({
+      settings: { startCommand: { 'подъём базы': 'echo up' } },
+    });
+
+    // Отказ здесь был бы ВЫДУМАННЫМ правилом. Имя попадает ровно в одно место —
+    // строку инструмента `Running <имя> of postStartCommand…`
+    // (`devcontainers/cli`, `src/spec-common/injectHeadless.ts`, сверено
+    // 2026-08-06); шелл его не видит, докер не видит, годность в идентификатор
+    // никем не требуется. Запрещать то, что работает, значит заводить правило,
+    // которое нечем объяснить читателю конфига.
+    expect(json.postStartCommand).toEqual({ 'подъём базы': 'echo up' });
+  });
+
+  it('ПУСТАЯ КОМАНДА — названный отказ: имя объявлено, а запускать нечего', async () => {
+    const { result, text } = await materialize({
+      settings: { startCommand: { backend: '   ' } },
+    });
+
+    // Тот же класс, что шаг без предмета в постсоздании (`tasker:BASER2-188`):
+    // объявленное имя обещает процесс, которого нет. Промолчи обвес — в
+    // артефакте оказался бы ключ, запускающий пустой шелл, а локация считала бы
+    // свой процесс объявленным.
+    expect(text).toBe(null);
+    expect(result.problems.map((problem) => problem.code)).toContain(
+      'render-failed',
+    );
+    const message = result.problems.map((problem) => problem.message).join('\n');
+    expect(message).toContain('команда backend');
+    expect(message).toContain('команда пустая');
+  });
+
+  it('ПУСТОЕ ИМЯ — названный отказ: ярлык, который ничего не называет', async () => {
+    const { result, text } = await materialize({
+      settings: { startCommand: { ' ': 'echo up' } },
+    });
+
+    expect(text).toBe(null);
+    const message = result.problems.map((problem) => problem.message).join('\n');
+    expect(message).toContain('пустое имя команды');
+  });
+
+  it('СТРОКОЙ БОЛЬШЕ НЕ ЗАПОЛНЯЕТСЯ — и это сказано отказом, а не молчанием', async () => {
+    const { result, text } = await materialize({
+      settings: {
+        startCommand:
+          'node scripts/devbox-publish.mjs; node scripts/devbox-services.mjs up',
+      },
+    });
+
+    // Ломающее изменение (`tasker:BASER2-196`), и оно обязано быть НАЗВАННЫМ:
+    // ровно два живых репозитория держали здесь эту строку. Молчаливое принятие
+    // строки было бы хуже отказа — она уехала бы в артефакт формой, которой
+    // инструмент запускает всё в одном шелле последовательно, то есть тихо
+    // вернула бы то, от чего решение уходит.
+    expect(text).toBe(null);
+    expect(result.problems.map((problem) => problem.code)).toContain(
+      'value-type-mismatch',
+    );
+    // Отказ обязан назвать ТРИ вещи: какой файл править, какую настройку и чем
+    // она стала. Адрес живёт отдельным полем — человеку нужен файл, а не только
+    // текст, — поэтому проверяются оба конца.
+    const problem = result.problems.find(
+      (item) => item.code === 'value-type-mismatch',
+    );
+    expect(problem.at).toContain('settings.startCommand');
+    expect(problem.at).toContain('omnifield-devbox.yaml');
+    expect(problem.message).toContain('map «ключ → string»');
+    expect(problem.message).toContain('заполнено string');
   });
 });
