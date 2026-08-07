@@ -12,6 +12,10 @@
  * его может только тот, у кого есть файловая система и распакованный пакет.
  * Контракт этого не делает, а требует.
  *
+ * Сама доставка модуля здесь НЕ живёт: она общая на все обещания обвеса и
+ * лежит в `resolvers.ts` (`tasker:BASER2-234`). Своё у дефолта — то, что ниже:
+ * кэш ответов и рассказ о движении.
+ *
  * Заполненное и выбранное приезжают сюда из ФАЙЛА НА ИНСТРУМЕНТ (`settings.ts`),
  * а не из `baser.json`: там теперь только перечень поставленного
  * (`tasker:BASER2-10` §3). Порядок разрешения от переезда не изменился — он в
@@ -44,14 +48,11 @@
  * его несёт `step.previous` движка.
  */
 
-import { pathToFileURL } from 'node:url';
-import { resolve as resolvePath } from 'node:path';
 import {
   byBytes,
   resolveSettings,
   type ComputeDefault,
   type FormResult,
-  type ResolverContext,
   type ResolverRef,
   type SettingMap,
   type SettingOrigin,
@@ -63,6 +64,7 @@ import {
 import type { LocatedPackage } from '@omnifield/baser-contracts/locate';
 import type { PlacedValue } from './previous.js';
 import type { Repo } from './repo.js';
+import { loadResolvers, refKey } from './resolvers.js';
 
 /** Одно звено цепочки разрешения — один сдвиг значения. */
 export interface SettingLink {
@@ -127,10 +129,8 @@ export interface DefaultsPort {
 /**
  * Готовит порт `computeDefault`: грузит модули резолверов обвеса.
  *
- * Загрузка асинхронна (ESM), а `resolveSettings` синхронен — и это не
- * противоречие, а причина, по которой модули грузятся ЗАРАНЕЕ: резолвер обязан
- * быть синхронной чистой функцией локального контекста, поэтому асинхронной у
- * двери остаётся только доставка модуля, а не вычисление значения.
+ * Доставка модулей — общая механика двери (`resolvers.ts`); здесь к ней
+ * прибавляется ровно одно, и это КЭШ ответов.
  *
  * Сбой загрузки не роняет прогон здесь: он превращается в бросок из порта, и
  * контракты называют его своим кодом `resolver-failed` вместе с адресом
@@ -141,46 +141,11 @@ export async function loadDefaults(
   pkg: LocatedPackage,
   repo: Repo,
 ): Promise<DefaultsPort> {
-  const modules = new Map<string, unknown>();
-  const failures = new Map<string, string>();
+  const refs = Object.values(declaration.settings)
+    .map((spec) => spec.defaultFrom)
+    .filter((ref): ref is ResolverRef => ref !== undefined);
 
-  for (const spec of Object.values(declaration.settings)) {
-    const ref = spec.defaultFrom;
-    if (
-      ref === undefined ||
-      modules.has(ref.module) ||
-      failures.has(ref.module)
-    )
-      continue;
-    try {
-      modules.set(
-        ref.module,
-        await import(pathToFileURL(resolvePath(pkg.root, ref.module)).href),
-      );
-    } catch (cause) {
-      failures.set(ref.module, describe(cause));
-    }
-  }
-
-  const context: ResolverContext = {
-    repo: { name: repo.name, root: repo.root },
-    source: {
-      id: declaration.source.id,
-      packageName: pkg.packageName,
-      // Обвес версию не назвал — резолвер получает `null`, тот же самый, что
-      // уезжает в паспорт укладки.
-      //
-      // Здесь стоял обход: `?? ''`. Он появился не по недосмотру — форма
-      // контракта требовала `string`, и изобразить отсутствие было нечем;
-      // пустую строку выбрали как «видную», в отличие от правдоподобного
-      // `0.0.0`. Обход снят вместе с причиной: `ResolverContext.source.version`
-      // стал `string | null` (`tasker:BASER2-69`), и у одного факта теперь одна
-      // форма во всех трёх зонах — резолвер отличает «не назвали» проверкой, а
-      // не угадыванием по пустоте.
-      version: pkg.version ?? null,
-    },
-  };
-
+  const port = await loadResolvers(refs, declaration, pkg, repo);
   const cache = new Map<string, unknown>();
 
   const computeDefault: ComputeDefault = (ref) => {
@@ -188,21 +153,7 @@ export async function loadDefaults(
     if (cache.has(key)) {
       return cache.get(key);
     }
-
-    const failed = failures.get(ref.module);
-    if (failed !== undefined) {
-      throw new Error(`модуль "${ref.module}" не загрузился: ${failed}`);
-    }
-
-    const loaded = modules.get(ref.module) as Record<string, unknown>;
-    const member = memberOf(loaded, ref.member);
-    if (typeof member !== 'function') {
-      throw new Error(
-        `в "${ref.module}" нет экспорта "${ref.member}" — вычислять дефолт нечем`,
-      );
-    }
-
-    const value = (member as (ctx: ResolverContext) => unknown)(context);
+    const value = port.call(ref);
     cache.set(key, value);
     return value;
   };
@@ -368,29 +319,4 @@ function sameMap(left: SettingMap, right: SettingMap): boolean {
 
 function isMap(value: unknown): value is SettingMap {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
- * Экспорт модуля резолверов: сначала именованный, потом из `default`.
- *
- * Второе — не вежливость к CJS, а поддержка формы «расширение то, которое пакет
- * реально отдаёт» (README контрактов §3): собранный CJS-пакет отдаёт свои
- * функции через `module.exports`, и для ESM-импорта они лежат под `default`.
- */
-function memberOf(loaded: Record<string, unknown>, member: string): unknown {
-  if (loaded[member] !== undefined) {
-    return loaded[member];
-  }
-  const fallback = loaded['default'];
-  return typeof fallback === 'object' && fallback !== null
-    ? (fallback as Record<string, unknown>)[member]
-    : undefined;
-}
-
-function refKey(ref: ResolverRef): string {
-  return `${ref.module}#${ref.member}`;
-}
-
-function describe(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
 }
