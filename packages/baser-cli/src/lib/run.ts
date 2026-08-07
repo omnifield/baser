@@ -72,6 +72,7 @@ import {
   type SettingValue,
   type SourceConfig,
   type SourceDeclaration,
+  type SourceWarning,
 } from '@omnifield/baser-contracts';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -125,6 +126,7 @@ import { recoverPlacedValues, type PlacedValue } from './previous.js';
 import { derivedMoves, type DerivedMove } from './derived.js';
 import { differenceOf, type ArtifactDifference } from './difference.js';
 import { loadDefaults, resolveValues, type SettingMovement } from './values.js';
+import { loadWarning } from './warning.js';
 import {
   describeRefusal,
   unwritable,
@@ -364,6 +366,15 @@ interface Prepared {
    * рождает файл ОДИН РАЗ и больше в него не пишет никогда (`settings.ts`).
    */
   readonly born: string | null;
+  /**
+   * ЧТО ОБВЕС СКАЗАЛ ПРО СВОЁ ПРИМЕНЕНИЕ ЗДЕСЬ (`tasker:BASER2-234`).
+   *
+   * Состояние, а не текст: «сказать нечего» и «сказать не вышло» — разные вещи,
+   * и вторую консоль обязана напечатать так же, как первую промолчать
+   * (`warning.ts`). Едет отсюда в движок входом (`engineInput`), а из плана — в
+   * ответ и в текст: место у него одно, и второй копии в отчёте двери нет.
+   */
+  readonly warning: SourceWarning;
   readonly draft: DraftRun;
 }
 
@@ -611,7 +622,12 @@ async function runInRepo(
     try {
       plan = computePlan({
         tree,
-        declaration: engineInput(item.declaration, item.location, item.pkg),
+        declaration: engineInput(
+          item.declaration,
+          item.location,
+          item.pkg,
+          item.warning,
+        ),
         source: createDoorSource(item.rendered, item.declaration, item.pkg),
         ...(options.confirm
           ? { confirm: confirmFor(draft.source.id, owners, options.confirm) }
@@ -998,6 +1014,25 @@ async function prepare(
     settings: Object.keys(declaration.settings).length,
   });
 
+  // ── ЧТО ОБВЕС ГОВОРИТ ПРО СВОЁ ПРИМЕНЕНИЕ ЗДЕСЬ (`tasker:BASER2-234`).
+  //
+  // Считается ЗДЕСЬ, а не рядом с планом, по двум причинам. Первая: резолвер
+  // грузится тем же способом и в тот же момент, что резолверы дефолтов, — обе
+  // асинхронные доставки стоят рядом, а не по разные стороны прогона. Вторая:
+  // от работы предупреждение не зависит вовсе — обвес, которому нечего класть,
+  // говорит его так же, как обвес с десятью артефактами.
+  //
+  // Отказать этот вызов не может ни при какой беде (`warning.ts`): случившееся
+  // приезжает состоянием и печатается бедой обстановки. Поэтому и `log` он не
+  // трогает — попав в отказы, предупреждение поменяло бы код возврата, то есть
+  // стало бы первой громкостью, ради ухода от которой затевался весь шов.
+  const warning = await loadWarning(declaration, pkg, repo);
+  trace.event('door.warning', {
+    source,
+    kind: warning.kind,
+    ...(warning.kind === 'failed' ? { code: warning.problem.code } : {}),
+  });
+
   const values = trace.span(
     'door.values',
     () => resolveValues(declaration, state.config as SourceConfig, defaults),
@@ -1031,7 +1066,14 @@ async function prepare(
       )
     : null;
 
-  return { ...item, rendered, values: values.value.values, born, draft };
+  return {
+    ...item,
+    rendered,
+    values: values.value.values,
+    born,
+    warning,
+    draft,
+  };
 }
 
 /**
@@ -1299,10 +1341,22 @@ function engineInput(
   declaration: SourceDeclaration,
   location: SourceLocation,
   pkg: LocatedPackage,
+  warning: SourceWarning,
 ): Declaration {
   return {
     source: {
       id: declaration.source.id,
+      // ЧТО ОБВЕС СКАЗАЛ ПРО СВОЁ ПРИМЕНЕНИЕ ЗДЕСЬ (`tasker:BASER2-234`).
+      //
+      // Считает это консоль — резолвер живёт в пакете обвеса, и позвать его
+      // может только тот, у кого есть файловая система; движок несёт готовое до
+      // плана, откуда его берут оба читателя: человек текстом, агент и пульт
+      // машинным ответом (`kb:BASER3-33`).
+      //
+      // Едет ВСЕГДА, включая `{ kind: 'none' }`: названное отсутствие — это
+      // тоже ответ, и потребитель плана не обязан отличать пропущенное поле от
+      // молчащего обвеса.
+      warning,
       // ПОЛОЖЕНИЕ ИСТОЧНИКА, названное дверью, — а не `null` (`BASER2-150`).
       //
       // Знает его только она: она же и достала поставку. Внутри дерева это
