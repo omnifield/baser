@@ -144,10 +144,16 @@
 ```jsonc
 // package.json обвеса git
 "layout": [
-  { "src": "pre-commit", "dest": ".githooks/pre-commit", "render": false, "executable": true },
+  { "src": "pre-commit", "dest": ".git/hooks/pre-commit", "render": false, "executable": true },
   { "src": "workflow.yml.ejs", "dest": ".github/workflows/verify.yml" },
 ]
 ```
+
+**Адрес в образце назван нарочно.** `.git/hooks/` — место, куда git смотрит сам;
+`.githooks/` исполняется только там, где кто-то выставил `core.hooksPath`, и такой
+настройки обвес не везёт — из просьбы «выставьте её в каждом клоне» выросло то, что хук
+лежал в репозитории и не был подключён ни в одном (`tasker:BASER2-195`). Образец в доке
+формы читают как рекомендацию, поэтому адрес здесь — рабочий, а не любой годный.
 
 **Вскрыто исполнением, а не вычиткой.** Обвес git кладёт хук `pre-commit`, дверь адрес
 пропускает — и файл ложится с правами `644`. Настоящий `git commit` в такой локации
