@@ -372,6 +372,53 @@ describe('режим приводится без записи содержимо
   });
 });
 
+/**
+ * ЧИТАЮЩИЙ ЧЛЕН — дерево отвечает, какой режим ЕСТЬ (`tasker:BASER2-225`).
+ *
+ * Пара к `setExecutable`: режим это состояние, а не команда, и читается он той
+ * же рукой, что и пишется. Своего мнения о том, каким режим ДОЛЖЕН быть, у
+ * дерева от этого не прибавляется — решает движок, дерево отвечает фактом.
+ */
+describe('дерево отвечает, исполняем ли лежащий файл', () => {
+  it('бит лежащего файла — как есть, обе стороны', () => {
+    const root = repo({ 'run.sh': '#!/bin/sh\n', 'data.json': '{}\n' });
+    chmodSync(join(root, 'run.sh'), 0o755);
+
+    const tree = createRepoTree(root);
+
+    expect(tree.isExecutable('run.sh')).toBe(true);
+    expect(tree.isExecutable('data.json')).toBe(false);
+  });
+
+  it('файла нет — `null`, а не «не программа»', () => {
+    const tree = createRepoTree(repo());
+
+    // Два разных ответа: «сказать нечего» и «сказать есть что, и это нет».
+    // Слить их в `false` значило бы соврать движку про несуществующий файл.
+    expect(tree.isExecutable('нет-такого.sh')).toBeNull();
+  });
+
+  it('дерево видит СВОЮ работу: сначала накопленное, потом диск', () => {
+    // Тот же порядок, что у `read`. Иначе дерево сказало бы «бита нет» о файле,
+    // которому само же его в этом прогоне и назначило.
+    const tree = createRepoTree(repo({ 'run.sh': '#!/bin/sh\n' }));
+
+    expect(tree.isExecutable('run.sh')).toBe(false);
+    tree.setExecutable('run.sh', true);
+    expect(tree.isExecutable('run.sh')).toBe(true);
+  });
+
+  it('снятый файл режима не имеет — `null` до всякого сброса', () => {
+    const root = repo({ 'run.sh': '#!/bin/sh\n' });
+    chmodSync(join(root, 'run.sh'), 0o755);
+
+    const tree = createRepoTree(root);
+    tree.delete('run.sh');
+
+    expect(tree.isExecutable('run.sh')).toBeNull();
+  });
+});
+
 describe('чего дерево двери не умеет — говорит вслух', () => {
   it('rename и changePermissions бросают, а не молчат', () => {
     const tree = createRepoTree(repo());
