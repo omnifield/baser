@@ -55,6 +55,7 @@ export {
   EMPTY_MANIFEST,
   MANIFEST_PATH,
   MANIFEST_VERSION,
+  MIN_READABLE_MANIFEST_VERSION,
   ManifestError,
   hashContent,
   readManifest,
