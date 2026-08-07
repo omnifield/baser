@@ -156,6 +156,24 @@ export interface PlanStep {
    * (содержимое не трогаем вовсе).
    */
   readonly content: string | null;
+  /**
+   * РЕЖИМ, ОБЪЯВЛЕННЫЙ РАСКЛАДКОЙ: программа (`true`) или данные (`false`).
+   * Поля НЕТ вовсе, когда обвес режим не назвал (`declaration.ts`).
+   *
+   * Стоит ТОЛЬКО на шагах, которые кладут содержимое (`create`, `update`):
+   * режим едет вместе с содержимым и применяется тем же шагом, что и оно
+   * (`apply.ts`). У `delete` его нет по очевидной причине, у `record` — по
+   * неочевидной, и она названа: этот шаг обещает «сам артефакт остаётся как
+   * есть», и трогать режим файла он не имеет права больше, чем его содержимое.
+   *
+   * ОТСЮДА ЖЕ ЧЕСТНАЯ ГРАНИЦА ЭТОГО ШВА (`tasker:BASER2-214`). Артефакт, уже
+   * лежащий сошедшимся, шага не порождает вовсе — значит объявленный ему сегодня
+   * режим никуда не поедет, пока содержимое не разойдётся. Причина не в шаге, а
+   * в паспорте укладки: он режима не помнит, поэтому смена объявленного режима
+   * не видна `restatedFields` и расхождением не считается. Чинится это формой
+   * паспорта, а не проверкой в шаге — заявлено architect'у отдельно.
+   */
+  readonly executable?: boolean;
   /** Текущее содержимое до применения — материал для показа расхождения. */
   readonly previous: string | null;
   /** Запись, которая окажется в манифесте после шага; `null` у `delete`. */
@@ -474,6 +492,27 @@ function requireUsableDeclaration(declaration: Declaration): void {
       );
     }
   }
+
+  // РЕЖИМ — БУЛЕВО ЛИБО НЕ НАЗВАН, третьего значения у него нет. Отказ здесь, а
+  // не отдельным конфликтом по записи: конфликт говорит «этот артефакт
+  // спланировать нельзя», а тут другое — вход собран неверно, и собрал его тот
+  // же, кто подаёт всю структуру. Тот же разбор, что у `source.version`.
+  //
+  // Молча пропустить нельзя тем более: не-булево доехало бы до порта как
+  // значение режима, и раннер решал бы за обвес, программа это или нет, по
+  // правдивости строки — ровно тот молчаливый разъезд «объявлено» и «лежит», из
+  // которого выросла форма 6 (`tasker:BASER2-208`).
+  for (const [index, entry] of declaration.layout.entries()) {
+    const executable = entry?.executable;
+    if (executable !== undefined && typeof executable !== 'boolean') {
+      throw new DeclarationError(
+        `layout[${index}].executable подан значением ${JSON.stringify(executable)}: ` +
+          'исполняемость артефакта — булево либо не названа вовсе. Приводит её к ' +
+          'явному виду разбор формы у двери (contracts), и движку она приезжает ' +
+          'уже приведённой',
+      );
+    }
+  }
 }
 
 /** Вычисляет план материализации. Дерево при этом НЕ меняется. */
@@ -701,6 +740,14 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
       placedOnce: declaration.layout.filter(
         (item) => item?.class === 'placed-once',
       ).length,
+      // Сколько записей объявили себя ПРОГРАММАМИ. Стоит рядом с `placedOnce` и
+      // по той же причине: «почему хук лёг и не работает» отвечается числом в
+      // телеметрии, а не вычиткой раскладки глазами (`tasker:BASER2-208`).
+      // Считается только `true`: названный `false` — это «данные», то есть
+      // ровно то, чем артефакт был бы и без объявления.
+      executable: declaration.layout.filter(
+        (item) => item?.executable === true,
+      ).length,
     },
   );
 
@@ -847,7 +894,7 @@ function repoPathsOf(entry: LayoutEntry): LayoutEntry | null {
   const src = toRepoPath(entry?.src as string);
   const dest = toRepoPath(entry?.dest as string);
   return src.ok && dest.ok
-    ? { src: src.path, dest: dest.path, ...classOf(entry) }
+    ? { src: src.path, dest: dest.path, ...classOf(entry), ...modeOf(entry) }
     : null;
 }
 
@@ -861,6 +908,19 @@ function repoPathsOf(entry: LayoutEntry): LayoutEntry | null {
  */
 function classOf(entry: LayoutEntry): { class?: ArtifactClass } {
   return entry?.class === undefined ? {} : { class: entry.class };
+}
+
+/**
+ * Объявленный режим как поле объекта: `{}`, когда обвес его не назвал.
+ *
+ * Умолчания здесь нет и не будет — в отличие от класса. Класс отвечает на
+ * вопрос «чем станок держит артефакт», и не ответить на него нельзя: чем-то он
+ * его держит. Режим отвечает на другой вопрос — «утверждает ли обвес что-нибудь
+ * про исполняемость», — и «ничего не утверждает» это законный ответ, который
+ * обязан доехать до порта неподменённым (`tree.ts`, `setExecutable`).
+ */
+function modeOf(entry: LayoutEntry): { executable?: boolean } {
+  return entry?.executable === undefined ? {} : { executable: entry.executable };
 }
 
 /** Отказ по записи, объявленной классом, которого движок не знает. */
@@ -1264,6 +1324,7 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
         content,
         previous: null,
         record,
+        ...modeOf(entry),
       },
     };
   }
@@ -1302,6 +1363,7 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
               content,
               previous: actual,
               record,
+              ...modeOf(entry),
             },
     };
   }
@@ -1324,6 +1386,7 @@ function planEntry(entry: LayoutEntry, context: EntryContext): EntryOutcome {
         content,
         previous: actual,
         record,
+        ...modeOf(entry),
       },
     };
   }
@@ -1438,7 +1501,8 @@ export function describePlan(plan: MaterializationPlan): string {
           : `: ${step.restated.join(', ')}`;
       lines.push(
         `  ${step.kind.padEnd(7)} ${step.dest}  (${step.reason}${restated})` +
-          recorded(step, plan.manifestPath),
+          recorded(step, plan.manifestPath) +
+          asProgram(step),
       );
     }
   }
@@ -1476,4 +1540,17 @@ function recorded(step: PlanStep, manifestPath: string): string {
   return step.kind === 'record'
     ? ` — меняется паспорт укладки ${manifestPath}; сам артефакт остаётся как есть`
     : '';
+}
+
+/**
+ * Артефакт кладётся ИСПОЛНЯЕМЫМ — сказано в той же строке, что и сам шаг.
+ *
+ * Печатается только `true`. Названный `false` человеку не сообщает ничего: файл
+ * ляжет данными ровно так же, как лёг бы без объявления, — а разница между
+ * «сказано» и «не сказано» существует для порта, и лежит она данными
+ * (`step.executable`), а не в рендере. Различие, которое ни на что не влияет,
+ * в строке отчёта — шум, за которым теряется то, что влияет.
+ */
+function asProgram(step: PlanStep): string {
+  return step.executable === true ? ' — кладётся исполняемым (программа)' : '';
 }

@@ -1537,6 +1537,6 @@ describe('трейсы', () => {
     ]);
     expect(
       plan.trace.find((span) => span.name === 'plan.layout')?.detail,
-    ).toEqual({ entries: 1, placedOnce: 0 });
+    ).toEqual({ entries: 1, placedOnce: 0, executable: 0 });
   });
 });

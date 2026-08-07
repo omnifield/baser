@@ -403,7 +403,7 @@ describe('трейсы называют то, чего прогон не дел�
 
     expect(
       plan.trace.find((span) => span.name === 'plan.layout')?.detail,
-    ).toEqual({ entries: 1, placedOnce: 0 });
+    ).toEqual({ entries: 1, placedOnce: 0, executable: 0 });
     expect(
       plan.trace.find((span) => span.name === 'plan.orphans')?.detail,
     ).toEqual({ orphans: 0, retained: 1 });
