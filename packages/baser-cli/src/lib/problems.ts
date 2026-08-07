@@ -13,7 +13,10 @@
  */
 
 import type { FormProblem, FormProblemCode } from '@omnifield/baser-contracts';
-import type { EngineProblemCode } from '@omnifield/baser-materialize';
+import type {
+  CapabilityProblemCode,
+  EngineProblemCode,
+} from '@omnifield/baser-materialize';
 
 /**
  * Что не так на стороне двери.
@@ -238,8 +241,18 @@ export type DoorProblemCode =
  * чужом событии: `manifest-unreadable` и `plan-blocked` — это разные починки в
  * разных местах, и склеить их в один код значило бы сказать «что-то не так»
  * (`tasker:BASER2-24`).
+ *
+ * **Коды СПОСОБНОСТЕЙ движка входят сюда тем же правилом** (`tasker:BASER2-201`).
+ * Команда `add` зовёт способность «объявить поставку», и её отказы приезжают в
+ * ответ консоли как есть — `pin-ambiguous` в том числе. Своего слова про
+ * названное дважды закрепление консоль не заводит: решение о нём принимает
+ * движок, и второе такое же, принятое здесь, разошлось бы с первым молча.
  */
-export type ProblemCode = DoorProblemCode | FormProblemCode | EngineProblemCode;
+export type ProblemCode =
+  | DoorProblemCode
+  | FormProblemCode
+  | EngineProblemCode
+  | CapabilityProblemCode;
 
 /**
  * Отказ в ответе двери.

@@ -1,12 +1,12 @@
 {
   "name": "@omnifield/baser-cli",
-  "version": "0.4.0-dev.1",
+  "version": "0.5.0-dev.1",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/omnifield/baser.git",
     "directory": "packages/baser-cli"
   },
-  "description": "Дверь baser: зовёт станок и кладёт обвес на диск — план называет движение до применения",
+  "description": "Консоль baser: зовёт станок и кладёт обвес на диск — план называет движение до применения",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",

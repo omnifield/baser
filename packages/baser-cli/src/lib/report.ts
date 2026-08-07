@@ -16,9 +16,13 @@
  */
 
 import { describeProblems, type FormProblem } from '@omnifield/baser-contracts';
-import { describePlan } from '@omnifield/baser-materialize';
+import {
+  describePlan,
+  describeSupplyChange,
+} from '@omnifield/baser-materialize';
 import type { CheckReport } from '@omnifield/baser-check';
 import type { PackReport } from '@omnifield/baser-pack';
+import type { AddResult } from './add.js';
 import type { BundleReport } from './bundle.js';
 import type {
   DoorCommand,
@@ -610,6 +614,91 @@ function indent(text: string): string {
     .split('\n')
     .map((line) => `  ${line}`)
     .join('\n');
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// ПРИВЯЗКА ПОСТАВКИ: add (`tasker:BASER2-201`)
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * ТЕКСТ `add` — ДВА рассказа подряд, а не третий поверх них.
+ *
+ * Команда складывает две механики: объявление (способность движка) и применение
+ * (прогон). Значит и текст складывается из их же слов — смену объявления
+ * называет `describeSupplyChange` движка, прогон печатает `renderText`. Свой
+ * пересказ поверх них был бы второй правдой ровно там, где обёртка обязана быть
+ * тонкой.
+ *
+ * Своё здесь одно, и сказать это больше некому: **что стало с объявлением, когда
+ * применение не прошло**. Ни движок, ни прогон об этом не знают — движок не
+ * видел применения, прогон не видел объявления.
+ */
+export function renderAdd(result: AddResult): string {
+  const lines: string[] = [];
+
+  if (result.declared !== null) {
+    lines.push(describeSupplyChange(result.declared));
+  }
+
+  if (result.problems.length > 0) {
+    lines.push(
+      '',
+      `отказов: ${result.problems.length}`,
+      indent(describeProblems(result.problems as readonly FormProblem[])),
+    );
+  }
+
+  if (result.door === null) {
+    // Применения не было, и человек обязан знать, ЧТО осталось в локации:
+    // «отказ» без этого читается одинаково и там, где не тронуто ничего, и там,
+    // где объявление уже легло.
+    lines.push(
+      '',
+      result.declared === null
+        ? 'применения не было, и на диск не ушло НИЧЕГО: объявление считается в памяти, ' +
+            'а отказ назван до всякой записи — локация такая же, какой была'
+        : 'применения не было: объявление на диск не легло, и причина названа выше',
+    );
+    return lines.join('\n');
+  }
+
+  lines.push('', renderText(result.door));
+  lines.push(...remainsDeclared(result));
+  return lines.join('\n');
+}
+
+/**
+ * ОБЪЯВЛЕНИЕ ОСТАЁТСЯ, И ЭТО СКАЗАНО ВСЛУХ.
+ *
+ * Применение отказало, а запись поставки на диске лежит — молча это читалось бы
+ * как след неудавшегося прогона, который человек пойдёт убирать руками. Между
+ * тем откат здесь неверен: конфликт владения чинится подтверждением, а
+ * подтверждение адресуется УЖЕ объявленной поставке (`add.ts`). Убрав запись,
+ * консоль сделала бы починку невозможной.
+ *
+ * Печатается ровно там, где предмет есть, — на отказе и на конфликте. Приклеенное
+ * к удачному прогону, это объяснение за неделю перестало бы читаться, как и всякое
+ * предупреждение-заготовка (`tasker:BASER2-135`).
+ */
+function remainsDeclared(result: AddResult): string[] {
+  const door = result.door;
+  if (
+    door === null ||
+    result.declared === null ||
+    (door.status !== 'refused' && door.status !== 'blocked')
+  ) {
+    return [];
+  }
+
+  return [
+    '',
+    `объявление ОСТАЁТСЯ в "${result.declared.at}" — это не след неудачи:`,
+    '  сказанное тобой «поставь это» ошибкой ввода не было, отказало применение. Почини',
+    '  названную выше причину и повтори тот же вызов — второй записи от этого не появится.',
+    '  Конфликт владения разрешается подтверждением ("baser apply --confirm <путь>"), и',
+    '  адресуется оно ОБЪЯВЛЕННОЙ поставке: снятое объявление сделало бы починку',
+    `  невозможной. Передумал — убери запись из "${result.declared.at}" руками.`,
+  ];
 }
 
 // ───────────────────────────────────────────────────────────────────────────
