@@ -2,7 +2,7 @@
   "name": "@fixture/kit",
   "version": "1.0.0",
   "baser": {
-    "formVersion": 3,
+    "formVersion": 6,
 
     "source": {
       "id": "fixture/kit",
@@ -89,6 +89,11 @@
         "src": "kit.lock.json",
         "dest": "fixture/kit.lock.json",
         "render": false
+      },
+      {
+        "src": "hook.sh.ejs",
+        "dest": "fixture/hook.sh",
+        "executable": true
       }
     ]
   }

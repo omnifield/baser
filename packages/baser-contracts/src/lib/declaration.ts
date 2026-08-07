@@ -37,7 +37,12 @@ import {
   type SettingType,
   type SettingValue,
 } from './values.js';
-import { FORM_VERSION, MAP_TYPE_SINCE, MIN_FORM_VERSION } from './version.js';
+import {
+  EXECUTABLE_SINCE,
+  FORM_VERSION,
+  MAP_TYPE_SINCE,
+  MIN_FORM_VERSION,
+} from './version.js';
 
 /** Ключ блока самообъявления в `package.json` обвеса. */
 export const DECLARATION_BLOCK = 'baser';
@@ -92,6 +97,19 @@ export interface LayoutEntry {
    * при разборе — как и `render`.
    */
   readonly class: ArtifactClass;
+  /**
+   * Артефакт — ПРОГРАММА, а не данные: его кладут исполняемым.
+   *
+   * Приведён к явному значению при разборе — как `render` и `class`, и по той
+   * же причине: умолчание живёт здесь, а не в каждом читателе формы. Читатель
+   * берёт `entry.executable` и не гадает, чем `undefined` отличается от `false`.
+   *
+   * **Булево, а не режим числом** (`version.ts`, форма 6): различение, которое
+   * форме нужно, ровно одно. Как именно исполняемость ложится на диск —
+   * обязательство порта, который пишет (`materialize`), и оно не обещано
+   * одинаковым на всех системах; форма обещает только НАМЕРЕНИЕ автора.
+   */
+  readonly executable: boolean;
 }
 
 /**
@@ -135,7 +153,13 @@ const SETTING_FIELDS = new Set([
   'defaultFrom',
 ]);
 const PRESET_FIELDS = new Set(['title', 'values']);
-const LAYOUT_FIELDS = new Set(['src', 'dest', 'render', 'class']);
+const LAYOUT_FIELDS = new Set([
+  'src',
+  'dest',
+  'render',
+  'class',
+  'executable',
+]);
 
 /**
  * Снятые и не заведённые поля, у которых есть НАЗВАННАЯ замена.
@@ -152,6 +176,12 @@ const NAMED_ABSENCE: Readonly<Record<string, string>> = {
   'layout.once':
     'класс артефакта — перечисление, а не флаг: объяви "class": "placed-once". ' +
     `Классы формы ${FORM_VERSION}: ${ARTIFACT_CLASSES.join(' · ')}`,
+  'layout.mode':
+    '"mode" форма не знает ни в одном из двух смыслов, в которых его пишут. ' +
+    'Режима материализации в записи нет: "merge" отменён вместе со сведением версий, ' +
+    '"seed" выражается классом ("class") и форком источника. Режима файла числом — ' +
+    'тоже нет: различение у формы ровно одно, программа или данные, и объявляется оно ' +
+    '"executable": true. Восьмеричный режим обещал бы то, чего мы не сдержим на всех системах',
 };
 
 /**
@@ -235,7 +265,12 @@ export function parseSourceDeclaration(
     `${at}.presets`,
     settings,
   );
-  const layout = parseLayout(log, value['layout'], `${at}.layout`);
+  const layout = parseLayout(
+    log,
+    value['layout'],
+    `${at}.layout`,
+    formVersion,
+  );
 
   return log.result(() => ({
     formVersion,
@@ -716,6 +751,7 @@ function parseLayout(
   log: ProblemLog,
   value: unknown,
   at: string,
+  formVersion: number,
 ): readonly LayoutEntry[] {
   if (value === undefined) {
     log.add(
@@ -742,7 +778,7 @@ function parseLayout(
   const seen = new Map<string, number>();
 
   value.forEach((raw, index) => {
-    const entry = parseLayoutEntry(log, raw, `${at}[${index}]`);
+    const entry = parseLayoutEntry(log, raw, `${at}[${index}]`, formVersion);
     if (!entry) {
       return;
     }
@@ -770,6 +806,7 @@ function parseLayoutEntry(
   log: ProblemLog,
   value: unknown,
   at: string,
+  formVersion: number,
 ): LayoutEntry | null {
   if (!isPlainObject(value)) {
     log.add('not-an-object', at, 'ожидался объект {src, dest}');
@@ -813,6 +850,16 @@ function parseLayoutEntry(
     return null;
   }
 
+  const executable = parseExecutable(
+    log,
+    value['executable'],
+    at,
+    formVersion,
+  );
+  if (executable === null) {
+    return null;
+  }
+
   if (src === '' || dest === '') {
     return null;
   }
@@ -839,7 +886,67 @@ function parseLayoutEntry(
     dest,
     render: rawRender ?? true,
     class: rawClass ?? DEFAULT_ARTIFACT_CLASS,
+    executable,
   };
+}
+
+/**
+ * ИСПОЛНЯЕМОСТЬ АРТЕФАКТА — намерение автора обвеса, а не режим файла числом.
+ *
+ * Поле необязательное, и его отсутствие означает `false`: обвес, написанный до
+ * формы 6, разбирается ровно как раньше и ни одной правки не требует.
+ *
+ * Два отказа, и оба — про пригодность самой записи:
+ *
+ * 1. **поле приехало формой 6, а объявление назвалось старше** — `EXECUTABLE_SINCE`.
+ *    Отказ, а не тихое согласие, по той же причине, что у составного типа: приняв
+ *    исполняемость под номером 5, мы согласились бы с объявлением, которое прежний
+ *    baser назовёт `unknown-field`, то есть опечаткой, — и автор, поверив ему,
+ *    уберёт поле и поставит потребителю машину, которая молча не работает
+ *    (`tasker:BASER2-212`);
+ * 2. **не булево** — обычный `wrong-type`, тот же код и тот же разбор, что у
+ *    соседнего `render`: это флаг, и «да» с единицей флагом не являются.
+ *
+ * Отказ приходит ДО того, как что-либо применено: разбор ничего не пишет и
+ * ничего не исполняет.
+ *
+ * @returns значение поля либо `null` — названный отказ, запись непригодна
+ */
+function parseExecutable(
+  log: ProblemLog,
+  value: unknown,
+  at: string,
+  formVersion: number,
+): boolean | null {
+  const field = `${at}.executable`;
+
+  if (value === undefined) {
+    return false;
+  }
+  // Отказ при ЛЮБОМ значении, включая `false`: под старым номером даже «этот
+  // файл не программа» записано словом, которого та форма не знает.
+  if (formVersion < EXECUTABLE_SINCE) {
+    log.add(
+      'form-version-unsupported',
+      field,
+      `исполняемость артефакта приехала формой ${EXECUTABLE_SINCE}, а объявление назвалось ` +
+        `формой ${formVersion} — подними "formVersion" до ${EXECUTABLE_SINCE}. ` +
+        `Иначе baser, который формы ${EXECUTABLE_SINCE} не знает, назовёт исполняемость ` +
+        'опечаткой вместо «обнови baser», а снятое поле означает хук, который лёг и не работает',
+    );
+    return null;
+  }
+  if (typeof value !== 'boolean') {
+    log.add(
+      'wrong-type',
+      field,
+      `ожидался true/false, получено ${describeValue(value)}. ` +
+        'Исполняемость — это «программа или данные», а не режим файла числом: ' +
+        'восьмеричный режим обещал бы то, чего мы не сдержим на всех системах',
+    );
+    return null;
+  }
+  return value;
 }
 
 function requiredString(
