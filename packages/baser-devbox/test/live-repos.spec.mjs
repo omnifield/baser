@@ -55,6 +55,56 @@ function reference(repo) {
   );
 }
 
+/** Объявление сервисов живого репозитория — снимок его `devbox.services.json`. */
+function services(repo) {
+  return JSON.parse(
+    readFileSync(join(here, 'live', `${repo}.services.json`), 'utf-8'),
+  );
+}
+
+/**
+ * КАРТА ПРОЦЕССОВ ЛОКАЦИИ, ВЫВЕДЕННАЯ ИЗ ЕЁ ЖЕ ФАЙЛОВ (`tasker:BASER2-196`).
+ *
+ * Написать эти три строки руками было бы легко и бесполезно: проба доказывала
+ * бы, что обвес кладёт то, что мы в неё вписали. Поэтому каждая выведена из
+ * снимка чужого файла, и связь названа:
+ *
+ * - `publish` — работа их `scripts/devbox-publish.mjs`: копия `omnifield.yaml`
+ *   в общий том реестра. Обвес манифест НЕ РАЗБИРАЕТ — что внутри, контракт
+ *   двери, а не наш (`kb:BASER3-32`);
+ * - остальные — записи их `devbox.services.json`, имя в имя и команда в
+ *   команду.
+ *
+ * ── КАТАЛОГ ВХОДИТ В КОМАНДУ, ПОТОМУ ЧТО `cwd` У ФОРМЫ НЕТ ──────────────────
+ *
+ * Их раннер запускал сервис в объявленном `cwd`; объектная форма команд
+ * выполняет всё из корня воркспейса и своего `cwd` не знает. Значит каталог
+ * переезжает В САМУ КОМАНДУ. Общего правила для этого нет и быть не может —
+ * каждый инструмент указывает каталог по-своему, — поэтому здесь оно НЕ
+ * изобретается: разобран ровно тот случай, что есть у обоих живых
+ * репозиториев (`pnpm -C`), а любой другой роняет пробу вслух вместо тихого
+ * неверного вывода.
+ */
+function processes(repo) {
+  const map = { publish: `cp omnifield.yaml /omnifield-registry/${repo}.yaml` };
+  for (const { name, cwd, command } of services(repo)) {
+    if (cwd === '.') {
+      map[name] = command;
+      continue;
+    }
+    if (!command.startsWith('pnpm ')) {
+      throw new Error(
+        `сервис ${name} репозитория ${repo} запускается из каталога ${cwd} командой ` +
+          `"${command}", а как назвать каталог этому инструменту, проба не знает. ` +
+          'Объектная форма своего cwd не имеет — каталог обязан войти в команду, ' +
+          'и правило для него называет человек, а не догадка пробы',
+      );
+    }
+    map[name] = `pnpm -C ${cwd} ${command.slice('pnpm '.length)}`;
+  }
+  return map;
+}
+
 /**
  * Настройки, которыми ИХ раскладка выражается у нас.
  *
@@ -84,7 +134,9 @@ const PROFILES = {
     editorFormatter: null,
     installCommand:
       '{ [ -f package.json ] && pnpm install || { [ -f web/package.json ] && pnpm -C web install --frozen-lockfile; } || echo "no pnpm workspace — skip"; }',
-    startCommand: 'node scripts/devbox-publish.mjs; node scripts/devbox-services.mjs up',
+    // Не строка со своими скриптами, а КАРТА процессов, выведенная из их же
+    // файлов (`tasker:BASER2-196`, решение `kb:BASER3-32`).
+    startCommand: processes('tasker'),
   },
   knowledger: {
     name: 'omnifield-devbox',
@@ -103,7 +155,7 @@ const PROFILES = {
     installAssistant: true,
     editorExtensions: ['biomejs.biome'],
     editorFormatter: 'biomejs.biome',
-    startCommand: 'node scripts/devbox-publish.mjs; node scripts/devbox-services.mjs up',
+    startCommand: processes('knowledger'),
   },
 };
 
@@ -161,6 +213,11 @@ const DIVERGES = {
     '(pnpm, а не npm) вместо их проверки GH Packages, и без их `mkdir -p` — точку ' +
     'монтирования докер создаёт сам. Права на ВСЕ их тома при этом выставляются, ' +
     'и это проверяется отдельно',
+  postStartCommand:
+    'предмет `tasker:BASER2-196`: у них ещё СТРОКА, зовущая пару собственных скриптов ' +
+    '(`devbox-publish.mjs` + `devbox-services.mjs up`), у нас — объектная форма ' +
+    'именованных команд, выведенных из их же файлов. Совпадение здесь означало бы, ' +
+    'что раннер остался в репозитории, то есть что решение `kb:BASER3-32` не исполнено',
   customizations:
     'сквозного проброса настроек редактора у обвеса нет намеренно (закрытый набор ' +
     'ключей, `layers.spec.mjs`). У knowledger в них форматтер, расписанный по шести ' +
@@ -279,22 +336,75 @@ describe.each(['tasker', 'knowledger'])('живой %s выражается на
     );
   });
 
-  it('ПОСЛЕ СТАРТА: их команда едет как написана', async () => {
+  it('ПОСЛЕ СТАРТА: их строка выражается КАРТОЙ, и раннер из репозитория уходит', async () => {
     const ours = await materialize(repo);
+    const live = reference(repo);
 
-    // `BASER2-82`. Что именно они там запускают (публикация в реестр, подъём
-    // сервисов) — их дело и legacy девопсера; обвес обязан дать ТОЧКУ.
-    expect(ours.postStartCommand).toBe(reference(repo).postStartCommand);
+    // `BASER2-82` дал ТОЧКУ, `BASER2-196` — механику подъёма. Эталон держит ровно
+    // ту строку, ради которой задача и заведена: пара их собственных скриптов.
+    expect(live.postStartCommand).toBe(
+      'node scripts/devbox-publish.mjs; node scripts/devbox-services.mjs up',
+    );
+
+    // А у нас — объектная форма именованных команд, и ни одна не уходит в
+    // `scripts/` репозитория. Это и есть «продукт не носит раннер в себе».
+    expect(ours.postStartCommand).toEqual(processes(repo));
+    for (const [name, command] of Object.entries(ours.postStartCommand)) {
+      expect(command, `команда ${name} всё ещё зовёт скрипт локации`).not.toContain(
+        'scripts/',
+      );
+    }
+
+    // Ни один их сервис по дороге не потерялся — проверяется по ИХ объявлению,
+    // а не по числу ключей у нас.
+    for (const { name } of services(repo)) {
+      expect(ours.postStartCommand[name], `сервис ${name} потерялся`).toBeTruthy();
+    }
+
+    // Публикация кладёт манифест в ТОТ ЖЕ том, что смонтирован этим же артефактом:
+    // «копирование объявленного файла в объявленное место» (`kb:BASER3-32`).
+    // Разойдись адрес с монтированием — публикация писала бы в пустоту, и заметил
+    // бы это тот, кто ищет продукт за дверью.
+    const registry = ours.mounts.find((mount) =>
+      mount.startsWith('source=omnifield-registry,'),
+    );
+    const target = registry.split(',')[1].slice('target='.length);
+    expect(ours.postStartCommand.publish).toContain(`${target}/${repo}.yaml`);
+  });
+
+  it('ЧЕГО ФОРМА НЕ ДАЁТ — названо и замерено: проб готовности в ней нет', async () => {
+    const ours = await materialize(repo);
+    const declared = services(repo);
+
+    // Их раннер — самодельный `process-compose`: у каждого сервиса объявлены
+    // `healthUrl` и таймаут, то есть http_get-проба готовности (`kb:BASER3-32`).
+    for (const service of declared) {
+      expect(service.healthUrl).toBeTruthy();
+      expect(service.probeTimeoutMs).toBeGreaterThan(0);
+    }
+
+    // Объектная форма их не выражает — и обвес НЕ ИЗОБРАЖАЕТ, будто выражает.
+    // Половина имитации хуже её отсутствия (`kb:BASER2-2` §5): потеря названа в
+    // доке и здесь, а понадобится готовность — это фича девконтейнера, а не наш
+    // код и не наша зависимость.
+    const text = JSON.stringify(ours.postStartCommand);
+    for (const service of declared) {
+      expect(text, 'адрес пробы готовности просочился в артефакт').not.toContain(
+        service.healthUrl,
+      );
+    }
   });
 
   it('СВОДКА: что совпало, что равнозначно, что расходится — списком', async () => {
     const ours = await materialize(repo);
     const { same, equivalent, diverging } = compare(ours, reference(repo), home);
 
-    // Раскладка целиком — в первых двух корзинах. Тома, сеть, старт, имя, образ,
+    // Раскладка целиком — в первых двух корзинах. Тома, сеть, имя, образ,
     // пользователь, секрет-модель: ни одной ручной правки `.devcontainer`.
+    // Точка «после старта» уехала в третью корзину намеренно и с причиной:
+    // совпасть с их строкой значило бы оставить раннер в репозитории
+    // (`tasker:BASER2-196`).
     expect(same).toContain('initializeCommand');
-    expect(same).toContain('postStartCommand');
     expect(same).toContain('image');
     expect(same).toContain('remoteUser');
     expect(same).toContain('name');
