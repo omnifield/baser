@@ -166,7 +166,13 @@ export interface SupplyReport {
  */
 export interface WriteReport {
   readonly path: string;
-  readonly kind: 'CREATE' | 'UPDATE' | 'DELETE';
+  /**
+   * Что именно сделано с файлом. `CHMOD` — приведён РЕЖИМ, содержимое не
+   * тронуто (`tasker:BASER2-223`): своё слово, потому что «обновлён» на файле,
+   * в котором ничего не изменилось, отправляет человека искать правку, которой
+   * нет (`kb:BASER3-36` §3).
+   */
+  readonly kind: 'CREATE' | 'UPDATE' | 'DELETE' | 'CHMOD';
 }
 
 /**

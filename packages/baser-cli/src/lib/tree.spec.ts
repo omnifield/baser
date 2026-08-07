@@ -276,10 +276,10 @@ describe('объявленный режим доезжает до бита', () 
     expect(runnable(root, 'hooks/greet.sh')).toBe(true);
   });
 
-  it('содержимое сошлось, а режим — нет: это РАСХОЖДЕНИЕ, а не тишина', () => {
-    // Так выглядит взятие чужого файла во владение (`--confirm`): байты те же,
-    // а бита нет. Промолчать здесь значило бы отчитаться «сошлось» о файле,
-    // который объявлен программой и программой не является.
+  it('содержимое сошлось, а режим — нет: это РАСХОЖДЕНИЕ, и оно CHMOD', () => {
+    // Промолчать здесь значило бы отчитаться «сошлось» о файле, который
+    // объявлен программой и программой не является. Назвать это `UPDATE` —
+    // отправить человека искать правку в содержимом, которого никто не трогал.
     const tree = createRepoTree(repo({ 'hooks/greet.sh': '#!/bin/sh\n' }));
 
     tree.write('hooks/greet.sh', '#!/bin/sh\n');
@@ -287,16 +287,88 @@ describe('объявленный режим доезжает до бита', () 
 
     expect(
       tree.listChanges().map((change) => `${change.type} ${change.path}`),
-    ).toEqual(['UPDATE hooks/greet.sh']);
+    ).toEqual(['CHMOD hooks/greet.sh']);
 
     tree.flush();
     expect(runnable(tree.root, 'hooks/greet.sh')).toBe(true);
   });
+});
 
-  it('режим для пути, который дерево не пишет, — отказ, а не тихий пропуск', () => {
-    const tree = createRepoTree(repo({ 'a.txt': 'x\n' }));
+/**
+ * РЕЖИМ БЕЗ СОДЕРЖИМОГО — шаг `chmod` движка (`tasker:BASER2-223`).
+ *
+ * Паспорт укладки помнит, что baser сделал с файлом (`kb:BASER3-36`), и потому
+ * расхождение бывает ТОЛЬКО по биту: содержимое целевое, переписывать нечего.
+ * Дерево такого шага не знало и на нём ОТКАЗЫВАЛО — прогон падал ровно там, где
+ * должен был чинить. Пробы ниже судят два предмета сразу: бит появился И
+ * содержимое осталось нетронутым.
+ */
+describe('режим приводится без записи содержимого', () => {
+  const rights = (root: string, path: string): number =>
+    statSync(join(root, path)).mode & 0o777;
 
-    expect(() => tree.setExecutable('a.txt', true)).toThrow(/режим объявлен/);
+  const runnable = (root: string, path: string): boolean =>
+    (rights(root, path) & 0o111) !== 0;
+
+  it('файл лежит, бит потерян — приводится, а содержимое НЕ переписывается', () => {
+    const root = repo({ 'hooks/greet.sh': '#!/bin/sh\n' });
+    const file = join(root, 'hooks/greet.sh');
+    const before = statSync(file).mtimeMs;
+
+    const tree = createRepoTree(root);
+    // Ни одной записи в этом прогоне: движок пришёл только за режимом.
+    tree.setExecutable('hooks/greet.sh', true);
+
+    expect(
+      tree.listChanges().map((change) => `${change.type} ${change.path}`),
+    ).toEqual(['CHMOD hooks/greet.sh']);
+
+    tree.flush();
+
+    expect(runnable(root, 'hooks/greet.sh')).toBe(true);
+    // Содержимое не тронуто: те же байты и то же время правки. Перезапись
+    // «заодно» была бы проще, но соврала бы всему, что за этим временем следит.
+    expect(readFileSync(file, 'utf-8')).toBe('#!/bin/sh\n');
+    expect(statSync(file).mtimeMs).toBe(before);
+  });
+
+  it('снятие бита тоже идёт без записи', () => {
+    const root = repo({ 'hooks/greet.sh': '#!/bin/sh\n' });
+    chmodSync(join(root, 'hooks/greet.sh'), 0o755);
+    const before = statSync(join(root, 'hooks/greet.sh')).mtimeMs;
+
+    const tree = createRepoTree(root);
+    tree.setExecutable('hooks/greet.sh', false);
+    tree.flush();
+
+    expect(runnable(root, 'hooks/greet.sh')).toBe(false);
+    expect(statSync(join(root, 'hooks/greet.sh')).mtimeMs).toBe(before);
+  });
+
+  it('сошедшийся бит работой НЕ является', () => {
+    const root = repo({ 'hooks/greet.sh': '#!/bin/sh\n' });
+    chmodSync(join(root, 'hooks/greet.sh'), 0o755);
+
+    const tree = createRepoTree(root);
+    tree.setExecutable('hooks/greet.sh', true);
+
+    // Иначе прогон рапортовал бы работу на каждом объявленном артефакте,
+    // ничего при этом не меняя, — и «сошлось» перестало бы значить «нечего».
+    expect(tree.listChanges()).toEqual([]);
+  });
+
+  it('снятие сильнее режима: у снятого файла режима не бывает', () => {
+    const root = repo({ 'gone.sh': '#!/bin/sh\n' });
+
+    const tree = createRepoTree(root);
+    tree.setExecutable('gone.sh', true);
+    tree.delete('gone.sh');
+
+    // Файла после прогона не будет — приводить нечего, и второй записи про
+    // один путь в списке не появляется.
+    expect(
+      tree.listChanges().map((change) => `${change.type} ${change.path}`),
+    ).toEqual(['DELETE gone.sh']);
   });
 });
 
