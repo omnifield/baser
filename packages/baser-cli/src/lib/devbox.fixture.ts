@@ -244,6 +244,12 @@ export interface SourceSpec {
      * проставит `regenerated` сама, как и у настоящего обвеса.
      */
     readonly class?: 'regenerated' | 'placed-once';
+    /**
+     * Утверждает ли обвес что-нибудь про исполняемость (форма 6,
+     * `tasker:BASER2-213`). Не назван — не утверждает ничего, и это третье
+     * состояние, а не `false`.
+     */
+    readonly executable?: boolean;
   }[];
   /** Файлы каталога шаблонов: имя → содержимое. */
   readonly templates: Readonly<Record<string, string>>;
@@ -512,6 +518,9 @@ function installExtraSource(
             dest: entry.dest,
             ...(entry.render === false ? { render: false } : {}),
             ...(entry.class === undefined ? {} : { class: entry.class }),
+            ...(entry.executable === undefined
+              ? {}
+              : { executable: entry.executable }),
           })),
         },
       },

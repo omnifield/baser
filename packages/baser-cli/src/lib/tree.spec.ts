@@ -13,11 +13,13 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -199,6 +201,102 @@ describe('сброс на диск', () => {
     tree.flush();
 
     expect(readFileSync(join(tree.root, 'a.txt'), 'utf-8')).toBe('то же\n');
+  });
+});
+
+/**
+ * РЕЖИМ АРТЕФАКТА — судится ФАЙЛ НА ДИСКЕ, а не факт вызова.
+ *
+ * Здесь кончается шов «объявлено исполняемым» (`tasker:BASER2-208`): форма
+ * объявляет, движок доносит, а бит ставит вот этот файл. Поэтому и утверждения
+ * тут только про диск — `statSync`, а не «`setExecutable` позвали».
+ */
+describe('объявленный режим доезжает до бита', () => {
+  /** Права файла на диске — те самые девять бит. */
+  const rights = (root: string, path: string): number =>
+    statSync(join(root, path)).mode & 0o777;
+
+  const runnable = (root: string, path: string): boolean =>
+    (rights(root, path) & 0o111) !== 0;
+
+  it('объявленный программой ложится с битом, необъявленный — без', () => {
+    const tree = createRepoTree(repo());
+
+    tree.write('hooks/greet.sh', '#!/bin/sh\n');
+    tree.setExecutable('hooks/greet.sh', true);
+    tree.write('cfg.json', '{}\n');
+    tree.flush();
+
+    expect(runnable(tree.root, 'hooks/greet.sh')).toBe(true);
+    // Молчание обвеса — не «не программа», а отсутствие утверждения: файл
+    // ложится с тем режимом, с каким его создаёт запись, и бита не получает.
+    expect(runnable(tree.root, 'cfg.json')).toBe(false);
+  });
+
+  it('объявленный данными СНИМАЕТ бит — это утверждение, а не молчание', () => {
+    const tree = createRepoTree(repo({ 'hooks/greet.sh': 'было\n' }));
+    chmodSync(join(tree.root, 'hooks/greet.sh'), 0o755);
+
+    tree.write('hooks/greet.sh', 'стало\n');
+    tree.setExecutable('hooks/greet.sh', false);
+    tree.flush();
+
+    expect(runnable(tree.root, 'hooks/greet.sh')).toBe(false);
+  });
+
+  it('кладётся БИТ, а не режим целиком: прочие права остаются чужими', () => {
+    // Файл, закрытый от всех, кроме владельца. Обвес объявил его программой —
+    // и объявил ровно это: `700`, а не общедоступный `755`. Кому его читать,
+    // обвес не говорил, и решать за него консоль не станет.
+    const tree = createRepoTree(repo({ 'hooks/secret.sh': 'было\n' }));
+    chmodSync(join(tree.root, 'hooks/secret.sh'), 0o600);
+
+    tree.write('hooks/secret.sh', 'стало\n');
+    tree.setExecutable('hooks/secret.sh', true);
+    tree.flush();
+
+    expect(rights(tree.root, 'hooks/secret.sh')).toBe(0o700);
+  });
+
+  it('повторный прогон бит не теряет — и работы не выдумывает', () => {
+    const root = repo();
+
+    const first = createRepoTree(root);
+    first.write('hooks/greet.sh', '#!/bin/sh\n');
+    first.setExecutable('hooks/greet.sh', true);
+    first.flush();
+
+    const second = createRepoTree(root);
+    second.write('hooks/greet.sh', '#!/bin/sh\n');
+    second.setExecutable('hooks/greet.sh', true);
+
+    // Сошлось ЦЕЛИКОМ: и содержимое, и режим. Работы нет.
+    expect(second.listChanges()).toEqual([]);
+    second.flush();
+    expect(runnable(root, 'hooks/greet.sh')).toBe(true);
+  });
+
+  it('содержимое сошлось, а режим — нет: это РАСХОЖДЕНИЕ, а не тишина', () => {
+    // Так выглядит взятие чужого файла во владение (`--confirm`): байты те же,
+    // а бита нет. Промолчать здесь значило бы отчитаться «сошлось» о файле,
+    // который объявлен программой и программой не является.
+    const tree = createRepoTree(repo({ 'hooks/greet.sh': '#!/bin/sh\n' }));
+
+    tree.write('hooks/greet.sh', '#!/bin/sh\n');
+    tree.setExecutable('hooks/greet.sh', true);
+
+    expect(
+      tree.listChanges().map((change) => `${change.type} ${change.path}`),
+    ).toEqual(['UPDATE hooks/greet.sh']);
+
+    tree.flush();
+    expect(runnable(tree.root, 'hooks/greet.sh')).toBe(true);
+  });
+
+  it('режим для пути, который дерево не пишет, — отказ, а не тихий пропуск', () => {
+    const tree = createRepoTree(repo({ 'a.txt': 'x\n' }));
+
+    expect(() => tree.setExecutable('a.txt', true)).toThrow(/режим объявлен/);
   });
 });
 
