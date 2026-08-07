@@ -141,13 +141,26 @@ function runnable(box: Consumer, path: string): boolean {
   return (rights(box, path) & 0o111) !== 0;
 }
 
-/** Что сказал движок про режим — событие его трейса, а не наше. */
+/** Что сказал движок про режим на ПРИМЕНЕНИИ — событие его трейса, а не наше. */
 function modeEvent(result: DoorResult): Record<string, unknown> | undefined {
   const applied = result.runs.find(
     (item) => item.source.id === HOOKS_ID,
   )?.applied;
   return applied?.trace.find((span) => span.name === 'apply.executable')
     ?.detail;
+}
+
+/**
+ * То же про ПЛАН: чем движок сверял режим.
+ *
+ * Событие плана, а не применения, и это не придирка к адресу: факт с диска
+ * спрашивается ДО применения — по нему план и решает, есть ли работа.
+ */
+function planModeEvent(
+  result: DoorResult,
+): Record<string, unknown> | undefined {
+  const plan = result.runs.find((item) => item.source.id === HOOKS_ID)?.plan;
+  return plan?.trace.find((span) => span.name === 'plan.executable')?.detail;
 }
 
 describe('объявленный программой артефакт ЛОЖИТСЯ ПРОГРАММОЙ', () => {
@@ -233,36 +246,70 @@ describe('бит переживает повторные прогоны', () => 
   });
 
   /**
-   * ЗАМЕР, А НЕ ОБЕЩАНИЕ: бит, сбитый на ДИСКЕ, прогон не возвращает.
+   * СБИТЫЙ БИТ ВОЗВРАЩАЕТСЯ — здесь шов закрывается целиком.
    *
-   * Расхождение движок считает парой «объявлено × след в паспорте», и режим
-   * лежащего файла в эту пару не входит — прочитать его портом нечем
-   * (`packages/baser-materialize/src/lib/tree.ts`: шесть методов плюс
-   * `setExecutable`, читающего режим члена нет). Значит на сбитом бите план
-   * пуст, шага `chmod` не рождается, и консоли нечего исполнять: своего мнения
-   * о том, каким должен быть режим, у неё нет и быть не должно.
+   * Эта проба стояла СТОРОЖЕМ и утверждала обратное: до `tasker:BASER2-225`
+   * расхождение считалось парой «объявлено × след», режим лежащего файла в неё
+   * не входил, и прогон отвечал «сошлось» файлу, который перестал работать.
+   * Сторож сработал ровно на этой работе — и переписан под новую правду, а не
+   * снят: с читающим членом порта (`isExecutable`) движок сверяет ТРОЙКУ, и
+   * третья величина — факт с диска.
    *
-   * Это ВТОРАЯ половина `tasker:BASER2-221` («артефакт, у которого бит сбился,
-   * восстановлен не будет»), и она открыта: `tasker:BASER2-222` закрыл первую —
-   * расхождение объявления с паспортом. Живой прецедент у второй свой и тот же:
-   * правка через `\\wsl.localhost` сбивала бит отслеживаемым `.sh`
-   * (`tasker:BASER2-190`).
-   *
-   * Проба стоит здесь СТОРОЖЕМ, а не одобрением: закроется шов — она покраснеет
-   * и потребует переписать себя вместе с ограничением в `README.md`.
+   * Живой прецедент, ради которого всё затевалось: правка через
+   * `\\wsl.localhost` сбивала бит отслеживаемым `.sh` (`tasker:BASER2-190`), и
+   * ловил это `pre-commit`, а не baser.
    */
-  it('ОГРАНИЧЕНИЕ: сбитый на диске бит не возвращается — движку он не виден', async () => {
+  it('СБИТЫЙ РУКАМИ БИТ ВОЗВРАЩАЕТСЯ — и файл снова запускается', async () => {
     const { box } = withHooks();
     await run({ command: 'apply', ...box.door });
 
-    // Ровно то состояние, ради которого шов затевался, — и единственное, до
-    // которого он пока не достаёт.
-    chmodSync(join(box.root, HOOK), 0o644);
+    // Ни объявление, ни паспорт не менялись: разошёлся ТОЛЬКО факт на диске.
+    const file = join(box.root, HOOK);
+    chmodSync(file, 0o644);
+    expect(runnable(box, HOOK)).toBe(false);
+    const before = statSync(file).mtimeMs;
 
     const again = await run({ command: 'apply', ...box.door });
 
-    expect(again.status).toBe('converged');
-    expect(runnable(box, HOOK)).toBe(false);
+    expect(again.status).toBe('applied');
+    expect(again.writes).toEqual([{ path: HOOK, kind: 'CHMOD' }]);
+    expect(runnable(box, HOOK)).toBe(true);
+    // Содержимое сошлось — переписывать нечего, и не переписано.
+    expect(statSync(file).mtimeMs).toBe(before);
+    // Предмет починки — не девять бит, а то, что файл СНОВА РАБОТАЕТ.
+    expect(streamsSealed(file, [], { cwd: box.root }).stdout.trim()).toBe(
+      GREETING,
+    );
+
+    // Починенное сходится: приведение разовое, а не на каждый прогон.
+    expect((await run({ command: 'apply', ...box.door })).status).toBe(
+      'converged',
+    );
+  });
+
+  it('движок сверяет режим ФАКТОМ: трейс говорит "reads", а не "blind"', async () => {
+    const { box } = withHooks();
+    await run({ command: 'apply', ...box.door });
+
+    // Сошедшееся состояние: свой бит есть, расхождения нет — и сверено это
+    // ФАКТОМ, а не тем, что паспорт согласен с объявлением.
+    expect(planModeEvent(await run({ command: 'plan', ...box.door }))).toEqual({
+      owned: 1,
+      drifted: 0,
+      unknown: 0,
+      port: 'reads',
+    });
+
+    chmodSync(join(box.root, HOOK), 0o644);
+
+    // Тот же прогон на сбитом бите: расхождение НАЙДЕНО и посчитано. До этой
+    // работы здесь стояло бы `port: "blind"` и `drifted: 0` — сверка неполная.
+    expect(planModeEvent(await run({ command: 'plan', ...box.door }))).toEqual({
+      owned: 1,
+      drifted: 1,
+      unknown: 0,
+      port: 'reads',
+    });
   });
 
   it('объявлено данными, СЛЕДА НЕТ — чужой бит не тронут вовсе', async () => {
