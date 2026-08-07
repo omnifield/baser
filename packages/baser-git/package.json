@@ -1,0 +1,86 @@
+{
+  "name": "@omnifield/baser-git",
+  "version": "0.1.0-dev.1",
+  "description": "Обвес git-обвязки: гейт заголовка PR и машинные хуки репозитория",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/omnifield/baser.git",
+    "directory": "packages/baser-git"
+  },
+  "type": "module",
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "template"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "nx": {
+    "namedInputs": {
+      "default": [
+        "{projectRoot}/**/*",
+        "sharedGlobals",
+        "{workspaceRoot}/.github/workflows/pr-title.yml",
+        "{workspaceRoot}/.github/scripts/pr-title.mjs"
+      ]
+    }
+  },
+  "baser": {
+    "formVersion": 3,
+    "source": {
+      "id": "omnifield/git",
+      "title": "Git-обвязка: гейт заголовка PR",
+      "contentRoot": "template"
+    },
+    "settings": {
+      "titleTypes": {
+        "title": "Типы, признаваемые в заголовке PR",
+        "description": "Список закрытый намеренно: незнакомый тип считалка версий молча пропускает мимо выпуска, а не отвергает, — и правка уезжает в главную, не подняв номер. Дефолт — набор Conventional Commits, который признают ходовые считалки версий. Свой набор ЗАМЕНЯЕТ дефолт целиком: тип, которого нет в списке, гейт отвергнет с перечнем допустимых.",
+        "type": "list",
+        "default": [
+          "feat",
+          "fix",
+          "chore",
+          "docs",
+          "test",
+          "refactor",
+          "perf",
+          "build",
+          "ci",
+          "revert"
+        ]
+      },
+      "titleScopeRequired": {
+        "title": "Зона в заголовке обязательна",
+        "description": "true — заголовок без скобок отвергается: по зоне видно, чьё изменение, и это правило строже спецификации Conventional Commits, где зона необязательна. false — заголовок без зоны годен, форма остальным правилам подчиняется по-прежнему. Настройка булева, а не «зона обязательна, если перечень зон задан»: два разных решения (обязательна ли зона и закрыт ли их перечень) склеились бы в одно, и выключить первое стало бы нельзя, не выключив второе.",
+        "type": "boolean",
+        "default": true
+      },
+      "titleScopes": {
+        "title": "Закрытый перечень зон",
+        "description": "Заполнен — зона в заголовке обязана быть ИЗ этого списка, и подсказка гейта называет его целиком. Пусто (дефолт) — перечень открыт: годится любая зона по форме (строчные латинские, цифры и дефис), и подсказка никаких имён не выдумывает. Открытый перечень — рабочее состояние, а не пробел: локация, у которой зоны ещё не устоялись, получает форму без выдуманного списка.",
+        "type": "list",
+        "default": null
+      },
+      "nodeVersion": {
+        "title": "Версия Node, на которой бежит гейт",
+        "description": "Мажор, который ставит setup-node в джобе гейта. Гейт zero-deps — установки зависимостей в его джобе нет, поэтому от версии зависит только сам запуск правила, а не сборка локации. Дефолт — Active LTS на дату выпуска обвеса.",
+        "type": "string",
+        "default": "22"
+      }
+    },
+    "layout": [
+      {
+        "src": "pr-title.mjs.ejs",
+        "dest": ".github/scripts/pr-title.mjs"
+      },
+      {
+        "src": "pr-title.yml.ejs",
+        "dest": ".github/workflows/pr-title.yml"
+      }
+    ]
+  }
+}
