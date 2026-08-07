@@ -36,7 +36,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # ГОТОВНОСТЬ ПЕРЕД ПУБЛИКАЦИЕЙ — та же ОДНА команда, что у вахтёра на
-      # выходе (`.githooks/pre-commit`) и у приёмки (`ci.yml`): `pnpm verify` =
+      # выходе (машинный `pre-commit`) и у приёмки (`ci.yml`): `pnpm verify` =
       # `nx run-many -t test typecheck build --skip-nx-cache`.
       #
       # До `tasker:BASER2-192` этого шага здесь не было вовсе: стабильный выпуск

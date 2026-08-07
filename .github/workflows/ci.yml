@@ -63,7 +63,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # Готовность — ОДНА команда, ровно та же, что у вахтёра на выходе
-      # (`.githooks/pre-commit`) и у владельца зоны на его машине: `pnpm verify` =
+      # (машинный `pre-commit`) и у владельца зоны на его машине: `pnpm verify` =
       # `nx run-many -t test typecheck build --skip-nx-cache`.
       #
       # До `tasker:BASER2-191` приёмка гоняла свой набор шагов, и зелёное у себя не
