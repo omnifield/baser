@@ -79,12 +79,14 @@ describe('приёмка на живом обвесе девбокса', () => {
         dest: '.devcontainer/devcontainer.json',
         render: true,
         class: 'regenerated',
+        executable: false,
       },
       {
         src: 'devcontainer-lock.json',
         dest: '.devcontainer/devcontainer-lock.json',
         render: false,
         class: 'regenerated',
+        executable: false,
       },
     ]);
   });
