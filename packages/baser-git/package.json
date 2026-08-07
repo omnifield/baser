@@ -13,7 +13,8 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "template"
+    "template",
+    "warning.mjs"
   ],
   "publishConfig": {
     "access": "public"
@@ -29,12 +30,13 @@
     }
   },
   "baser": {
-    "formVersion": 6,
+    "formVersion": 7,
     "source": {
       "id": "omnifield/git",
       "title": "Git-обвязка: гейт заголовка PR и машинный pre-commit",
       "contentRoot": "template"
     },
+    "warningFrom": "./warning.mjs#hooksPath",
     "settings": {
       "verifyCommand": {
         "title": "Команда готовности, которую гоняет машинный pre-commit",
