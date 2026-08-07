@@ -6,7 +6,11 @@ import {
 } from './declaration.js';
 import { codesOf, declarationBlock } from './form.fixture.js';
 import { CONSUMER_CONFIG_PATH } from './paths.js';
-import { FORM_VERSION, MIN_FORM_VERSION } from './version.js';
+import {
+  EXECUTABLE_SINCE,
+  FORM_VERSION,
+  MIN_FORM_VERSION,
+} from './version.js';
 
 /** Разбор, который обязан пройти, — чтобы отказы ниже читались как отличие. */
 function parse(patch: Record<string, unknown> = {}) {
@@ -603,6 +607,102 @@ describe('объявление обвеса', () => {
       expect(problems[0].message).toContain('"class": "placed-once"');
     });
 
+    it('ИСПОЛНЯЕМОСТЬ: объявленное доезжает, умолчание — false', () => {
+      const result = parse({
+        layout: [
+          { src: 'a.json', dest: 'a.json' },
+          { src: 'pre-commit', dest: '.githooks/pre-commit', executable: true },
+          { src: 'b.txt', dest: 'b.txt', executable: false },
+        ],
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      // Умолчание проставлено при разборе — как у render и class, чтобы жить в
+      // одном месте, а не в каждом читателе формы.
+      expect(result.value.layout.map((entry) => entry.executable)).toEqual([
+        false,
+        true,
+        false,
+      ]);
+    });
+
+    it('ОБВЕС БЕЗ ПОЛЯ РАЗБИРАЕТСЯ РОВНО КАК РАНЬШЕ', () => {
+      // Неизменность, а не «тоже работает»: форма 6 прибавила поле и не тронула
+      // ничего из того, что уже объявлено выпущенными обвесами.
+      const result = parse({
+        layout: [
+          { src: 'a.json.ejs', dest: 'a.json' },
+          { src: 'b.bin', dest: 'b.bin', render: false, class: 'placed-once' },
+        ],
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.layout).toEqual([
+        {
+          src: 'a.json.ejs',
+          dest: 'a.json',
+          render: true,
+          class: 'regenerated',
+          executable: false,
+        },
+        {
+          src: 'b.bin',
+          dest: 'b.bin',
+          render: false,
+          class: 'placed-once',
+          executable: false,
+        },
+      ]);
+    });
+
+    it('ИСПОЛНЯЕМОСТЬ — ФЛАГ: "да" и 1 флагом не являются', () => {
+      // Тот же код, что у соседнего render: это булево, и отказ приходит ДО
+      // того, как что-либо применено, — разбор ничего не пишет и не исполняет.
+      expect(
+        codesOf(
+          refusals({
+            layout: [{ src: 'a.sh', dest: 'a.sh', executable: 'да' }],
+          }),
+        ),
+      ).toEqual(['wrong-type @ baser.layout[0].executable']);
+
+      const числом = refusals({
+        layout: [{ src: 'a.sh', dest: 'a.sh', executable: 1 }],
+      });
+      expect(codesOf(числом)).toEqual([
+        'wrong-type @ baser.layout[0].executable',
+      ]);
+      // И сказано, почему не число: режим восьмеричным здесь не выражается.
+      expect(числом[0].message).toContain('программа или данные');
+    });
+
+    it('ИСПОЛНЯЕМОСТЬ В ОБЪЯВЛЕНИИ ФОРМЫ 5: сказано, что поднять', () => {
+      const problems = refusals({
+        formVersion: EXECUTABLE_SINCE - 1,
+        layout: [{ src: 'a.sh', dest: 'a.sh', executable: true }],
+      });
+      expect(codesOf(problems)).toEqual([
+        'form-version-unsupported @ baser.layout[0].executable',
+      ]);
+      expect(problems[0].message).toContain(
+        `подними "formVersion" до ${EXECUTABLE_SINCE}`,
+      );
+    });
+
+    it('ПОД СТАРЫМ НОМЕРОМ ОТВЕРГАЕТСЯ И false: незнакомо само поле', () => {
+      // «Этот файл не программа» под формой 5 записано словом, которого та
+      // форма не знает, — и прежний baser назовёт его опечаткой так же, как
+      // true. Принять его значило бы согласиться с непригодным объявлением.
+      expect(
+        codesOf(
+          refusals({
+            formVersion: EXECUTABLE_SINCE - 1,
+            layout: [{ src: 'a.sh', dest: 'a.sh', executable: false }],
+          }),
+        ),
+      ).toEqual(['form-version-unsupported @ baser.layout[0].executable']);
+    });
+
     it('нормализует путь, потому что dest — ключ владения', () => {
       const result = parse({
         layout: [{ src: './tpl/a.json', dest: './a.json' }],
@@ -747,6 +847,23 @@ describe('объявление обвеса', () => {
       expect(codesOf(problems)).toEqual([
         'unknown-field @ baser.layout[0].mode',
       ]);
+      // И сказано, чем это выражается вместо снятого поля — оба смысла слова
+      // разом, потому что человек пишет `mode` и в том, и в другом.
+      expect(problems[0].message).toContain('"class"');
+      expect(problems[0].message).toContain('"executable": true');
+    });
+
+    it('РЕЖИМ ЧИСЛОМ ОТПРАВЛЯЕТСЯ К executable, а не в «форма не знает»', () => {
+      // Ходовая ошибка после формы 6: привычный восьмеричный режим. Общий текст
+      // отправил бы искать опечатку там, где её нет, — намерение выражено
+      // верно, просто другим словом (`tasker:BASER2-212`).
+      const problems = refusals({
+        layout: [{ src: 'a.sh', dest: 'a.sh', mode: '0755' }],
+      });
+      expect(codesOf(problems)).toEqual([
+        'unknown-field @ baser.layout[0].mode',
+      ]);
+      expect(problems[0].message).toContain('не сдержим на всех системах');
     });
 
     it('называет опечатку в имени поля блока', () => {

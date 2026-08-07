@@ -76,6 +76,7 @@ describe('минимум из README §0 — первый обвес чужог�
     expect(result.value.layout[0]).toMatchObject({
       render: true,
       class: 'regenerated',
+      executable: false,
     });
   });
 
@@ -189,6 +190,12 @@ describe('объявление обвеса: что НЕобязательно',
     expect(разбирается({ layout: [ЗАПИСЬ] }).layout[0].class).toBe(
       'regenerated',
     );
+  });
+
+  it('layout[].executable — умолчание false, проставлено при разборе', () => {
+    // Умолчание «артефакт это данные»: обвес, написанный до формы 6, ничего не
+    // объявляет и получает то же поведение, что и раньше.
+    expect(разбирается({ layout: [ЗАПИСЬ] }).layout[0].executable).toBe(false);
   });
 
   it('ОБЪЯВЛЕНИЕ ФОРМЫ 2 РАЗБИРАЕТСЯ КАК ЕСТЬ — подъём до 3 его не трогает', () => {

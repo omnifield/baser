@@ -72,6 +72,7 @@ import { resolveSettings, type ComputeDefault } from './settings.js';
 import { checkTemplate } from './template.js';
 import {
   CHANNEL_SINCE,
+  EXECUTABLE_SINCE,
   FORM_VERSION,
   MAP_TYPE_SINCE,
   PINNED_VERSION_SINCE,
@@ -262,6 +263,7 @@ describe('проба формы: два обвеса-фикстуры сразу
     if (!owners.ok) return;
 
     expect(Object.keys(owners.value)).toEqual([
+      'fixture/hook.sh',
       'fixture/kit.json',
       'fixture/kit.lock.json',
       'fixture/seed.yaml',
@@ -408,20 +410,49 @@ describe('проба формы: два обвеса-фикстуры сразу
     expect(resolved('kit', { settings: { tools: {} } })['tools']).toEqual({});
   });
 
-  it('ФОРМЫ 2, 3 И 5 ЖИВУТ РЯДОМ: подъём не требует правки от соседа', () => {
-    // Набор поднялся до 3 ради составного типа, заготовка осталась на 2, а
-    // перечень поставленного уехал на 5 ради метки канала — и всё это
+  it('ФОРМЫ 2, 5 И 6 ЖИВУТ РЯДОМ: подъём не требует правки от соседа', () => {
+    // Набор уехал на 6 ради исполняемого артефакта, заготовка осталась на 2, а
+    // перечень поставленного стоит на 5 ради метки канала — и всё это
     // разбирается одним и тем же baser'ом. Ровно это и обещает MIN_FORM_VERSION:
     // граница двигается за ПЕРЕЕЗДОМ полей, а не за номером.
-    expect(declaration('kit').formVersion).toBe(MAP_TYPE_SINCE);
+    expect(declaration('kit').formVersion).toBe(EXECUTABLE_SINCE);
     expect(declaration('seed').formVersion).toBe(2);
     expect(declaration('seed').settings['areas'].type).toBe('list');
 
-    // Объявление обвеса ни форма 4, ни форма 5 не тронули ни на одно поле:
-    // прибавление целиком на стороне потребителя, и ни один выпущенный обвес от
-    // этих подъёмов не правится.
-    expect(installed().formVersion).toBe(CHANNEL_SINCE);
+    // Номер объявления — СТАРШИЙ из тех, чем обвес пользуется, а не «номер на
+    // каждую возможность»: составной тип приехал формой 3, исполняемость —
+    // формой 6, и набор объявился по старшей из двух.
     expect(declaration('kit').settings['tools'].type).toBe('map');
+    expect(declaration('kit').formVersion).toBeGreaterThanOrEqual(
+      MAP_TYPE_SINCE,
+    );
+
+    // Объявление обвеса формы 4 и 5 не тронули ни на одно поле: то прибавление
+    // было целиком на стороне потребителя, и ни один выпущенный обвес от тех
+    // подъёмов не правился.
+    expect(installed().formVersion).toBe(CHANNEL_SINCE);
+  });
+
+  it('ИСПОЛНЯЕМЫЙ АРТЕФАКТ: намерение автора доезжает до разобранной формы', () => {
+    // Обвес объявляет ПРОГРАММУ, а не данные (`tasker:BASER2-212`): до формы 6
+    // сказать это было нечем, хук ложился с правами 644, и коммит в такой
+    // локации проходил без проверки молча.
+    const раскладка = declaration('kit').layout;
+    const хук = раскладка.find((entry) => entry.dest === 'fixture/hook.sh');
+
+    expect(хук?.executable).toBe(true);
+    // Умолчание проставлено при разборе — соседние записи поля не объявляли и
+    // получили явное `false`, а не `undefined`: читателю формы нечего гадать.
+    expect(раскладка.map((entry) => entry.executable)).toEqual([
+      false,
+      false,
+      true,
+    ]);
+
+    // Исполняемость и подстановка — РАЗНЫЕ оси: хук рендерится из шаблона и при
+    // этом программа. Класс — третья ось, и её она тоже не трогает.
+    expect(хук?.render).toBe(true);
+    expect(хук?.class).toBe('regenerated');
   });
 
   it('НОМЕР И МЕТКА — РАЗНЫЕ ПОЛЯ: один обвес закреплён, второй назван каналом', () => {
@@ -471,10 +502,14 @@ describe('проба формы: два обвеса-фикстуры сразу
     // Прощённых строк нет — но их не должно быть и в виде артефакта, который
     // сверку молча обошёл. Перечень сверенного назван целиком.
     expect(compared.sort()).toEqual([
+      'fixture/hook.sh',
       'fixture/kit.json',
       'fixture/kit.lock.json',
       'fixture/seed.yaml',
     ]);
+    // Сверяется СОДЕРЖИМОЕ, и у хука тоже: бит исполняемости здесь не судится —
+    // его кладёт порт, который пишет (`materialize`), а этот вход не трогает
+    // файловой системы вовсе. Эталон — то, что форма умеет ВЫРАЗИТЬ.
   });
 
   it('ЗАПОЛНЕННОЕ БЬЁТ ДЕФОЛТ: разделы заготовки приехали от человека', () => {
@@ -563,7 +598,7 @@ describe('проба отказов: каждый случай называет�
   });
 
   it('АРТЕФАКТ ПОВЕРХ КОНФИГА ПОТРЕБИТЕЛЯ: соседние записи разбираются как обычно', () => {
-    // Живое объявление фикстуры, которому дописали третью запись раскладки:
+    // Живое объявление фикстуры, которому дописали ещё одну запись раскладки:
     // она целится в перечень поставленного (`tasker:BASER2-25`).
     const block = manifest('kit')['baser'] as Record<string, unknown>;
     const жадный = readSourceDeclaration({
@@ -578,10 +613,10 @@ describe('проба отказов: каждый случай называет�
 
     expect(жадный.ok).toBe(false);
     if (жадный.ok) return;
-    // Ровно один отказ и ровно по третьей записи: две первые прошли разбор
-    // молча, то есть непригодна запись, а не объявление вокруг неё.
+    // Ровно один отказ и ровно по дописанной записи: живые прошли разбор молча,
+    // то есть непригодна запись, а не объявление вокруг неё.
     expect(codesOf(жадный.problems)).toEqual([
-      'artifact-over-consumer-config @ package.json.baser.layout[2].dest',
+      'artifact-over-consumer-config @ package.json.baser.layout[3].dest',
     ]);
     expect(жадный.problems[0].message).toContain(CONSUMER_CONFIG_PATH);
   });
@@ -629,8 +664,58 @@ describe('проба отказов: каждый случай называет�
       // объявлении нет. Отказ каскадный и это честно: копилка называет всё, что
       // видит, а не первый пункт, и объявление уже отказ целиком.
       'unknown-setting @ package.json.baser.presets.shared.values.tools',
+      // И раскладка названа тем же прогоном: исполняемость форме 2 незнакома
+      // ровно так же, как составной тип.
+      'form-version-unsupported @ package.json.baser.layout[2].executable',
     ]);
     expect(прежний.problems[0].message).toContain('подними "formVersion" до 3');
+  });
+
+  it('ИСПОЛНЯЕМОСТЬ В ОБЪЯВЛЕНИИ ФОРМЫ 5: сказано, что поднять', () => {
+    // Составной тип тот baser уже знает, а исполняемость — ещё нет. Сказать про
+    // неё он обязан «обнови baser», а не «форма такого поля не знает»: поверив
+    // второму, автор уберёт поле и поставит потребителю хук, который лёг и не
+    // работает (`tasker:BASER2-212`).
+    const block = manifest('kit')['baser'] as Record<string, unknown>;
+    const назвался5 = readSourceDeclaration({
+      ...manifest('kit'),
+      baser: { ...block, formVersion: EXECUTABLE_SINCE - 1 },
+    });
+
+    expect(назвался5.ok).toBe(false);
+    if (назвался5.ok) return;
+    expect(codesOf(назвался5.problems)).toEqual([
+      'form-version-unsupported @ package.json.baser.layout[2].executable',
+    ]);
+    expect(назвался5.problems[0].message).toContain(
+      `подними "formVersion" до ${EXECUTABLE_SINCE}`,
+    );
+    expect(назвался5.problems[0].message).toContain('обнови baser');
+  });
+
+  it('РЕЖИМ ЧИСЛОМ: форма его не знает и отправляет к executable', () => {
+    // Ходовая ошибка после формы 6 — написать привычный восьмеричный режим.
+    // Обычное «форма такого поля не знает» отправило бы человека искать
+    // опечатку там, где её нет: он выразил ровно то намерение, которое форма
+    // умеет принять, — просто другим словом.
+    const block = manifest('kit')['baser'] as Record<string, unknown>;
+    const режимом = readSourceDeclaration({
+      ...manifest('kit'),
+      baser: {
+        ...block,
+        layout: [{ src: 'hook.sh', dest: 'fixture/hook.sh', mode: '0755' }],
+      },
+    });
+
+    expect(режимом.ok).toBe(false);
+    if (режимом.ok) return;
+    expect(codesOf(режимом.problems)).toEqual([
+      'unknown-field @ package.json.baser.layout[0].mode',
+    ]);
+    expect(режимом.problems[0].message).toContain('"executable": true');
+    // И про второй смысл слова сказано там же: режимов материализации в записи
+    // нет — `merge` отменён, `seed` выражается классом.
+    expect(режимом.problems[0].message).toContain('"class"');
   });
 
   it('обвес без дефолта у настройки', () => {
@@ -778,7 +863,16 @@ describe('проба отказов: каждый случай называет�
   });
 
   it('версию конфига проставила дверь, пользователь её не вводил', () => {
-    expect(installed().formVersion).toBe(FORM_VERSION);
+    const номер = installed().formVersion;
+
+    // Номер из окна разбираемого — иначе перечень не разобрался бы вовсе.
+    expect(номер).toBeLessThanOrEqual(FORM_VERSION);
+    // И он ровно тот, которым файл записан: перечень остался на 5, хотя текущая
+    // форма уже 6. Форма 6 конфига не тронула НИ НА ОДНО поле (прибавление
+    // целиком на стороне обвеса), а поднимать номер в чужом файле дверь не
+    // вправе — файл ведут она и человек, и молчаливая правка означала бы
+    // изменение того, что человек читает как своё.
+    expect(номер).toBe(CHANNEL_SINCE);
   });
 });
 
