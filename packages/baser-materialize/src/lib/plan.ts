@@ -65,6 +65,11 @@
  * интерпретирует и по semver не сравнивает — он её хранит и следит, чтобы запись
  * утверждала СЕГОДНЯШНЮЮ (§2): подъём версии при том же содержимом даёт шаг
  * `record`, а не молчание.
+ *
+ * ПЛАН НЕСЁТ ТО, ЧТО ОБВЕС СКАЗАЛ ЧЕЛОВЕКУ (`tasker:BASER2-226`, `warning.ts`).
+ * Считает предупреждение дверь, печатает тоже она, но едет оно планом: план и
+ * есть машинный ответ прогона. На инварианты §1–§5 это не влияет ничем —
+ * предупреждение не шаг, не отказ и не извещение, и `status` его не видит.
  */
 
 import type { Tree } from './tree.js';
@@ -88,6 +93,8 @@ import type { Manifest, ManifestRecord } from './manifest.js';
 import { MANIFEST_PATH, hashContent, readManifest } from './manifest.js';
 import type { TraceRecorder, TraceSpan } from './trace.js';
 import { createTrace } from './trace.js';
+import type { SourceWarning } from '@omnifield/baser-contracts';
+import { carriedWarning } from './warning.js';
 import {
   byBytes,
   normalizeRepoPath,
@@ -448,6 +455,26 @@ export interface MaterializationPlan {
   readonly conflicts: readonly PlanConflict[];
   /** Названные состояния, не требующие ни шага, ни отказа. */
   readonly notices: readonly PlanNotice[];
+  /**
+   * ЧТО ОБВЕС СКАЗАЛ ПРО СВОЁ ПРИМЕНЕНИЕ ЗДЕСЬ (`tasker:BASER2-226`).
+   *
+   * Считает его дверь, движок несёт (`warning.ts`), печатает снова дверь — но
+   * едет оно ПЛАНОМ, потому что план и есть машинный ответ прогона: его читают
+   * пульт и гейт, он же уезжает в `--json` целиком. Способность обязана быть
+   * видима и человеку, и агенту (`kb:BASER3-33`), а видима агенту она только
+   * отсюда.
+   *
+   * **Ни на что в плане не влияет.** Ни на `status`, ни на применимость, ни на
+   * шаги: `failed` здесь — беда самого предупреждения, а не прогона. Это не
+   * извещение (`notices`) и не третья громкость рядом с ними: извещение говорит
+   * про АРТЕФАКТ и состояние дерева, а предупреждение — про источник в этой
+   * обстановке, и адреса у него нет по построению.
+   *
+   * Поле есть ВСЕГДА: «сказать нечего» приезжает `{ kind: 'none' }`. Названное
+   * отсутствие вместо пропущенного ключа — чтобы у потребителя не заводилось
+   * второе умолчание, способное разойтись с нашим.
+   */
+  readonly warning: SourceWarning;
   /** Куда движок положит служебную запись. */
   readonly manifestPath: string;
   /** Манифест, каким он станет после применения плана. */
@@ -592,6 +619,24 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
     guard:
       position.kind === 'in-tree' ? 'dest-in-content-root' : 'empty-intersection',
   });
+
+  // ЧТО ОБВЕС СКАЗАЛ ПРО СВОЁ ПРИМЕНЕНИЕ ЗДЕСЬ — берётся ОДИН РАЗ и до всякой
+  // работы (`warning.ts`). До работы потому, что от работы оно не зависит:
+  // предупреждение про обстановку верно и на пустом плане, и на заблокированном,
+  // и молчание сошедшегося прогона его не глушит.
+  const warning = carriedWarning(declaration.source);
+
+  // Сказанное обвесом названо и в телеметрии: «человек ничего не увидел»
+  // отвечается отсюда — сказать было нечего или сказать не вышло. Событие есть
+  // только тогда, когда есть что нести: пустое состояние — это не замер, а
+  // пустой счётчик (та же граница, что у `plan.executable`).
+  if (warning.kind !== 'none') {
+    trace.event('plan.warning', {
+      source: sourceId,
+      kind: warning.kind,
+      ...(warning.kind === 'failed' ? { code: warning.problem.code } : {}),
+    });
+  }
 
   const confirm = new Set(
     (options.confirm ?? []).map((dest, index) =>
@@ -892,6 +937,10 @@ export function computePlan(options: PlanOptions): MaterializationPlan {
     steps,
     conflicts,
     notices,
+    // Предупреждение стоит РЯДОМ с шагами и отказами, а не внутри них: на
+    // сходимость и применимость оно не влияет вовсе, но уезжает тем же ответом —
+    // иначе пульт и агент его не увидят (`kb:BASER3-33`).
+    warning,
     manifestPath,
     manifest: nextManifest(manifest, steps),
     trace: trace.snapshot(),
@@ -1761,6 +1810,25 @@ export function describePlan(plan: MaterializationPlan): string {
     for (const notice of plan.notices) {
       lines.push(`  ${notice.kind}: ${notice.message}`);
     }
+  }
+
+  // СКАЗАННОЕ ОБВЕСОМ ПЕЧАТАЕТСЯ И ЗДЕСЬ, хотя место человеку — у двери.
+  //
+  // Не дубль её работы, а честность этого выхода: `describePlan` рендерит план
+  // целиком, и текст, умолчавший про предупреждение, врал бы про ответ, который
+  // его несёт. Стоит последним и не влияет на строки выше: ни шагом, ни отказом
+  // предупреждение не является.
+  if (plan.warning.kind === 'said') {
+    lines.push(`обвес говорит: ${plan.warning.text}`);
+  }
+  if (plan.warning.kind === 'failed') {
+    // Беда предупреждения названа ВСЛУХ и здесь: проглоченная, она выглядела бы
+    // как исправно молчащий обвес — то самое молчание, против которого поле и
+    // заведено.
+    lines.push(
+      `предупреждение обвеса не сказалось (${plan.warning.problem.code}): ` +
+        `${plan.warning.problem.message}`,
+    );
   }
 
   return lines.join('\n');
