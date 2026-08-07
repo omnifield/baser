@@ -98,6 +98,9 @@ importers:
 
   packages/baser-materialize:
     dependencies:
+      '@omnifield/baser-contracts':
+        specifier: workspace:*
+        version: link:../baser-contracts
       tslib:
         specifier: ^2.3.0
         version: 2.8.1
