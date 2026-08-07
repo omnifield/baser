@@ -15,6 +15,12 @@
  * Инвариант, который держат сразу три пробы: **предупреждение не имеет права
  * стать отказом.** Ни при какой беде — упал резолвер, дверь подала мусор, обвес
  * сказал ничем. Прогон едет, план применим, а случившееся названо данными.
+ *
+ * ДОНЕСТИ — НЕ ЗНАЧИТ НАПЕЧАТАТЬ (`tasker:BASER2-236`). Движок несёт слово
+ * обвеса ДАННЫМИ: `plan.warning`, машинный ответ, трейс. Текстом плана оно не
+ * печатается ни при каком значении поля — печатает его дверь, в жанре
+ * «остаётся человеку»; блок «текст плана про предупреждение молчит» держит это
+ * равенством текстов, а не отсутствием подстроки.
  */
 
 import { afterAll, describe, expect, it } from 'vitest';
@@ -110,9 +116,10 @@ describe('предупреждение обвеса доезжает до отв
     expect(wire.warning).toEqual(said);
   });
 
-  it('печатается человеку и на сошедшемся дереве', () => {
+  it('доезжает и на сошедшемся дереве', () => {
     // Предупреждение про обстановку верно и тогда, когда делать нечего: молчание
-    // сошедшегося прогона его не глушит.
+    // сошедшегося прогона его не глушит. Едет оно полем, а не строкой отчёта —
+    // текст плана про предупреждение молчит целиком (`tasker:BASER2-236`).
     const { tree, declaration } = createWorkspace({
       layout: [CI],
       sources: SOURCES,
@@ -123,8 +130,9 @@ describe('предупреждение обвеса доезжает до отв
     const second = computePlan({ tree, declaration: declared });
 
     expect(second.status).toBe('converged');
+    expect(second.warning).toEqual(said);
     expect(describePlan(second)).toContain('план пуст');
-    expect(describePlan(second)).toContain(SAID);
+    expect(describePlan(second)).not.toContain(SAID);
   });
 
   it('сказанное названо в телеметрии', () => {
@@ -140,6 +148,94 @@ describe('предупреждение обвеса доезжает до отв
 
     expect(
       plan.trace.find((span) => span.name === 'plan.warning')?.detail,
+    ).toEqual({ source: SOURCE_ID, kind: 'said' });
+  });
+});
+
+/**
+ * ТЕКСТ ПЛАНА ПРО ПРЕДУПРЕЖДЕНИЕ МОЛЧИТ — приёмка `tasker:BASER2-236`.
+ *
+ * Слово обвеса печатает ДВЕРЬ — в жанре «остаётся человеку», где названо, чего
+ * консоль не сделает сама. Пока этого места не было, строку печатал ещё и
+ * движок, последним пунктом под шагами плана; место появилось, и в живом
+ * прогоне человек стал читать одно и то же ДВАЖДЫ — второй раз среди перечня
+ * работ, где ждёт шагов, а не предостережений.
+ *
+ * Мера здесь — РАВЕНСТВО ТЕКСТОВ, а не отсутствие подстроки. План с
+ * предупреждением обязан рендериться байт в байт как тот же план без него:
+ * проба на подстроку зеленела бы на строке, вернувшейся другими словами, — а
+ * дубль это дубль независимо от того, как он назван.
+ */
+describe('текст плана про предупреждение молчит — говорит дверь', () => {
+  /** Один прогон двумя обвесами: молчащим и говорящим. Разница — только поле. */
+  function bothWays(warning: unknown): {
+    readonly silent: ReturnType<typeof computePlan>;
+    readonly speaking: ReturnType<typeof computePlan>;
+  } {
+    const bare = workspace();
+    const talking = workspace();
+    return {
+      silent: computePlan({
+        tree: bare.tree,
+        declaration: { source: bare.source, layout: bare.layout },
+      }),
+      speaking: computePlan({
+        tree: talking.tree,
+        declaration: withWarning(
+          { source: talking.source, layout: talking.layout },
+          warning as SourceWarning,
+        ),
+      }),
+    };
+  }
+
+  const voices: readonly [string, unknown][] = [
+    ['обвес сказал', said],
+    ['резолвер обвеса упал', failed],
+    ['подано не в той форме', 'сказал строкой'],
+  ];
+
+  it.each(voices)('%s — текст плана БАЙТ В БАЙТ прежний', (_case, warning) => {
+    const { silent, speaking } = bothWays(warning);
+
+    expect(describePlan(speaking)).toBe(describePlan(silent));
+  });
+
+  it('и на сошедшемся дереве — там же, где дубль читался особенно голо', () => {
+    // Сошедшийся прогон печатает одну строку про пустой план: вернувшееся
+    // предупреждение было бы в этом тексте больше самого плана.
+    const bare = workspace();
+    const talking = workspace();
+    const declared = withWarning(
+      { source: talking.source, layout: talking.layout },
+      said,
+    );
+    const plain = { source: bare.source, layout: bare.layout };
+    applyPlan(bare.tree, computePlan({ tree: bare.tree, declaration: plain }));
+    applyPlan(
+      talking.tree,
+      computePlan({ tree: talking.tree, declaration: declared }),
+    );
+
+    const silent = computePlan({ tree: bare.tree, declaration: plain });
+    const speaking = computePlan({ tree: talking.tree, declaration: declared });
+
+    expect(speaking.status).toBe('converged');
+    expect(describePlan(speaking)).toBe(describePlan(silent));
+  });
+
+  it('молчит ТЕКСТ, а не ответ: поле и трейс несут сказанное по-прежнему', () => {
+    // Иначе это было бы не снятие дубля, а потеря слова: человек у двери его
+    // слышит из `plan.warning`, агент читает то же поле из `--json`.
+    const { speaking } = bothWays(said);
+
+    expect(speaking.warning).toEqual(said);
+    expect(
+      (JSON.parse(JSON.stringify(speaking)) as { warning: SourceWarning })
+        .warning,
+    ).toEqual(said);
+    expect(
+      speaking.trace.find((span) => span.name === 'plan.warning')?.detail,
     ).toEqual({ source: SOURCE_ID, kind: 'said' });
   });
 });
@@ -173,9 +269,13 @@ describe('обвес, которому нечего сказать', () => {
     expect(plan.warning).toEqual({ kind: 'none' });
   });
 
-  it('молчащий обвес не платит ни строкой отчёта, ни событием трейса', () => {
+  it('молчащий обвес не платит событием трейса', () => {
     // «Сказать нечего» — самый частый случай, и он обязан быть бесплатным:
     // пустое состояние это не замер, а пустой счётчик.
+    //
+    // Про строку отчёта здесь больше не судится ничего, и это не послабление:
+    // текстом плана предупреждение не печатается НИ ПРИ КАКОМ значении поля —
+    // равенство текстов держит соседний блок (`tasker:BASER2-236`).
     const { tree, declaration } = createWorkspace({
       layout: [CI],
       sources: SOURCES,
@@ -184,8 +284,6 @@ describe('обвес, которому нечего сказать', () => {
     const plan = computePlan({ tree, declaration });
 
     expect(plan.trace.map((span) => span.name)).not.toContain('plan.warning');
-    expect(describePlan(plan)).not.toContain('обвес говорит');
-    expect(describePlan(plan)).not.toContain('предупреждение обвеса');
   });
 
   it('ПЛАН НЕ МЕНЯЕТСЯ НИЧЕМ, кроме самого предупреждения', () => {
@@ -263,7 +361,7 @@ describe('упавший резолвер: план ЖИВ', () => {
     expect(tree.read(CI.dest, 'utf-8')).toBe(SOURCES['ci/build.yml']);
   });
 
-  it('беда названа данными с кодом — и в тексте, и в телеметрии', () => {
+  it('беда названа данными с кодом — и в плане, и в телеметрии', () => {
     const { tree, declaration } = createWorkspace({
       layout: [CI],
       sources: SOURCES,
@@ -277,7 +375,11 @@ describe('упавший резолвер: план ЖИВ', () => {
     expect(plan.warning.kind === 'failed' && plan.warning.problem.code).toBe(
       'resolver-failed',
     );
-    expect(describePlan(plan)).toContain('resolver-failed');
+    // Код едет ДАННЫМИ — тем же полем, что и сказанное. Печатает его дверь: у
+    // беды предупреждения место то же, что у самого предупреждения.
+    expect(
+      (JSON.parse(JSON.stringify(plan)) as { warning: SourceWarning }).warning,
+    ).toEqual(failed);
     expect(
       plan.trace.find((span) => span.name === 'plan.warning')?.detail,
     ).toEqual({
@@ -326,7 +428,8 @@ describe('предупреждение подано не в той форме', 
 
   it('негодное предупреждение не проглатывается молча', () => {
     // Проглотить было бы хуже отказа: дверь считала бы, что её предупреждение
-    // работает, а оно бы исчезало.
+    // работает, а оно бы исчезало. Виден отказ там же, где само предупреждение,
+    // — в машинном ответе, из которого его печатает дверь.
     const { tree, declaration } = createWorkspace({
       layout: [CI],
       sources: SOURCES,
@@ -339,8 +442,15 @@ describe('предупреждение подано не в той форме', 
         source: { ...declaration.source, warning: 'сказал строкой' as never },
       },
     });
+    const wire = JSON.parse(JSON.stringify(plan)) as { warning: SourceWarning };
 
-    expect(describePlan(plan)).toContain('wrong-type');
+    expect(wire.warning.kind).toBe('failed');
+    expect(wire.warning.kind === 'failed' && wire.warning.problem.code).toBe(
+      'wrong-type',
+    );
+    expect(
+      plan.trace.find((span) => span.name === 'plan.warning')?.detail,
+    ).toMatchObject({ code: 'wrong-type' });
   });
 });
 
@@ -494,7 +604,8 @@ describe('шов целиком: объявление обвеса → план'
     const plan = computePlan({ tree, declaration: engineInput(warning) });
 
     expect(plan.warning).toEqual({ kind: 'said', text: SAID });
-    expect(describePlan(plan)).toContain(SAID);
+    // Цела приезжает ФРАЗА, а не строка отчёта: печатает её дверь.
+    expect(describePlan(plan)).not.toContain(SAID);
     expect(
       (JSON.parse(JSON.stringify(plan)) as { warning: SourceWarning }).warning,
     ).toEqual({ kind: 'said', text: SAID });
@@ -706,7 +817,9 @@ export function hooksElsewhere(context) {
     expect(
       readFileSync(join(box.root, 'hooks/pre-commit'), 'utf-8'),
     ).toBe('#!/bin/sh\necho hi\n');
-    expect(describePlan(plan)).toContain('hooks-elsewhere');
+    // Прочитанная обстановка доехала полем — и только им: текст плана про
+    // предупреждение молчит и на настоящем каталоге тоже.
+    expect(describePlan(plan)).not.toContain('hooks-elsewhere');
   });
 
   it('обстановка в порядке — обвес молчит, и молчание доезжает тоже', async () => {
