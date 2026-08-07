@@ -305,7 +305,7 @@ function assertAgreesWithContracts(
     const tail = movement.chain[movement.chain.length - 1];
     if (!sameValue(tail.value, values[movement.key])) {
       throw new Error(
-        `дверь рассказывает про настройку "${movement.key}" не то, что разрешили ` +
+        `консоль рассказывает про настройку "${movement.key}" не то, что разрешили ` +
           `контракты: цепочка кончается ${JSON.stringify(tail.value)}, ` +
           `а значение ${JSON.stringify(values[movement.key])}`,
       );
