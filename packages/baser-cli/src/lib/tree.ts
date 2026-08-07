@@ -19,6 +19,33 @@
  * зависимостью ТИПА, а в рантайме двери его нет. Тащить двадцать мегабайт ради
  * шести методов — не размен, а недосмотр.
  *
+ * ## Седьмой член: режим артефакта (`tasker:BASER2-215`)
+ *
+ * Раскладка объявляет исполняемость (`layout[].executable`, форма 6), движок
+ * доносит объявленное отдельным НЕОБЯЗАТЕЛЬНЫМ членом порта — `setExecutable`,
+ * а не третьим параметром `write` (`packages/baser-materialize/src/lib/tree.ts`).
+ * Форма выбрана так не по вкусу: наш мешок опций столкнулся бы с чужим
+ * `{ mode?: Mode }` девкита, а это дерево — `RepoTree extends Tree` из девкита,
+ * то есть покрасило бы ровно нашу сборку.
+ *
+ * Здесь этот член РЕАЛИЗОВАН, и от этого меняется не только диск: движок видит
+ * наличие члена и говорит в трейсе `apply.executable`, донеслось ли объявленное
+ * до раннера (`port: "accepts"` против `"blind"`). Консоль перестала быть
+ * слепым раннером — объявленное доезжает до бита.
+ *
+ * **Кладётся БИТ, а не режим целиком.** Объявление отвечает на один вопрос —
+ * «программа или данные», — и отвечать за него на второй («кому читать») нельзя:
+ * файл с правами `600`, объявленный программой, обязан стать `700`, а не
+ * общедоступным `755`. Исполняемость поэтому ложится поверх сложившегося
+ * режима, и ложится по праву чтения (`programMode`).
+ *
+ * **Режим — часть расхождения с диском, а не довесок к записи.** Файл, чьё
+ * содержимое совпало, а режим объявленному противоречит, — это расхождение, и
+ * прогон обязан назвать его работой: иначе «сошлось» значило бы «содержимое
+ * сошлось», и шов, ради которого всё это затевалось (`tasker:BASER2-208`),
+ * закрылся бы наполовину. Бита, который не держит файловая система, здесь не
+ * боимся: исполнение у нас контейнерное (`kb:FUND-4`), и диск под ним свой.
+ *
  * ## Что здесь важно не переизобрести
  *
  * Дерево виртуально: изменения копятся в памяти и уезжают на диск ОДНИМ
@@ -46,21 +73,52 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { Mode } from 'node:fs';
-import type { Tree } from '@nx/devkit';
+import type { FileChange, Tree } from '@nx/devkit';
 
 /** Вид изменения — тот же словарь, на котором говорит движок. */
 export type ChangeKind = 'CREATE' | 'UPDATE' | 'DELETE';
+
+/**
+ * Изменение дерева — то же, что у девкита, плюс объявленный режим.
+ *
+ * Собственный тип, а не чужой `FileChange`, потому что режим уносит на диск
+ * этот же список: сброс о нём может узнать только отсюда. Расширение, а не своя
+ * форма, — чтобы дерево осталось подходящим порту девкита без приведений.
+ */
+export interface RepoChange extends FileChange {
+  /** Объявленная обвесом исполняемость; поля нет — режим не объявляли. */
+  readonly executable?: boolean;
+}
 
 /** Дерево потребителя плюс то, что нужно раннеру: список и сброс. */
 export interface RepoTree extends Tree {
   /** Сбрасывает накопленное на реальную ФС. Снятия — раньше записей. */
   flush(): void;
+  /** Расхождения с диском — включая объявленный режим (`RepoChange`). */
+  listChanges(): RepoChange[];
+  /**
+   * Объявленный раскладкой режим артефакта: программа (`true`) или данные
+   * (`false`). Зовёт движок — сразу за записью того же пути и только там, где
+   * раскладка режим НАЗВАЛА.
+   */
+  setExecutable(filePath: string, executable: boolean): void;
 }
 
-/** Запись, ожидающая сброса: содержимое либо `null` для снятия. */
+/** Биты исполняемости — владельцу, группе и остальным. */
+const EXECUTABLE_BITS = 0o111;
+
+/**
+ * Запись, ожидающая сброса: содержимое либо `null` для снятия.
+ *
+ * `mode` и `executable` — разные вещи, а не одно в двух видах. Первый приезжает
+ * от того, кто задаёт режим ЧИСЛОМ (`write(..., { mode })` — форма девкита,
+ * движок ею не пользуется), второй — объявление обвеса «программа или данные»,
+ * то есть один бит поверх уже сложившегося режима.
+ */
 interface Pending {
   readonly content: Buffer | null;
   readonly mode?: Mode;
+  readonly executable?: boolean;
 }
 
 /**
@@ -92,6 +150,15 @@ export function createRepoTree(root: string): RepoTree {
     }
   };
 
+  /** Исполняем ли лежащий файл; `null` — файла на диске нет. */
+  const executableOnDisk = (path: string): boolean | null => {
+    try {
+      return (statSync(full(path)).mode & EXECUTABLE_BITS) !== 0;
+    } catch {
+      return null;
+    }
+  };
+
   const tree = {
     root: absolute,
 
@@ -114,6 +181,32 @@ export function createRepoTree(root: string): RepoTree {
         content: Buffer.isBuffer(content) ? content : Buffer.from(content),
         ...(options?.mode === undefined ? {} : { mode: options.mode }),
       });
+    },
+
+    /**
+     * ОБЪЯВЛЕННЫЙ РЕЖИМ — поверх записи того же пути, а не вместо неё.
+     *
+     * Не названный обвесом режим сюда не доезжает вовсе: движок метода не
+     * зовёт, и файл остаётся с тем режимом, который у него был. Это не то же
+     * самое, что `false` — там обвес СКАЗАЛ «не программа», и утверждение
+     * доносится до диска наравне с `true`.
+     *
+     * Путь без записи — отказ, а не тихий пропуск. Движок зовёт этот член
+     * только следом за `write` того же шага; молча проглотить объявление о
+     * файле, которого дерево не пишет, значило бы отдать потребителю неверный
+     * режим и не сказать об этом ни слова — ровно то, из-за чего вся эта
+     * работа и появилась (`tasker:BASER2-208`).
+     */
+    setExecutable(path: string, executable: boolean): void {
+      const key = repoPath(path);
+      const held = pending.get(key);
+      if (held === undefined || held.content === null) {
+        throw new Error(
+          `режим объявлен для "${key}", которого дерево консоли в этом прогоне ` +
+            'не пишет: режим кладётся вместе с содержимым, а не отдельно от него',
+        );
+      }
+      pending.set(key, { ...held, executable });
     },
 
     delete(path: string): void {
@@ -192,15 +285,19 @@ export function createRepoTree(root: string): RepoTree {
      * прежнее содержимое (журнал отката движка делает ровно это), изменением не
      * является и в список не попадает.
      */
-    listChanges(): {
-      path: string;
-      type: ChangeKind;
-      content: Buffer | null;
-      options?: { mode?: Mode };
-    }[] {
+    listChanges(): RepoChange[] {
       const changes = [];
       for (const [path, held] of pending) {
         const before = bytesOnDisk(path);
+
+        // Режим едет вместе со своей записью: сбрасывает его тот же `flush`,
+        // который кладёт содержимое, и знать о нём он может только отсюда.
+        const declared = {
+          ...(held.mode === undefined ? {} : { options: { mode: held.mode } }),
+          ...(held.executable === undefined
+            ? {}
+            : { executable: held.executable }),
+        };
 
         if (held.content === null) {
           // Снятие того, чего на диске не было, — не изменение, а отмена
@@ -216,9 +313,7 @@ export function createRepoTree(root: string): RepoTree {
             path,
             type: 'CREATE' as const,
             content: held.content,
-            ...(held.mode === undefined
-              ? {}
-              : { options: { mode: held.mode } }),
+            ...declared,
           });
           continue;
         }
@@ -228,9 +323,23 @@ export function createRepoTree(root: string): RepoTree {
             path,
             type: 'UPDATE' as const,
             content: held.content,
-            ...(held.mode === undefined
-              ? {}
-              : { options: { mode: held.mode } }),
+            ...declared,
+          });
+          continue;
+        }
+
+        // СОДЕРЖИМОЕ СОШЛОСЬ, А РЕЖИМ — НЕТ: это тоже расхождение с диском.
+        // Промолчать здесь значило бы отчитаться «сошлось» о файле, который
+        // объявлен программой и программой не является.
+        if (
+          held.executable !== undefined &&
+          executableOnDisk(path) !== held.executable
+        ) {
+          changes.push({
+            path,
+            type: 'UPDATE' as const,
+            content: held.content,
+            ...declared,
           });
         }
       }
@@ -256,6 +365,13 @@ export function createRepoTree(root: string): RepoTree {
         if (change.options?.mode !== undefined) {
           chmodSync(full(change.path), change.options.mode);
         }
+        // Объявленный режим — ПОСЛЕДНИМ и поверх сложившегося.
+        if (change.executable !== undefined) {
+          chmodSync(
+            full(change.path),
+            programMode(full(change.path), change.executable),
+          );
+        }
       }
     },
 
@@ -265,6 +381,9 @@ export function createRepoTree(root: string): RepoTree {
      * Отказ, а не тихая заглушка: молчаливый no-op на смене прав отдал бы
      * потребителю файл с неверным режимом и не сказал бы об этом ни слова. Если
      * движок когда-нибудь их позовёт, это будет видно сразу.
+     *
+     * Исполняемость сюда не относится: её объявляет раскладка, и доезжает она
+     * своим членом порта (`setExecutable`), а не сменой прав по чужому вызову.
      */
     rename(): never {
       throw new Error(
@@ -276,12 +395,33 @@ export function createRepoTree(root: string): RepoTree {
     changePermissions(): never {
       throw new Error(
         'дерево консоли не умеет changePermissions: движок его не зовёт. ' +
-          'Права задаются при записи (`write(..., { mode })`)',
+          'Права задаются при записи (`write(..., { mode })`), а объявленная ' +
+          'исполняемость — своим членом порта (`setExecutable`)',
       );
     },
   };
 
   return tree as unknown as RepoTree;
+}
+
+/**
+ * РЕЖИМ ФАЙЛА ПОСЛЕ ОБЪЯВЛЕНИЯ: исполняемость идёт туда, где уже есть чтение.
+ *
+ * Обвес объявляет один предмет — «программа или данные», — и права доступа
+ * этим объявлением не переписываются: файл `600`, объявленный программой,
+ * становится `700`, а не общедоступным `755`. Кому его читать, обвес не
+ * говорил, и решать за него консоль не станет.
+ *
+ * Бит ставится по маске чтения (`r` → `x`), а не всем трём классам подряд, и
+ * это не косметика: право выполнить скрипт без права его прочитать
+ * бессмысленно — интерпретатор читает файл. Раздачу бита сужает и сам рынок:
+ * `chmod +x` без явного класса режется `umask`, а не ставит `x` всем троим
+ * (сверено 2026-08-07). Снятие маской проще постановки: «не программа» — это
+ * ровно отсутствие трёх бит, и вопроса «у кого» там нет.
+ */
+function programMode(file: string, executable: boolean): number {
+  const now = statSync(file).mode & 0o777;
+  return executable ? now | ((now & 0o444) >> 2) : now & ~EXECUTABLE_BITS;
 }
 
 /**
