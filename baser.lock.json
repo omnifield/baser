@@ -124,7 +124,7 @@
       "dest": ".devcontainer/devcontainer-lock.json",
       "src": "devcontainer-lock.json",
       "source": "omnifield/devbox",
-      "version": "0.9.0-dev.2",
+      "version": "0.10.0-dev.1",
       "class": "regenerated",
       "hash": "sha256:5ca0a1a0a1b7f1b4c09670946a9689a6b10fe50ee6ad0d699334bed98fce7012"
     },
@@ -132,9 +132,25 @@
       "dest": ".devcontainer/devcontainer.json",
       "src": "devcontainer.json.ejs",
       "source": "omnifield/devbox",
-      "version": "0.9.0-dev.2",
+      "version": "0.10.0-dev.1",
       "class": "regenerated",
       "hash": "sha256:36ee75894f7ba1b8cd71a857f6a999bafd18ff4d0023a970f837799921808a1b"
+    },
+    {
+      "dest": ".github/scripts/pr-title.mjs",
+      "src": "pr-title.mjs.ejs",
+      "source": "omnifield/git",
+      "version": "0.1.0-dev.1",
+      "class": "regenerated",
+      "hash": "sha256:543b7d230276a6880a5eb05e2fad6cd47d1d491f98b8c7a7de66b6a7f114c41f"
+    },
+    {
+      "dest": ".github/workflows/pr-title.yml",
+      "src": "pr-title.yml.ejs",
+      "source": "omnifield/git",
+      "version": "0.1.0-dev.1",
+      "class": "regenerated",
+      "hash": "sha256:c3bfdbeb5e556f42bbf9fef106ad6c9bf5b95457c4243c322c7a1ca1ec42a943"
     },
     {
       "dest": ".omnifield/harness.yaml",
