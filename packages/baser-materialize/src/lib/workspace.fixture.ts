@@ -13,6 +13,7 @@
 
 import type { Tree } from '@nx/devkit';
 import { createTreeWithEmptyWorkspace } from '@nx/devkit/testing';
+import type { SourceWarning } from '@omnifield/baser-contracts';
 import type { Declaration, LayoutEntry } from './declaration.js';
 import type { ManifestRecord } from './manifest.js';
 import { MANIFEST_PATH, readManifest, serializeManifest } from './manifest.js';
@@ -206,6 +207,29 @@ export function reversion(
   version: string | null,
 ): Declaration {
   return { ...declaration, source: { ...declaration.source, version } };
+}
+
+/**
+ * Тот же обвес, которому есть что сказать про эту локацию, — и то же обратно.
+ *
+ * Отдельной операцией, как `reversion`: предупреждение это состояние ПРОГОНА, и
+ * «обвес сказал» ↔ «обвесу нечего сказать» — переход, а не правка объекта в
+ * тесте. Значение подаётся тем же, чем его отдаёт форма (`SourceWarning`):
+ * второго написания у него нет.
+ */
+export function withWarning(
+  declaration: Declaration,
+  warning: SourceWarning | undefined,
+): Declaration {
+  const { source } = declaration;
+  if (warning === undefined) {
+    // Поля нет вовсе — ровно то, что подаёт дверь обвеса, который про
+    // предупреждения не знает. Это не то же самое, что `undefined` в ключе:
+    // сериализация в машинный ответ различает их молча.
+    const { warning: _dropped, ...rest } = source;
+    return { ...declaration, source: rest };
+  }
+  return { ...declaration, source: { ...source, warning } };
 }
 
 /**
