@@ -19,6 +19,7 @@ export function renderText(result: ShopResult): string {
   lines.push(headline(result));
   lines.push('');
   lines.push(`адрес     ${result.shop.address}`);
+  lines.push(`магазин   ${result.location.shopHome}`);
   lines.push(
     `товар     ${plural(result.stock.packages)} · ${result.stock.storage}`,
   );
@@ -26,6 +27,18 @@ export function renderText(result: ShopResult): string {
 
   if (result.state === 'running' && result.shop.pid !== null) {
     lines.push(`процесс   ${result.shop.pid}`);
+  }
+
+  // ПРАВДА ПРО УРОВНИ. «Магазин работает» верно для всей локации, но постройка,
+  // которая его не поднимала, обязана видеть разницу — иначе она принимает
+  // общую раздачу за свою и удивляется, что товар оказался «не там»
+  // (`tasker:BASER2-254`).
+  if (result.state === 'running' && !result.building.startedShop) {
+    lines.push('');
+    lines.push(
+      'раздачу подняла не эта постройка — она общая на локацию, как и склад.',
+    );
+    lines.push('Это не конфликт: у построек одного участка магазин один.');
   }
 
   if (result.published !== null) {
@@ -96,7 +109,9 @@ function headline(result: ShopResult): string {
     case 'already-closed':
       return 'магазин и так был закрыт';
     case 'reported':
-      return result.state === 'running' ? 'магазин работает' : 'магазин закрыт';
+      return result.state === 'running'
+        ? 'раздача локации работает'
+        : 'магазин закрыт';
     case 'published':
       return result.published === null
         ? 'товар положен на склад'

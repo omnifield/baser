@@ -6,13 +6,14 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import { shopLayout } from './layout.js';
+import { HOME_VARIABLE } from './location.js';
 import { DEFAULT_SETTINGS } from './settings.js';
 import { shopEntry, verdaccioConfig } from './verdaccio.js';
 
-const layout = shopLayout('/локация');
+const layout = shopLayout({ [HOME_VARIABLE]: '/участок/магазин' });
 
 function built(settings = DEFAULT_SETTINGS) {
-  const text = verdaccioConfig(settings, layout, '/локация/лог.log');
+  const text = verdaccioConfig(settings, layout, '/участок/магазин/лог.log');
   return { text, config: parse(text) as Record<string, never> };
 }
 
@@ -21,7 +22,9 @@ describe('конфиг раздачи собирается целиком из �
     // Относительный путь означал бы товар, разложенный там, откуда позвали
     // команду, — а зовут её откуда угодно.
     expect(built().config['storage']).toBe(layout.storage);
-    expect(built().config['log']).toMatchObject({ path: '/локация/лог.log' });
+    expect(built().config['log']).toMatchObject({
+      path: '/участок/магазин/лог.log',
+    });
   });
 
   it('апстрим берётся из настроек человека и кэшируется', () => {
@@ -62,7 +65,7 @@ describe('конфиг раздачи собирается целиком из �
     const { text } = built();
 
     expect(text).toContain('СОБРАН МАГАЗИНОМ');
-    expect(text).toContain('.baser-registry/config.yml');
+    expect(text).toContain(layout.config);
   });
 
   it('две сборки одних настроек дают один байт в байт файл', () => {
@@ -84,20 +87,16 @@ describe('запускатель раздачи судится ЗАПУСКОМ,
     // Доказательство — ответивший сервер. Ни путь, ни его вид доказательством
     // не являются: чужой пакет вправе закрыть подпуть в любом миноре, и узнать
     // об этом мы должны здесь, а не от человека, у которого не поднялся магазин.
-    const root = mkdtempSync(join(tmpdir(), 'baser-registry-entry-'));
+    const home = mkdtempSync(join(tmpdir(), 'baser-registry-entry-'));
     const port = await freePort();
-    const home = join(root, '.baser-registry');
-    const storage = join(home, 'storage');
-    mkdirSync(storage, { recursive: true });
+    const layout = shopLayout({ [HOME_VARIABLE]: home });
+    mkdirSync(layout.storage, { recursive: true });
+    mkdirSync(layout.runtime, { recursive: true });
 
-    const configPath = join(home, 'verdaccio.yaml');
+    const configPath = layout.generatedConfig;
     writeFileSync(
       configPath,
-      verdaccioConfig(
-        { ...DEFAULT_SETTINGS, port },
-        shopLayout(root),
-        join(home, 'shop.log'),
-      ),
+      verdaccioConfig({ ...DEFAULT_SETTINGS, port }, layout, layout.log),
       'utf8',
     );
 
@@ -111,7 +110,7 @@ describe('запускатель раздачи судится ЗАПУСКОМ,
       expect(await answered(`http://127.0.0.1:${port}`)).toBe(true);
     } finally {
       child.kill('SIGKILL');
-      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

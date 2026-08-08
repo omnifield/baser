@@ -1,5 +1,5 @@
 /**
- * ЖИЗНЕННЫЙ ЦИКЛ МАГАЗИНА: поднять · остановить · спросить.
+ * ЖИЗНЕННЫЙ ЦИКЛ МАГАЗИНА: поднять · остановить · спросить · положить товар.
  *
  * Обещание инструмента — одна строка, и весь файл написан ради неё:
  *
@@ -39,8 +39,8 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { shopLayout, type ShopLayout } from './layout.js';
-import { locateRoot } from './locate.js';
+import { buildingLayout, shopLayout, type ShopLayout } from './layout.js';
+import { locateBuilding } from './locate.js';
 import { ShopProblemLog } from './problems.js';
 import {
   clientAddress,
@@ -96,14 +96,31 @@ interface ShopClaim {
   readonly pid: number;
   readonly address: string;
   readonly listen: string;
+  /**
+   * Постройка, из которой раздачу подняли.
+   *
+   * Магазин общий на локацию, но «кто его поднял» — осмысленный факт, и без
+   * него постройка не может увидеть разницу между «работает моя раздача» и
+   * «работает раздача участка». Не право владения: гасить и пользоваться может
+   * любая постройка локации.
+   */
+  readonly building?: string;
 }
 
 /** Что ответил адрес магазина. */
 type Knock = 'registry' | 'foreign' | 'silent';
 
 export interface ShopOptions {
-  /** Откуда позвали команду. Корень локации ищется вверх от него. */
+  /** Откуда позвали команду. Корень постройки ищется вверх от него. */
   readonly cwd: string;
+  /**
+   * Окружение, из которого читается место магазина локации.
+   *
+   * Передаётся, а не берётся из `process.env` внутри: пробам нужно поднять
+   * магазин в своём месте, не трогая глобальное состояние, и поведение при
+   * этом обязано остаться тем же кодом.
+   */
+  readonly environment?: NodeJS.ProcessEnv;
   /** Подменяется пробами: настоящий `npm` дорог, а спрашиваем мы его ради факта. */
   readonly scopes?: (address: string, cwd: string) => Promise<ScopeConflict[]>;
 }
@@ -112,7 +129,7 @@ export interface PublishOptions extends ShopOptions {
   /**
    * Каталог публикуемого пакета; по умолчанию — тот, откуда позвали команду.
    *
-   * Относительный путь считается от каталога вызова, а не от корня локации:
+   * Относительный путь считается от каталога вызова, а не от корня постройки:
    * человек называет его, стоя где-то, и «относительно чего» для него очевидно
    * ровно одно — относительно того места, где он стоит.
    */
@@ -150,7 +167,7 @@ export async function up(options: ShopOptions): Promise<ShopResult> {
     mkdirSync(layout.runtime, { recursive: true });
   });
 
-  const logFile = logPath(settings, run.root);
+  const logFile = logPath(settings, run.layout.home.path);
   mkdirSync(dirname(logFile), { recursive: true });
 
   await trace.span('write-config', () => {
@@ -163,7 +180,16 @@ export async function up(options: ShopOptions): Promise<ShopResult> {
   );
   run.write(
     layout.claim,
-    `${JSON.stringify({ pid, address, listen: listenAddress(settings) }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        pid,
+        address,
+        listen: listenAddress(settings),
+        building: run.building.root,
+      },
+      null,
+      2,
+    )}\n`,
   );
 
   const awake = await trace.span('await-answer', () =>
@@ -334,7 +360,8 @@ export async function status(options: ShopOptions): Promise<ShopResult> {
 }
 
 /**
- * Общее начало всех трёх команд: найти локацию, прочитать настройки, родить файл.
+ * Общее начало всех команд: найти постройку и магазин её локации, прочитать
+ * настройки, родить файл.
  *
  * Вынесено сюда, потому что порядок здесь — часть контракта: настройки читаются
  * ДО первого действия, и непригодный конфиг отказывает, не тронув ни процесса,
@@ -349,8 +376,11 @@ async function prepare(
   const problems = new ShopProblemLog();
   const writes: WriteReport[] = [];
 
-  const located = await trace.span('locate', () => locateRoot(options.cwd));
-  const layout = shopLayout(located.root);
+  const building = await trace.span('locate', () =>
+    locateBuilding(options.cwd),
+  );
+  const layout = shopLayout(options.environment);
+  const legacy = buildingLayout(building.root);
 
   const text = existsSync(layout.config)
     ? readFileSync(layout.config, 'utf8')
@@ -359,24 +389,34 @@ async function prepare(
     readSettings(text, layout.config, problems),
   );
 
-  // НАСТРОЙКИ ПЕРЕЕХАЛИ, И ЛОКАЦИЯ СО СТАРЫМ ФАЙЛОМ УЗНАЁТ ОБ ЭТОМ ОТКАЗОМ.
+  // МАГАЗИН СТАЛ ВЕЩЬЮ ЛОКАЦИИ, И ПОСТРОЙКА СО СТАРЫМИ НАСТРОЙКАМИ УЗНАЁТ ОБ
+  // ЭТОМ ОТКАЗОМ.
+  //
+  // Мест два, потому что переездов было два: сперва настройки лежали в папке
+  // магазина внутри клона, потом в `.omnifield/` клона. Оба уровня оказались
+  // неверными — раздача принадлежит контейнеру. Читать их мы не станем: молча
+  // подхватить значения, писанные для другой раскладки, — тот же тихий эффект,
+  // от которого уходим.
   //
   // Проверяется только там, где нового файла ещё нет: перенёс человек значения
   // или начал с чистого листа — его дело, и напоминать про старый файл, когда
   // новый уже заполнен, значит мешать работать.
-  if (text === null && existsSync(layout.legacyConfig)) {
-    problems.add(
-      'config-in-old-place',
-      layout.legacyConfig,
-      `настройки магазина переехали в ${layout.config}, а заполненный файл лежит ` +
-        `в прежнем месте — значит сейчас не действует ни одна ваша настройка. ` +
-        `Перенесите значения и удалите старый файл: mv ${layout.legacyConfig} ${layout.config}`,
-    );
+  if (text === null) {
+    for (const stale of [legacy.legacySettings, legacy.legacyShopConfig]) {
+      if (!existsSync(stale)) continue;
+      problems.add(
+        'config-in-old-place',
+        stale,
+        `настройки раздачи переехали на уровень локации — в ${layout.config}, ` +
+          `а заполненный файл лежит в постройке (${stale}). Раздача одна на весь ` +
+          `контейнер, поэтому её настройки не могут жить внутри одного клона. ` +
+          `Перенесите значения: mv ${stale} ${layout.config}`,
+      );
+    }
   }
 
   // Файл человека рождается один раз и только у команд, которые вообще пишут:
-  // `status` — вопрос, а вопрос ничего не создаёт. Рождается он в общей папке
-  // локации, рядом с настройками остальных инструментов.
+  // `status` — вопрос, а вопрос ничего не создаёт.
   if (behaviour.create && text === null && problems.empty) {
     mkdirSync(dirname(layout.config), { recursive: true });
     writeFileSync(layout.config, settingsTemplate(), 'utf8');
@@ -386,7 +426,7 @@ async function prepare(
   const address = clientAddress(settings);
   const scopes = options.scopes ?? readScopeConflicts;
   const scopeConflicts = await trace.span('scopes', () =>
-    scopes(address, located.root),
+    scopes(address, building.root),
   );
 
   const write = (path: string, content: string): void => {
@@ -410,9 +450,16 @@ async function prepare(
     outcome,
     state,
     location: {
-      root: located.root,
-      origin: located.origin,
-      home: layout.home,
+      shopHome: layout.home.path,
+      origin: layout.home.origin,
+    },
+    building: {
+      root: building.root,
+      origin: building.origin,
+      // Заявка читается ЗДЕСЬ, а не в начале прогона: `up` записывает её по
+      // дороге, и признак, снятый заранее, соврал бы про собственный запуск —
+      // поймано живым прогоном сразу после переезда.
+      startedShop: readClaim(layout)?.building === building.root,
     },
     shop: {
       address,
@@ -420,7 +467,7 @@ async function prepare(
       uplink: settings.uplink,
       pid,
       claimed: existsSync(layout.claim),
-      log: logPath(settings, located.root),
+      log: logPath(settings, layout.home.path),
     },
     stock: {
       storage: layout.storage,
@@ -435,7 +482,7 @@ async function prepare(
   });
 
   return {
-    root: located.root,
+    building,
     layout,
     settings,
     trace: trace as TraceRecorder,
@@ -506,10 +553,10 @@ function startProcess(
         // Отвязан от команды: `up` кончится, магазин останется. Ради этого всё.
         detached: true,
         stdio: ['ignore', handle, handle],
-        // Рабочий каталог — папка магазина, а не то место, откуда позвали
+        // Рабочий каталог — корень магазина, а не то место, откуда позвали
         // команду: чужой процесс не обязан ничего писать нам под ноги, но если
         // напишет, пусть это будет наша территория.
-        cwd: layout.home,
+        cwd: layout.home.path,
       },
     );
     child.unref();

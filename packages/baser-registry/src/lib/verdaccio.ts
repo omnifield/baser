@@ -84,7 +84,7 @@ export function verdaccioConfig(
 
   return [
     '# СОБРАН МАГАЗИНОМ. Правки здесь исчезнут на следующем `baser-registry up`.',
-    '# Настройки этой локации живут в .baser-registry/config.yml — правьте там.',
+    `# Настройки раздачи живут в ${layout.config} — правьте там.`,
     '',
     body,
   ].join('\n');

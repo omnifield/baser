@@ -14,9 +14,13 @@ export function sampleResult(patch: Partial<ShopResult> = {}): ShopResult {
     outcome: 'reported',
     state: 'running',
     location: {
-      root: '/локация',
-      origin: 'shop',
-      home: '/локация/.baser-registry',
+      shopHome: '/участок/магазин',
+      origin: 'variable',
+    },
+    building: {
+      root: '/участок/постройка',
+      origin: 'git',
+      startedShop: true,
     },
     shop: {
       address: 'http://127.0.0.1:4873',
@@ -24,10 +28,10 @@ export function sampleResult(patch: Partial<ShopResult> = {}): ShopResult {
       uplink: 'https://registry.npmjs.org/',
       pid: 4242,
       claimed: true,
-      log: '/локация/.baser-registry/runtime/shop.log',
+      log: '/участок/магазин/runtime/shop.log',
     },
     stock: {
-      storage: '/локация/.baser-registry/storage',
+      storage: '/участок/магазин/storage',
       packages: 3,
     },
     scopeConflicts: [],

@@ -1,60 +1,79 @@
 /**
- * ПЕРЕЕЗД НАСТРОЕК: локация со старым файлом узнаёт об этом ОТКАЗОМ.
+ * ПЕРЕЕЗД НА УРОВЕНЬ ЛОКАЦИИ: постройка со старыми настройками узнаёт об этом
+ * ОТКАЗОМ.
  *
  * Худший исход переезда — не отказ и не ошибка, а МОЛЧАНИЕ: человек заполнил
- * порт и апстрим, файл остался в прежнем месте, инструмент его не читает и
- * спокойно уезжает на дефолтах. Магазин поднимется на другом порту, полезет не
- * к тому апстриму, и ничего из этого не будет названо.
+ * порт и апстрим, файл остался в постройке, инструмент его не читает и спокойно
+ * уезжает на дефолтах.
  *
- * Поэтому проба здесь ровно на одно свойство: **заполненный человеком файл в
- * прежнем месте не бывает проигнорирован молча.**
+ * Мест два, потому что переездов было два: сперва настройки лежали в папке
+ * магазина внутри клона, потом в `.omnifield/` клона. Оба уровня оказались
+ * неверными — раздача принадлежит контейнеру, а не одному из его клонов.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { shopLayout } from './layout.js';
+import { buildingLayout, shopLayout } from './layout.js';
+import { HOME_VARIABLE } from './location.js';
 import { status } from './shop.js';
 
-let root: string;
+let building: string;
+let shopRoot: string;
 
-/** Скоупы у настоящего npm не спрашиваем: проба не про них, а платит секундами. */
-const options = () => ({ cwd: root, scopes: async () => [] });
+/** Магазин пробы живёт в своём месте: чужой ~/.local/share не трогаем. */
+function options() {
+  return {
+    cwd: building,
+    environment: { [HOME_VARIABLE]: shopRoot },
+    scopes: async () => [],
+  };
+}
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'baser-registry-move-'));
+  building = mkdtempSync(join(tmpdir(), 'baser-registry-building-'));
+  shopRoot = mkdtempSync(join(tmpdir(), 'baser-registry-shop-'));
+  // Постройка — это клон: пусть у неё будет граница, как в жизни.
+  mkdirSync(join(building, '.git'), { recursive: true });
 });
 
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  for (const path of [building, shopRoot]) {
+    rmSync(path, { recursive: true, force: true });
+  }
 });
 
-describe('старый файл настроек не проглатывается молча', () => {
-  it('его наличие — названный отказ с кодом и обоими путями', async () => {
-    const layout = shopLayout(root);
-    mkdirSync(layout.home, { recursive: true });
-    writeFileSync(layout.legacyConfig, 'port: 4999\n', 'utf8');
+describe('старые настройки в постройке не проглатываются молча', () => {
+  for (const place of ['legacySettings', 'legacyShopConfig'] as const) {
+    it(`${place}: названный отказ с кодом и обоими путями`, async () => {
+      const stale = buildingLayout(building)[place];
+      mkdirSync(dirname(stale), { recursive: true });
+      writeFileSync(stale, 'port: 4999\n', 'utf8');
 
-    const answer = await status(options());
+      const answer = await status(options());
 
-    expect(answer.outcome).toBe('refused');
-    const problem = answer.problems.find(
-      (one) => one.code === 'config-in-old-place',
-    );
-    expect(problem).toBeDefined();
-    // Человеку названы ОБА места: откуда забрать и куда положить. Отказ без
-    // адреса починки отправляет искать самому.
-    expect(problem?.at).toBe(layout.legacyConfig);
-    expect(problem?.message).toContain(layout.config);
-  });
+      expect(answer.outcome).toBe('refused');
+      const problem = answer.problems.find(
+        (one) => one.code === 'config-in-old-place',
+      );
+      expect(problem).toBeDefined();
+      expect(problem?.at).toBe(stale);
+      // Человеку названы оба места: откуда забрать и куда положить.
+      expect(problem?.message).toContain(shopLayout(options().environment).config);
+    });
+  }
 
-  it('и настройки из него НЕ применяются втихую', async () => {
-    // Ровно то, что делает молчание опасным: 4999 из старого файла не должен
-    // ни подхватиться, ни выглядеть как подхваченный.
-    const layout = shopLayout(root);
-    mkdirSync(layout.home, { recursive: true });
-    writeFileSync(layout.legacyConfig, 'port: 4999\n', 'utf8');
+  it('настройки из старого файла НЕ применяются втихую', async () => {
+    const stale = buildingLayout(building).legacySettings;
+    mkdirSync(dirname(stale), { recursive: true });
+    writeFileSync(stale, 'port: 4999\n', 'utf8');
 
     const answer = await status(options());
 
@@ -62,23 +81,25 @@ describe('старый файл настроек не проглатываетс
   });
 
   it('новый файл при этом НЕ рождается: сперва разберитесь со старым', async () => {
-    const layout = shopLayout(root);
-    mkdirSync(layout.home, { recursive: true });
-    writeFileSync(layout.legacyConfig, 'port: 4999\n', 'utf8');
+    const stale = buildingLayout(building).legacySettings;
+    mkdirSync(dirname(stale), { recursive: true });
+    writeFileSync(stale, 'port: 4999\n', 'utf8');
 
     await status(options());
 
-    expect(existsSync(layout.config)).toBe(false);
+    expect(existsSync(shopLayout(options().environment).config)).toBe(false);
   });
 
-  it('новый файл заполнен — старый больше не мешает работать', async () => {
+  it('настройки локации заполнены — старое в постройке больше не мешает', async () => {
     // Перенёс человек значения или начал с чистого листа — его дело. Напоминать
     // про старый файл, когда новый уже заполнен, значит мешать работать.
-    const layout = shopLayout(root);
-    mkdirSync(layout.home, { recursive: true });
-    writeFileSync(layout.legacyConfig, 'port: 4999\n', 'utf8');
-    mkdirSync(join(root, '.omnifield'), { recursive: true });
-    writeFileSync(layout.config, 'port: 4901\n', 'utf8');
+    const stale = buildingLayout(building).legacySettings;
+    mkdirSync(dirname(stale), { recursive: true });
+    writeFileSync(stale, 'port: 4999\n', 'utf8');
+
+    const config = shopLayout(options().environment).config;
+    mkdirSync(dirname(config), { recursive: true });
+    writeFileSync(config, 'port: 4901\n', 'utf8');
 
     const answer = await status(options());
 
@@ -86,15 +107,11 @@ describe('старый файл настроек не проглатываетс
     expect(answer.shop.address).toContain('4901');
   });
 
-  it('чистая локация: отказа нет, файл рождается в общей папке', async () => {
-    const layout = shopLayout(root);
-
-    const answer = await status({ ...options(), cwd: root });
+  it('чистая постройка: отказа нет, магазин ищется на своём уровне', async () => {
+    const answer = await status(options());
 
     expect(answer.problems).toEqual([]);
-    // `status` — вопрос, он ничего не создаёт; рождение проверяется там, где
-    // команда пишет. Здесь важно, что отказа нет и путь назван новый.
-    expect(answer.location.root).toBe(root);
-    expect(layout.config).toContain('.omnifield');
+    expect(answer.location.shopHome).toBe(shopRoot);
+    expect(answer.building.root).toBe(building);
   });
 });
