@@ -16,10 +16,11 @@
  */
 
 import type { ShopProblem } from './problems.js';
+import type { PublishReport } from './publish.js';
 import type { RootOrigin } from './locate.js';
 import type { TraceSpan } from './trace.js';
 
-export type ShopCommand = 'up' | 'down' | 'status';
+export type ShopCommand = 'up' | 'down' | 'status' | 'publish';
 
 /**
  * ЧТО С МАГАЗИНОМ СЕЙЧАС — по факту, а не по заявке.
@@ -43,6 +44,8 @@ export type ShopOutcome =
   | 'already-closed'
   /** Ничего не делали — спрашивали. */
   | 'reported'
+  /** Товар положен на склад локации. */
+  | 'published'
   /** Просили изменить состояние, и не вышло. */
   | 'failed'
   /** Вход непригоден: до попытки не дошли. */
@@ -163,6 +166,14 @@ export interface ShopResult {
   readonly scopeConflicts: readonly ScopeConflict[];
   /** Чем ходить в этот магазин — готовые строки конфига. */
   readonly access: AccessReport;
+  /**
+   * Что положено на склад этим прогоном; `null` — публикации не было.
+   *
+   * Отдельным полем, а не отдельной формой ответа: публикация — работа С
+   * МАГАЗИНОМ, и потребителю нужны обе половины разом — куда положили и что
+   * теперь на складе. Две формы заставили бы его склеивать их самому.
+   */
+  readonly published: PublishReport | null;
   /** Что легло на диск этим прогоном. */
   readonly writes: readonly WriteReport[];
   /** Телеметрия. В текстовый рендер не идёт. */

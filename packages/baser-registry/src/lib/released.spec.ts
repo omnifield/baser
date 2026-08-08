@@ -34,7 +34,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /** Корень нашего пакета — отсюда собирается тарбол. */
@@ -79,12 +79,9 @@ beforeAll(async () => {
   // остаться поднятым в этом же контейнере. Задаётся он единственным законным
   // способом — файлом настроек локации, как это сделал бы человек.
   port = await freePort();
-  mkdirSync(join(location, '.baser-registry'), { recursive: true });
-  writeFileSync(
-    join(location, '.baser-registry', 'config.yml'),
-    `port: ${port}\n`,
-    'utf8',
-  );
+  const config = join(location, '.omnifield', 'omnifield-registry.yaml');
+  mkdirSync(dirname(config), { recursive: true });
+  writeFileSync(config, `port: ${port}\n`, 'utf8');
 }, SETUP_TIMEOUT_MS);
 
 afterAll(() => {
@@ -182,12 +179,101 @@ describe('выпущенный пакет ставится и работает',
   );
 
   it(
+    'ВЫПУЩЕННАЯ команда кладёт обычный пакет на склад (npm)',
+    () => {
+      // Публикация — главная работа этого выпуска, и судится она там же, где
+      // всё остальное: на установленном пакете, а не на исходниках.
+      const plain = join(box, 'tovar-plain');
+      mkdirSync(plain, { recursive: true });
+      writeFileSync(
+        join(plain, 'package.json'),
+        JSON.stringify({
+          name: '@omnifield/released-plain',
+          version: '0.1.0',
+          license: 'MIT',
+        }),
+        'utf8',
+      );
+
+      const said = run(['publish', plain, '--json']);
+      expect(said.code, said.said).toBe(0);
+      const answer = JSON.parse(said.said) as {
+        outcome: string;
+        published: { manager: string; destination: string } | null;
+      };
+
+      expect(answer.outcome).toBe('published');
+      expect(answer.published?.manager).toBe('npm');
+      // Скоуп @omnifield в этом девбоксе настроен на GitHub Packages: без
+      // защиты выпущенной команды товар уехал бы туда молча.
+      expect(answer.published?.destination).toBe(`http://127.0.0.1:${port}`);
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  it(
+    'и пакет с workspace: — им нужен pnpm, и выпуск это умеет',
+    () => {
+      // Разные менеджеры — разные пути внутри команды, и оба обязаны работать
+      // из установленного пакета, а не только из исходников.
+      const ws = join(box, 'tovar-ws');
+      mkdirSync(join(ws, 'packages', 'lib'), { recursive: true });
+      mkdirSync(join(ws, 'packages', 'app'), { recursive: true });
+      writeFileSync(
+        join(ws, 'pnpm-workspace.yaml'),
+        'packages:\n  - "packages/*"\n',
+        'utf8',
+      );
+      writeFileSync(
+        join(ws, 'package.json'),
+        JSON.stringify({ name: 'koren', private: true }),
+        'utf8',
+      );
+      writeFileSync(
+        join(ws, 'packages', 'lib', 'package.json'),
+        JSON.stringify({
+          name: '@omnifield/released-lib',
+          version: '9.8.7',
+          license: 'MIT',
+        }),
+        'utf8',
+      );
+      writeFileSync(
+        join(ws, 'packages', 'app', 'package.json'),
+        JSON.stringify({
+          name: '@omnifield/released-app',
+          version: '0.3.0',
+          license: 'MIT',
+          dependencies: { '@omnifield/released-lib': 'workspace:*' },
+        }),
+        'utf8',
+      );
+      execFileSync('pnpm', ['install', '--silent', '--ignore-scripts'], {
+        cwd: ws,
+        stdio: 'ignore',
+      });
+
+      const said = run(['publish', join(ws, 'packages', 'app'), '--json']);
+      expect(said.code, said.said).toBe(0);
+      const answer = JSON.parse(said.said) as {
+        outcome: string;
+        published: { manager: string; needsWorkspace: boolean } | null;
+      };
+
+      expect(answer.outcome).toBe('published');
+      expect(answer.published?.manager).toBe('pnpm');
+      expect(answer.published?.needsWorkspace).toBe(true);
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  it(
     'ни одна команда не роняет stack trace вместо ответа',
     () => {
       // Падение выпуска приезжало человеку трейсом Node, а не названным
       // отказом. Форма ответа — контракт (`kb:BASER3-10`), и трейс её нарушает
       // независимо от того, какая причина под ним.
-      for (const argv of [['status'], ['up'], ['down']]) {
+      for (const argv of [['status'], ['up'], ['publish'], ['down']]) {
         const outcome = run(argv);
         expect(outcome.said, argv.join(' ')).not.toContain('at Function.');
         expect(outcome.said, argv.join(' ')).not.toContain('node:internal');

@@ -36,11 +36,20 @@ describe('README не расходится с тем, что делает код
     expect(rows).toHaveLength(Object.keys(DEFAULT_SETTINGS).length);
   });
 
-  it('все три команды названы и в доке, и в подсказке', () => {
-    for (const command of ['up', 'down', 'status']) {
+  it('все команды названы и в доке, и в подсказке', () => {
+    for (const command of ['up', 'down', 'status', 'publish']) {
       expect(readme).toContain(`baser-registry ${command}`);
       expect(USAGE).toContain(`baser-registry ${command}`);
     }
+  });
+
+  it('дока не советует собирать команду публикации руками', () => {
+    // Совет вместо конструкции — ровно то, от чего уходили: он не работает там,
+    // где нужнее всего, и человек узнаёт об этом уже после того, как товар уехал
+    // в чужой реестр.
+    expect(readme).toContain('baser-registry publish');
+    expect(readme).not.toContain('npm publish --');
+    expect(readme).not.toContain('--@omnifield:registry');
   });
 
   it('разница с обвесами названа вслух — правило про ноль зависимостей не отменено', () => {

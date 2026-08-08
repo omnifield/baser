@@ -27,6 +27,18 @@ export function renderText(result: ShopResult): string {
   if (result.state === 'running' && result.shop.pid !== null) {
     lines.push(`процесс   ${result.shop.pid}`);
   }
+
+  if (result.published !== null) {
+    // Чем публиковали — не деталь реализации: человек не выбирал менеджера, и
+    // если выбор был вынужденным, он должен видеть, чем именно.
+    lines.push(
+      `положено  ${result.published.manager}` +
+        (result.published.needsWorkspace
+          ? ' (у пакета есть зависимости workspace: — иначе нельзя)'
+          : ''),
+    );
+    lines.push(`уехало в  ${result.published.destination}`);
+  }
   if (result.state === 'closed' && result.shop.claimed) {
     // Ровно то состояние, ради которого инструмент существует: контейнер
     // перезапустился, магазин закрыт, товар на месте.
@@ -85,6 +97,10 @@ function headline(result: ShopResult): string {
       return 'магазин и так был закрыт';
     case 'reported':
       return result.state === 'running' ? 'магазин работает' : 'магазин закрыт';
+    case 'published':
+      return result.published === null
+        ? 'товар положен на склад'
+        : `положено на склад: ${result.published.name}@${result.published.version}`;
     case 'failed':
       return 'не вышло';
     case 'refused':
