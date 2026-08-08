@@ -45,9 +45,10 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { shopLayout } from './layout.js';
 import { down, status, up } from './shop.js';
 import type { ShopResult } from './result.js';
 
@@ -111,10 +112,13 @@ describe('1 · в пустой локации магазин поднимает�
   });
 
   it('от магазина осталась ровно одна папка в корне локации', () => {
-    expect(existsSync(join(shop.root, '.baser-registry', 'config.yml'))).toBe(
-      true,
-    );
+    // Человеческое — в общей папке локации, машинное — в папке магазина.
+    expect(existsSync(shopLayout(shop.root).config)).toBe(true);
     expect(existsSync(join(shop.root, '.baser-registry', 'storage'))).toBe(true);
+    expect(
+      existsSync(join(shop.root, '.baser-registry', 'config.yml')),
+      'в папке магазина не должно оставаться ничего человеческого',
+    ).toBe(false);
   });
 });
 
@@ -276,9 +280,10 @@ async function makeShop(options: { uplink: string | null }): Promise<Shop> {
   const root = mkdtempSync(join(tmpdir(), 'baser-registry-loc-'));
   const port = await freePort();
 
-  mkdirSync(join(root, '.baser-registry'), { recursive: true });
+  const config = shopLayout(root).config;
+  mkdirSync(dirname(config), { recursive: true });
   writeFileSync(
-    join(root, '.baser-registry', 'config.yml'),
+    config,
     [
       `port: ${port}`,
       ...(options.uplink ? [`uplink: ${options.uplink}`] : []),

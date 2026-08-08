@@ -34,7 +34,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /** Корень нашего пакета — отсюда собирается тарбол. */
@@ -79,12 +79,9 @@ beforeAll(async () => {
   // остаться поднятым в этом же контейнере. Задаётся он единственным законным
   // способом — файлом настроек локации, как это сделал бы человек.
   port = await freePort();
-  mkdirSync(join(location, '.baser-registry'), { recursive: true });
-  writeFileSync(
-    join(location, '.baser-registry', 'config.yml'),
-    `port: ${port}\n`,
-    'utf8',
-  );
+  const config = join(location, '.omnifield', 'omnifield-registry.yaml');
+  mkdirSync(dirname(config), { recursive: true });
+  writeFileSync(config, `port: ${port}\n`, 'utf8');
 }, SETUP_TIMEOUT_MS);
 
 afterAll(() => {

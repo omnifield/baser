@@ -258,10 +258,26 @@ async function prepare(
     readSettings(text, layout.config, problems),
   );
 
+  // НАСТРОЙКИ ПЕРЕЕХАЛИ, И ЛОКАЦИЯ СО СТАРЫМ ФАЙЛОМ УЗНАЁТ ОБ ЭТОМ ОТКАЗОМ.
+  //
+  // Проверяется только там, где нового файла ещё нет: перенёс человек значения
+  // или начал с чистого листа — его дело, и напоминать про старый файл, когда
+  // новый уже заполнен, значит мешать работать.
+  if (text === null && existsSync(layout.legacyConfig)) {
+    problems.add(
+      'config-in-old-place',
+      layout.legacyConfig,
+      `настройки магазина переехали в ${layout.config}, а заполненный файл лежит ` +
+        `в прежнем месте — значит сейчас не действует ни одна ваша настройка. ` +
+        `Перенесите значения и удалите старый файл: mv ${layout.legacyConfig} ${layout.config}`,
+    );
+  }
+
   // Файл человека рождается один раз и только у команд, которые вообще пишут:
-  // `status` — вопрос, а вопрос ничего не создаёт.
-  if (behaviour.create && text === null) {
-    mkdirSync(layout.home, { recursive: true });
+  // `status` — вопрос, а вопрос ничего не создаёт. Рождается он в общей папке
+  // локации, рядом с настройками остальных инструментов.
+  if (behaviour.create && text === null && problems.empty) {
+    mkdirSync(dirname(layout.config), { recursive: true });
     writeFileSync(layout.config, settingsTemplate(), 'utf8');
     writes.push({ path: layout.config, kind: 'CREATE' });
   }
