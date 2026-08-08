@@ -208,6 +208,13 @@ describe('выпущенный пакет ставится и работает',
       // Скоуп @omnifield в этом девбоксе настроен на GitHub Packages: без
       // защиты выпущенной команды товар уехал бы туда молча.
       expect(answer.published?.destination).toBe(`http://127.0.0.1:${port}`);
+
+      // ПОВТОР на выпущенном пакете — тоже спокойный: «уже на складе» и код 0.
+      const again = run(['publish', plain, '--json']);
+      expect(again.code, again.said).toBe(0);
+      expect(
+        (JSON.parse(again.said) as { outcome: string }).outcome,
+      ).toBe('already-published');
     },
     CASE_TIMEOUT_MS,
   );

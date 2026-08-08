@@ -62,6 +62,7 @@ import {
 import {
   chooseManager,
   managerAvailable,
+  onShelf,
   readManifest,
   runPublish,
   type PublishReport,
@@ -295,6 +296,26 @@ export async function publish(options: PublishOptions): Promise<ShopResult> {
   }
 
   const manager = chooseManager(manifest.needsWorkspace);
+
+  const report = {
+    name: manifest.name,
+    version: manifest.version,
+    directory,
+    manager,
+    needsWorkspace: manifest.needsWorkspace,
+    destination: address,
+  };
+
+  // УЖЕ ЛЕЖИТ — делать нечего, и менеджера мы даже не запускаем: незачем
+  // тратить секунды и трогать чужой `.npmrc` ради работы, которой нет.
+  if (
+    await trace.span('on-shelf', () =>
+      onShelf(address, manifest.name, manifest.version),
+    )
+  ) {
+    return run.finish('already-published', 'running', null, report);
+  }
+
   if (!managerAvailable(manager)) {
     run.problems.add(
       manager === 'pnpm' ? 'pnpm-required' : 'publish-failed',
@@ -317,18 +338,24 @@ export async function publish(options: PublishOptions): Promise<ShopResult> {
     }),
   );
 
-  const report = {
-    name: manifest.name,
-    version: manifest.version,
-    directory,
-    manager,
-    needsWorkspace: manifest.needsWorkspace,
+  const said = {
+    ...report,
     destination: outcome.destination ?? 'неизвестно',
   };
 
   if (!outcome.published) {
+    // ГОНКА: между нашим вопросом складу и нашей попыткой ту же версию мог
+    // положить кто-то другой. Спрашиваем склад ещё раз — исход тот же, что и
+    // при обычном повторе, и узнаём мы его снова замером, а не разбором
+    // чужого текста.
+    if (await onShelf(address, manifest.name, manifest.version)) {
+      return run.finish('already-published', 'running', null, said);
+    }
+
+    // Менеджер отказал сам — причина в пакете, а не в адресе.
     const wrongPlace =
-      outcome.destination === null || outcome.destination !== address;
+      !outcome.refusedByManager &&
+      (outcome.destination === null || outcome.destination !== address);
     run.problems.add(
       wrongPlace ? 'wrong-destination' : 'publish-failed',
       wrongPlace ? (outcome.destination ?? directory) : directory,
@@ -337,10 +364,10 @@ export async function publish(options: PublishOptions): Promise<ShopResult> {
             `а магазин локации — ${address}. Живой публикации не было`
         : `${manager} отказал на публикации:\n${outcome.said.trim()}`,
     );
-    return run.finish('failed', 'running', null, report);
+    return run.finish('failed', 'running', null, said);
   }
 
-  return run.finish('published', 'running', null, report);
+  return run.finish('published', 'running', null, said);
 }
 
 /** Спросить, что сейчас. Ничего не меняет — в том числе не прибирает заявку. */

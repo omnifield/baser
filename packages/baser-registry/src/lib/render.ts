@@ -116,6 +116,12 @@ function headline(result: ShopResult): string {
       return result.published === null
         ? 'товар положен на склад'
         : `положено на склад: ${result.published.name}@${result.published.version}`;
+    case 'already-published':
+      // Не «не получилось», а «делать нечего»: то же слово, каким отвечают
+      // второй `up` и второй `down`.
+      return result.published === null
+        ? 'эта версия уже на складе'
+        : `уже на складе: ${result.published.name}@${result.published.version}`;
     case 'failed':
       return 'не вышло';
     case 'refused':

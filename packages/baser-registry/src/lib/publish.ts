@@ -280,6 +280,45 @@ function normalize(address: string): string {
   return address.replace(/\/+$/, '');
 }
 
+/**
+ * ЛЕЖИТ ЛИ ЭТА ВЕРСИЯ НА СКЛАДЕ — спрашиваем склад, а не читаем чужой текст.
+ *
+ * Повторная публикация — не провал, а «делать нечего»: то же состояние без
+ * крика, ровно как второй `up` и второй `down`. Отличить этот исход можно двумя
+ * способами, и выбран не первый:
+ *
+ * - **по выводу менеджера** (`E409`, `409 Conflict`, `already present`) — это
+ *   разбор ЧУЖОГО ТЕКСТА, который у npm и pnpm разный и меняется с их выпусками.
+ *   Ветвиться по тексту не должен никто (`kb:BASER3-10`), и мы не будем;
+ * - **по складу** — один HTTP-вопрос с однозначным ответом. Замер 2026-08-08:
+ *   пакет с версией → `200` и список версий, пакета нет вовсе → `400`.
+ *
+ * Спрашиваем ДВАЖДЫ и по разным поводам: до публикации — чтобы не запускать
+ * менеджера впустую и не трогать чужой `.npmrc` ради работы, которой нет; после
+ * неудачи — чтобы отличить гонку (кто-то положил ту же версию между нашим
+ * вопросом и нашей попыткой) от настоящей беды.
+ */
+export async function onShelf(
+  address: string,
+  name: string,
+  version: string,
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${address}/${encodeURIComponent(name)}`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) return false;
+    const body = (await response.json()) as {
+      versions?: Record<string, unknown>;
+    };
+    return Object.hasOwn(body.versions ?? {}, version);
+  } catch {
+    // Склад не ответил — утверждать, что версия там есть, нечем. Публикация
+    // пойдёт своим путём и упрётся в настоящий отказ, который назовёт причину.
+    return false;
+  }
+}
+
 export interface PublishRun {
   readonly manager: Manager;
   readonly directory: string;
@@ -291,6 +330,15 @@ export interface PublishOutcome {
   readonly destination: string | null;
   readonly published: boolean;
   readonly said: string;
+  /**
+   * Сухой прогон САМ отказал — до того, как назвал назначение.
+   *
+   * Отдельно от «назначение не прочитано», потому что чинят это по-разному:
+   * непрочитанный адрес отправляет смотреть на реестр, а отказ менеджера — на
+   * пакет. Поймано собственной пробой: битое имя пакета приезжало как
+   * `wrong-destination`, и человек пошёл бы проверять адрес (`tasker:BASER2-257`).
+   */
+  readonly refusedByManager: boolean;
 }
 
 /**
@@ -310,7 +358,12 @@ export function runPublish(run: PublishRun): PublishOutcome {
     const dry = call(run, ['--dry-run']);
     const destination = destinationOf(dry.said);
     if (destination === null || destination !== normalize(run.address)) {
-      return { destination, published: false, said: dry.said };
+      return {
+        destination,
+        published: false,
+        said: dry.said,
+        refusedByManager: dry.code !== 0,
+      };
     }
 
     const live = call(run, []);
@@ -318,6 +371,7 @@ export function runPublish(run: PublishRun): PublishOutcome {
       destination,
       published: live.code === 0,
       said: live.said,
+      refusedByManager: false,
     };
   } finally {
     npmrc.restore();

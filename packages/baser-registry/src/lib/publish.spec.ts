@@ -27,7 +27,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { shopLayout } from './layout.js';
 import { HOME_VARIABLE } from './location.js';
 import { ShopProblemLog } from './problems.js';
-import { chooseManager, npmrcFor, readManifest } from './publish.js';
+import { chooseManager, npmrcFor, onShelf, readManifest } from './publish.js';
+import { exitCodeOf } from './result.js';
 import { down, publish, up } from './shop.js';
 
 let root: string;
@@ -78,7 +79,7 @@ describe('одна команда кладёт товар на склад — б
     expect(answer.outcome, JSON.stringify(answer.problems)).toBe('published');
     expect(answer.published?.manager).toBe('npm');
     expect(answer.published?.destination).toBe(address);
-    expect(await onShelf('@omnifield/publish-plain')).toBe(true);
+    expect(await onShelfHere('@omnifield/publish-plain')).toBe(true);
   }, 120_000);
 
   it('НЕГАТИВНЫЙ КОНТРОЛЬ: чужой СКОУП в окружении не уводит товар', async () => {
@@ -130,6 +131,55 @@ describe('одна команда кладёт товар на склад — б
     });
   }, 180_000);
 
+  it('ПОВТОР спокоен: «уже на складе», а не «сломалось»', async () => {
+    // `up` и `down` в этой зоне идемпотентны, `publish` из ряда выпадал: восемь
+    // отказов подряд на исправном складе, и человек шёл чинить то, что не
+    // сломано (`tasker:BASER2-257`).
+    const where = makePackage('@omnifield/publish-twice', '0.1.0');
+
+    const first = await publish({ cwd: root, directory: where, ...options });
+    expect(first.outcome, JSON.stringify(first.problems)).toBe('published');
+
+    const again = await publish({ cwd: root, directory: where, ...options });
+
+    expect(again.outcome).toBe('already-published');
+    // Успех, а не отказ: конвейер, публикующий десять пакетов, не должен
+    // падать на том, что три из них уже там.
+    expect(exitCodeOf(again)).toBe(0);
+    expect(again.problems).toEqual([]);
+    // И товар при этом назван — человеку видно, о чём речь.
+    expect(again.published?.name).toBe('@omnifield/publish-twice');
+    expect(again.published?.version).toBe('0.1.0');
+  }, 180_000);
+
+  it('и склад повтором НЕ меняется — то же состояние, а не перезапись', async () => {
+    const where = makePackage('@omnifield/publish-untouched', '0.2.0');
+    await publish({ cwd: root, directory: where, ...options });
+
+    const before = await shelfEntry('@omnifield/publish-untouched');
+    await publish({ cwd: root, directory: where, ...options });
+    const after = await shelfEntry('@omnifield/publish-untouched');
+
+    expect(Object.keys(after.versions)).toEqual(Object.keys(before.versions));
+    expect(after.versions['0.2.0']?.dist?.shasum).toBe(
+      before.versions['0.2.0']?.dist?.shasum,
+    );
+  }, 180_000);
+
+  it('ДРУГАЯ версия того же пакета публикуется как обычно', async () => {
+    // «Пакет есть» и «эта версия есть» — разные утверждения; спутать их значило
+    // бы молча не публиковать новое.
+    const first = makePackage('@omnifield/publish-next', '0.1.0');
+    await publish({ cwd: root, directory: first, ...options });
+
+    const second = makePackage('@omnifield/publish-next', '0.2.0');
+    const answer = await publish({ cwd: root, directory: second, ...options });
+
+    expect(answer.outcome, JSON.stringify(answer.problems)).toBe('published');
+    const shelf = await shelfEntry('@omnifield/publish-next');
+    expect(Object.keys(shelf.versions).sort()).toEqual(['0.1.0', '0.2.0']);
+  }, 180_000);
+
   it('чужой .npmrc возвращается на место — и содержимым, и отсутствием', async () => {
     // Правка в дереве человека обязана быть возвратной по построению.
     const where = makePackage('@omnifield/publish-keeps-npmrc', '0.1.0');
@@ -156,6 +206,24 @@ describe('отказы называются, а не случаются', () => 
     expect(answer.outcome).toBe('refused');
     expect(answer.problems.map((one) => one.code)).toContain('manifest-missing');
   }, 60_000);
+
+  it('НАСТОЯЩАЯ беда остаётся отказом, а не «уже на складе»', async () => {
+    // Спокойный исход добавлен только для «состояние достигнуто». Пакет,
+    // который менеджер отказался публиковать, на складе не появился — и
+    // называть это «делать нечего» значило бы вернуть ту же склейку исходов,
+    // только с другой стороны.
+    const where = mkdtempSync(join(root, 'битый-'));
+    writeFileSync(
+      join(where, 'package.json'),
+      JSON.stringify({ name: '@omnifield/ПЛОХОЕ-ИМЯ', version: '0.1.0' }),
+      'utf8',
+    );
+
+    const answer = await publish({ cwd: root, directory: where, ...options });
+
+    expect(answer.outcome).toBe('failed');
+    expect(answer.problems.map((one) => one.code)).toContain('publish-failed');
+  }, 120_000);
 
   it('магазин закрыт — класть некуда, и это сказано до правки чужих файлов', async () => {
     const closed = mkdtempSync(join(tmpdir(), 'baser-registry-closed-'));
@@ -215,6 +283,27 @@ describe('менеджер выбирается по манифесту, а не
   it('без workspace: хватает npm', () => {
     expect(chooseManager(false)).toBe('npm');
   });
+});
+
+describe('вопрос складу отвечает фактом, а не догадкой', () => {
+  it('нет такой версии — значит нет, и это не отказ', async () => {
+    expect(await onShelf(address, '@omnifield/publish-plain', '9.9.9')).toBe(
+      false,
+    );
+  });
+
+  it('пакета нет вовсе — тоже спокойное «нет»', async () => {
+    expect(await onShelf(address, '@omnifield/никогда-не-был', '1.0.0')).toBe(
+      false,
+    );
+  });
+
+  it('склад не отвечает — утверждать нечего, отвечаем «нет»', async () => {
+    // Иначе недоступный склад читался бы как «всё уже опубликовано».
+    expect(
+      await onShelf('http://127.0.0.1:1', '@omnifield/что-угодно', '1.0.0'),
+    ).toBe(false);
+  }, 30_000);
 });
 
 describe('строки конфига называют адрес И на скоуп', () => {
@@ -295,7 +384,16 @@ function makeWorkspace(tag: string, libVersion: string): string {
   return join(where, 'packages', 'app');
 }
 
-async function onShelf(name: string): Promise<boolean> {
+async function shelfEntry(name: string): Promise<{
+  versions: Record<string, { dist?: { shasum?: string } }>;
+}> {
+  const response = await fetch(`${address}/${encodeURIComponent(name)}`);
+  return (await response.json()) as {
+    versions: Record<string, { dist?: { shasum?: string } }>;
+  };
+}
+
+async function onShelfHere(name: string): Promise<boolean> {
   const response = await fetch(`${address}/${encodeURIComponent(name)}`);
   return response.ok;
 }
