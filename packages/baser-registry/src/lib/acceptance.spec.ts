@@ -1,0 +1,486 @@
+/**
+ * ПРИЁМКА МАГАЗИНА — ИСПОЛНЕНИЕМ, а не наличием файлов.
+ *
+ * Каждая проба здесь поднимает настоящую раздачу, публикует настоящим `npm` и
+ * ставит настоящей установкой. «Файл лежит» не закрывает ни одного пункта: цена
+ * такой приёмки — секунды, и она оплачена сознательно.
+ *
+ * ── ПУБЛИКАЦИЯ ИДЁТ ПО ПРАВИЛУ, КОТОРОЕ МЫ ОПЛАТИЛИ ЖИВЬЁМ ───────────────────
+ *
+ * Изолированный конфиг И явный адрес — ВМЕСТЕ, порознь не считается
+ * (`tasker:BASER2-249`):
+ *
+ * - без изоляции чужая скоуп-настройка бьёт `--registry` МОЛЧА, и товар уезжает
+ *   в чужой реестр с нулевым кодом возврата — так проба зоны однажды
+ *   опубликовала мусор в GitHub Packages организации;
+ * - изоляция без адреса хуже: пустой конфиг снимает и скоуп-настройку, и товар
+ *   уезжает в ПУБЛИЧНЫЙ npm — наружу и навсегда.
+ *
+ * Поэтому перед каждой живой публикацией проба СПРАШИВАЕТ `--dry-run`, куда та
+ * поедет, и сверяет строку `Publishing to <адрес>` буквально. Замер, а не
+ * намерение: «команда выглядит правильной» доказательством не является.
+ *
+ * ── СТРОКИ КОНФИГА БЕРУТСЯ ИЗ ОТВЕТА КОМАНДЫ ────────────────────────────────
+ *
+ * `.npmrc` для публикации и установки собирается не руками пробы, а из
+ * `access.npmrc` — того, что магазин ОБЕЩАЕТ человеку. Так обещание и его
+ * мерило заведены парой: разойдясь, они красят приёмку, а не тихо расходятся.
+ *
+ * ── АПСТРИМ — ВТОРОЙ МАГАЗИН, А НЕ ПУБЛИЧНЫЙ NPM ────────────────────────────
+ *
+ * Пункт про прокси проверяется механикой, а не наличием интернета: наверху
+ * стоит такая же раздача, поднятая тем же `up`. Проба не ходит в сеть ни разу и
+ * потому не мигает в конвейере. Живой публичный апстрим проверен руками при
+ * разработке — это другой вопрос (связь), и мешать его с этим не нужно.
+ */
+
+import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { AddressInfo } from 'node:net';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { down, status, up } from './shop.js';
+import type { ShopResult } from './result.js';
+
+/** Локация с магазином: корень, порт и конфиг, которым в неё ходят. */
+interface Shop {
+  readonly root: string;
+  readonly port: number;
+  readonly npmrc: string;
+}
+
+let upstream: Shop;
+let shop: Shop;
+let cache: string;
+
+beforeAll(async () => {
+  cache = mkdtempSync(join(tmpdir(), 'baser-registry-cache-'));
+
+  // Наверху — такая же раздача. Ей апстрим не нужен: всё, что у неё спросят,
+  // положено туда пробой руками.
+  upstream = await makeShop({ uplink: null });
+  await up({ cwd: upstream.root });
+  await npmrcFromAnswer(upstream);
+  publish(upstream, '@sosed/from-upstream', '2.0.0');
+
+  shop = await makeShop({ uplink: `http://127.0.0.1:${upstream.port}` });
+}, 60_000);
+
+afterAll(async () => {
+  // Процессы гасим ВСЕГДА, даже если пробы упали: утёкшая раздача займёт порт
+  // и покрасит следующий прогон причиной, которая к нему не относится.
+  for (const one of [shop, upstream]) {
+    if (one) await down({ cwd: one.root });
+    if (one) rmSync(one.root, { recursive: true, force: true });
+  }
+  if (cache) rmSync(cache, { recursive: true, force: true });
+}, 60_000);
+
+describe('1 · в пустой локации магазин поднимается и называет себя', () => {
+  it('up поднимает раздачу, а status подтверждает её ответом', async () => {
+    const started = await up({ cwd: shop.root });
+
+    expect(started.outcome).toBe('started');
+    expect(started.state).toBe('running');
+
+    const asked = await status({ cwd: shop.root });
+
+    expect(asked.state).toBe('running');
+    expect(asked.shop.address).toBe(`http://127.0.0.1:${shop.port}`);
+    // Живость — ФАКТ ответа раздачи, а не наличие заявки на диске.
+    expect(asked.shop.pid).toBeGreaterThan(0);
+
+    // Дальше проба ходит в магазин ТЕМ, что он сам обещает человеку.
+    await npmrcFromAnswer(shop);
+  });
+
+  it('второй up ничего не перезапускает — установки, идущие сейчас, живы', async () => {
+    const again = await up({ cwd: shop.root });
+
+    expect(again.outcome).toBe('already-running');
+    expect(again.state).toBe('running');
+  });
+
+  it('от магазина осталась ровно одна папка в корне локации', () => {
+    expect(existsSync(join(shop.root, '.baser-registry', 'config.yml'))).toBe(
+      true,
+    );
+    expect(existsSync(join(shop.root, '.baser-registry', 'storage'))).toBe(true);
+  });
+});
+
+describe('2 · в магазин публикуется пакет', () => {
+  it('назначение сверяется ДО живой команды, и это наш адрес', () => {
+    const where = dryRunDestination(shop, '@omnifield/registry-acceptance', '0.1.0');
+
+    expect(where).toBe(`http://127.0.0.1:${shop.port}`);
+  });
+
+  it('публикация проходит', () => {
+    const done = publish(shop, '@omnifield/registry-acceptance', '0.1.0');
+
+    expect(done).toContain('@omnifield/registry-acceptance');
+  });
+
+  it('НЕГАТИВНЫЙ КОНТРОЛЬ: чужой адрес в окружении не уводит публикацию', () => {
+    // Тот самый случай, на котором приёмка уже уехала в публичный npm:
+    // переменные окружения бьют файл конфига, а пробы бегут из-под npm, который
+    // раздаёт детям свои npm_config_*. Здесь яд подмешан НАМЕРЕННО, и защита
+    // обязана его перебить — иначе регресс уедет наружу молча.
+    const where = dryRunDestination(shop, '@omnifield/registry-poison', '0.0.1', {
+      npm_config_registry: 'https://registry.npmjs.org/',
+      'npm_config_@omnifield:registry': 'https://npm.pkg.github.com',
+    });
+
+    expect(where).toBe(`http://127.0.0.1:${shop.port}`);
+  });
+
+  it('товар виден в ответе магазина', async () => {
+    const asked = await status({ cwd: shop.root });
+
+    expect(asked.stock.packages).toBeGreaterThan(0);
+  });
+});
+
+describe('3 · из магазина пакет ставится — тот самый', () => {
+  it('ставится в чистый каталог с холодным кэшем', () => {
+    const where = install(shop, '@omnifield/registry-acceptance');
+    const manifest = JSON.parse(
+      readFileSync(
+        join(where, 'node_modules', '@omnifield', 'registry-acceptance', 'package.json'),
+        'utf8',
+      ),
+    ) as { version: string; stamp?: string };
+
+    expect(manifest.version).toBe('0.1.0');
+    // Метка внутри пакета: доказывает, что приехал НАШ, а не одноимённый
+    // откуда-то ещё. Версии для этого мало — версия совпасть может.
+    expect(manifest.stamp).toBe('из этого магазина');
+  });
+});
+
+describe('4 · down закрывает раздачу, и оттуда больше не ставится', () => {
+  it('down отвечает закрытием, status с ним согласен', async () => {
+    const stopped = await down({ cwd: shop.root });
+
+    expect(stopped.outcome).toBe('stopped');
+    expect(stopped.state).toBe('closed');
+
+    const asked = await status({ cwd: shop.root });
+
+    expect(asked.state).toBe('closed');
+    expect(asked.shop.pid).toBeNull();
+  });
+
+  it('установка из закрытого магазина не проходит', () => {
+    const outcome = tryInstall(shop, '@omnifield/registry-acceptance');
+
+    expect(outcome.code).not.toBe(0);
+  });
+
+  it('второй down — не ошибка: команда идемпотентна', async () => {
+    const again = await down({ cwd: shop.root });
+
+    expect(again.outcome).toBe('already-closed');
+  });
+});
+
+describe('5 · up после down — товар на месте. Ради этого всё', () => {
+  it('раздача возвращается, и тот же пакет ставится снова', async () => {
+    const started = await up({ cwd: shop.root });
+
+    expect(started.outcome).toBe('started');
+    expect(started.stock.packages).toBeGreaterThan(0);
+
+    const where = install(shop, '@omnifield/registry-acceptance');
+
+    expect(
+      existsSync(
+        join(where, 'node_modules', '@omnifield', 'registry-acceptance', 'package.json'),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('6 · перезапуск контейнера: магазин закрыт, товар цел', () => {
+  it('заявка пережила процесс — и магазин честно говорит «закрыт»', async () => {
+    const before = await status({ cwd: shop.root });
+    const pid = before.shop.pid;
+    expect(pid).not.toBeNull();
+
+    // Контейнер останавливают не вежливо. Процесс умирает, папка остаётся —
+    // ровно в этом состоянии просыпается локация.
+    process.kill(pid as number, 'SIGKILL');
+    await waitUntilClosed(shop);
+
+    const asked = await status({ cwd: shop.root });
+
+    expect(asked.state).toBe('closed');
+    // Заявка на диске осталась: по ней и видно, что магазин НЕ ПЕРЕЖИЛ
+    // остановку, а не «его тут никогда не было».
+    expect(asked.shop.claimed).toBe(true);
+    expect(existsSync(join(shop.root, '.baser-registry', 'storage'))).toBe(true);
+  });
+
+  it('up возвращает раздачу с прежним товаром', async () => {
+    const started = await up({ cwd: shop.root });
+
+    expect(started.outcome).toBe('started');
+
+    const where = install(shop, '@omnifield/registry-acceptance');
+
+    expect(
+      existsSync(
+        join(where, 'node_modules', '@omnifield', 'registry-acceptance', 'package.json'),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('7 · чего у нас нет — берётся наверху и кэшируется', () => {
+  it('пакет, которого на складе не было, ставится ЧЕРЕЗ магазин', () => {
+    const storage = join(shop.root, '.baser-registry', 'storage', '@sosed');
+    expect(existsSync(storage)).toBe(false);
+
+    const where = install(shop, '@sosed/from-upstream');
+    const manifest = JSON.parse(
+      readFileSync(
+        join(where, 'node_modules', '@sosed', 'from-upstream', 'package.json'),
+        'utf8',
+      ),
+    ) as { version: string };
+
+    expect(manifest.version).toBe('2.0.0');
+  });
+
+  it('и остаётся на складе: прокси кэширует, а не просто проводит', () => {
+    // Ради этого прокси и ставится: локация переживает падение апстрима на
+    // том, что уже спрашивала.
+    expect(
+      existsSync(join(shop.root, '.baser-registry', 'storage', '@sosed')),
+    ).toBe(true);
+  });
+});
+
+/** Заводит локацию с настройками и отдаёт то, чем в неё ходить. */
+async function makeShop(options: { uplink: string | null }): Promise<Shop> {
+  const root = mkdtempSync(join(tmpdir(), 'baser-registry-loc-'));
+  const port = await freePort();
+
+  mkdirSync(join(root, '.baser-registry'), { recursive: true });
+  writeFileSync(
+    join(root, '.baser-registry', 'config.yml'),
+    [
+      `port: ${port}`,
+      ...(options.uplink ? [`uplink: ${options.uplink}`] : []),
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const npmrc = join(root, 'proba.npmrc');
+  return { root, port, npmrc };
+}
+
+/**
+ * Пишет конфиг ИЗ ОТВЕТА МАГАЗИНА и возвращает путь к нему.
+ *
+ * Строки не сочиняются здесь: берётся `access.npmrc` — ровно то, что магазин
+ * обещает человеку. Обещание и его мерило заведены парой.
+ */
+async function npmrcFromAnswer(one: Shop): Promise<string> {
+  const answer: ShopResult = await status({ cwd: one.root });
+  writeFileSync(one.npmrc, `${answer.access.npmrc.join('\n')}\n`, 'utf8');
+  return one.npmrc;
+}
+
+function packageDir(name: string, version: string, root: string): string {
+  const where = mkdtempSync(join(root, 'tovar-'));
+  writeFileSync(
+    join(where, 'package.json'),
+    JSON.stringify({
+      name,
+      version,
+      license: 'MIT',
+      stamp: 'из этого магазина',
+    }),
+    'utf8',
+  );
+  return where;
+}
+
+/**
+ * ОКРУЖЕНИЕ БЕЗ ЧУЖИХ НАСТРОЕК NPM.
+ *
+ * Третий уровень той же ловушки, и поймал его машинный pre-commit. Приоритет у
+ * npm такой: флаги командной строки → ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ → файл конфига.
+ * Пробы запускаются из `pnpm verify`, то есть из-под npm, а он раздаёт детям
+ * свои `npm_config_*` — и они бьют наш `--userconfig` молча.
+ *
+ * Так проба, изолированная одним лишь файлом, ушла публиковать в ПУБЛИЧНЫЙ npm.
+ * Спасло отсутствие токена (`ENEEDAUTH`), а не наша осторожность: с токеном
+ * товар уехал бы наружу и навсегда — ровно то, о чём предупреждал вердикт
+ * architect'а в `tasker:BASER2-249`.
+ */
+function npmEnv(): NodeJS.ProcessEnv {
+  const clean: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (/^npm_config_/i.test(key)) continue;
+    clean[key] = value;
+  }
+  return clean;
+}
+
+/** Адрес магазина — то, куда обязана поехать любая публикация этой пробы. */
+function addressOf(one: Shop): string {
+  return `http://127.0.0.1:${one.port}`;
+}
+
+/**
+ * Флаги адреса: общий И на скоуп пакета.
+ *
+ * Оба, а не один: скоуп-настройка бьёт общий `--registry` молча, поэтому пакету
+ * со скоупом адрес называется отдельно и явно.
+ */
+function addressFlags(one: Shop, name: string): string[] {
+  const address = addressOf(one);
+  const scope = name.startsWith('@') ? name.split('/')[0] : null;
+  return [
+    '--registry',
+    address,
+    ...(scope ? [`--${scope}:registry=${address}`] : []),
+  ];
+}
+
+/** Куда поедет публикация — спрошено сухим прогоном, а не предположено. */
+function dryRunDestination(
+  one: Shop,
+  name: string,
+  version: string,
+  poison: Record<string, string> = {},
+): string {
+  const where = packageDir(name, version, one.root);
+  const outcome = spawnSync(
+    'npm',
+    [
+      'publish',
+      '--dry-run',
+      '--userconfig',
+      one.npmrc,
+      ...addressFlags(one, name),
+    ],
+    { cwd: where, encoding: 'utf8', env: { ...npmEnv(), ...poison } },
+  );
+
+  const said = `${outcome.stdout}${outcome.stderr}`;
+  const found = /Publishing to (\S+)/.exec(said);
+  return found ? found[1] : said;
+}
+
+/**
+ * Публикует — но СНАЧАЛА спрашивает, куда поедет.
+ *
+ * Сверка стоит внутри самой публикации, а не отдельной пробой: пробу можно
+ * забыть позвать, а этот шаг обойти нельзя. Ровно на «забыл проверить»
+ * приёмка уже один раз уехала в чужой реестр.
+ */
+function publish(one: Shop, name: string, version: string): string {
+  const destination = dryRunDestination(one, name, version);
+  expect(destination, 'публикация поедет НЕ в наш магазин').toBe(addressOf(one));
+
+  const where = packageDir(name, version, one.root);
+  const outcome = spawnSync(
+    'npm',
+    ['publish', '--userconfig', one.npmrc, ...addressFlags(one, name)],
+    { cwd: where, encoding: 'utf8', env: npmEnv() },
+  );
+
+  const said = `${outcome.stdout}${outcome.stderr}`;
+  expect(outcome.status, said).toBe(0);
+  return said;
+}
+
+function tryInstall(
+  one: Shop,
+  name: string,
+): { code: number | null; said: string } {
+  const where = mkdtempSync(join(one.root, 'client-'));
+  const outcome = spawnSync(
+    'npm',
+    [
+      'install',
+      name,
+      '--userconfig',
+      one.npmrc,
+      ...addressFlags(one, name),
+      '--no-package-lock',
+      // Кэш свой и холодный: иначе установка могла бы взять пакет из чужого
+      // кэша и зеленеть на закрытом магазине.
+      '--cache',
+      mkdtempSync(join(cache, 'cold-')),
+      // ПОВТОРЫ СНЯТЫ НАМЕРЕННО. Проба спрашивает «идёт ли установка из
+      // закрытого магазина», а не «сколько npm готов ждать»: с дефолтными
+      // повторами он терпел больше минуты и упирался в порог пробы — красное по
+      // таймауту вместо честного отказа. Отказ от этого не изменился, изменилось
+      // только время, за которое он назван.
+      '--fetch-retries',
+      '0',
+      '--fetch-timeout',
+      '5000',
+    ],
+    { cwd: where, encoding: 'utf8', env: npmEnv() },
+  );
+  return {
+    code: outcome.status,
+    said: `${outcome.stdout}${outcome.stderr}`,
+  };
+}
+
+function install(one: Shop, name: string): string {
+  const where = mkdtempSync(join(one.root, 'client-'));
+  const outcome = spawnSync(
+    'npm',
+    [
+      'install',
+      name,
+      '--userconfig',
+      one.npmrc,
+      ...addressFlags(one, name),
+      '--no-package-lock',
+      '--cache',
+      mkdtempSync(join(cache, 'cold-')),
+    ],
+    { cwd: where, encoding: 'utf8', env: npmEnv() },
+  );
+  expect(outcome.status, `${outcome.stdout}${outcome.stderr}`).toBe(0);
+  return where;
+}
+
+/** Ждёт, пока раздача перестанет отвечать: смерть процесса не мгновенна. */
+async function waitUntilClosed(one: Shop): Promise<void> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const asked = await status({ cwd: one.root });
+    if (asked.state === 'closed') return;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+}
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const port = (server.address() as AddressInfo).port;
+      server.close(() => resolve(port));
+    });
+  });
+}

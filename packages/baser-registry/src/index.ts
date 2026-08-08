@@ -27,3 +27,24 @@ export type { ShopProblem, ShopProblemCode } from './lib/problems.js';
 
 export { createTrace } from './lib/trace.js';
 export type { TraceRecorder, TraceSpan } from './lib/trace.js';
+
+export { down, status, up } from './lib/shop.js';
+export type { ShopOptions } from './lib/shop.js';
+
+export { exitCodeOf, SCHEMA_VERSION } from './lib/result.js';
+export type {
+  AccessReport,
+  LocationReport,
+  ScopeConflict,
+  ShopCommand,
+  ShopOutcome,
+  ShopReport,
+  ShopResult,
+  ShopState,
+  StockReport,
+  WriteReport,
+} from './lib/result.js';
+
+export { renderText } from './lib/render.js';
+export { cli, USAGE } from './lib/cli.js';
+export type { CliOutcome } from './lib/cli.js';
