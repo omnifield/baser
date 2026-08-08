@@ -1,0 +1,25 @@
+/**
+ * Публичная поверхность магазина.
+ *
+ * Наружу уходит то, чем магазином пользуются программно: раскладка папки,
+ * настройки, форма ответа и коды отказов. Ветвиться потребитель обязан по ним, а
+ * не по тексту, который мы печатаем (`kb:BASER3-10`).
+ */
+
+export { SHOP_DIRECTORY, shopLayout } from './lib/layout.js';
+export type { ShopLayout } from './lib/layout.js';
+
+export {
+  DEFAULT_SETTINGS,
+  clientAddress,
+  listenAddress,
+  readSettings,
+  settingsTemplate,
+} from './lib/settings.js';
+export type { ShopSettings } from './lib/settings.js';
+
+export { ShopProblemLog } from './lib/problems.js';
+export type { ShopProblem, ShopProblemCode } from './lib/problems.js';
+
+export { createTrace } from './lib/trace.js';
+export type { TraceRecorder, TraceSpan } from './lib/trace.js';

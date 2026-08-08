@@ -96,6 +96,8 @@ importers:
 
   packages/baser-devbox: {}
 
+  packages/baser-git: {}
+
   packages/baser-materialize:
     dependencies:
       '@omnifield/baser-contracts':
@@ -120,6 +122,18 @@ importers:
       tslib:
         specifier: ^2.3.0
         version: 2.8.1
+
+  packages/baser-registry:
+    dependencies:
+      tslib:
+        specifier: ^2.3.0
+        version: 2.8.1
+      verdaccio:
+        specifier: ^6.3.2
+        version: 6.8.0(typanion@3.14.0)
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
 
   packages/baser-release: {}
 

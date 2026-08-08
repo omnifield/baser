@@ -1,0 +1,38 @@
+{
+  "name": "@omnifield/baser-registry",
+  "version": "0.1.0-dev.1",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/omnifield/baser.git",
+    "directory": "packages/baser-registry"
+  },
+  "description": "Магазин локации: раздача пакетов, живая пока жив контейнер, и склад, переживающий остановку",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "baser-registry": "./dist/bin/baser-registry.js"
+  },
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@omnifield/baser-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!**/*.tsbuildinfo"
+  ],
+  "dependencies": {
+    "tslib": "^2.3.0",
+    "verdaccio": "^6.3.2",
+    "yaml": "^2.9.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

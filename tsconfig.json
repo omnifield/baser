@@ -4,9 +4,6 @@
   "files": [],
   "references": [
     {
-      "path": "./packages/baser-release"
-    },
-    {
       "path": "./packages/baser-materialize"
     },
     {
@@ -20,6 +17,9 @@
     },
     {
       "path": "./packages/baser-pack"
+    },
+    {
+      "path": "./packages/baser-registry"
     }
   ]
 }
