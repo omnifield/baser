@@ -1,8 +1,13 @@
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import { shopLayout } from './layout.js';
 import { DEFAULT_SETTINGS } from './settings.js';
-import { verdaccioBin, verdaccioConfig } from './verdaccio.js';
+import { shopEntry, verdaccioConfig } from './verdaccio.js';
 
 const layout = shopLayout('/локация');
 
@@ -66,10 +71,74 @@ describe('конфиг раздачи собирается целиком из �
   });
 });
 
-describe('исполняемый файл раздачи', () => {
-  it('резолвится от нашего пакета, а не от каталога локации', () => {
-    // Магазин ставится глобально и работает в чужих деревьях, где своего
-    // node_modules нет и быть не должно.
-    expect(verdaccioBin()).toMatch(/verdaccio/);
+describe('запускатель раздачи судится ЗАПУСКОМ, а не видом строки', () => {
+  it('файл существует на диске', () => {
+    // Прежняя проба здесь была `expect(verdaccioBin()).toMatch(/verdaccio/)` —
+    // она проверяла, что СТРОКА содержит слово. Такая проба зеленеет и на пути,
+    // который никуда не ведёт, и ровно это она и сделала: выпущенный пакет падал
+    // на `up`, а приёмка была зелёной (`tasker:BASER2-251`).
+    expect(existsSync(shopEntry())).toBe(true);
+  });
+
+  it('и РЕАЛЬНО поднимает раздачу, которая отвечает', async () => {
+    // Доказательство — ответивший сервер. Ни путь, ни его вид доказательством
+    // не являются: чужой пакет вправе закрыть подпуть в любом миноре, и узнать
+    // об этом мы должны здесь, а не от человека, у которого не поднялся магазин.
+    const root = mkdtempSync(join(tmpdir(), 'baser-registry-entry-'));
+    const port = await freePort();
+    const home = join(root, '.baser-registry');
+    const storage = join(home, 'storage');
+    mkdirSync(storage, { recursive: true });
+
+    const configPath = join(home, 'verdaccio.yaml');
+    writeFileSync(
+      configPath,
+      verdaccioConfig(
+        { ...DEFAULT_SETTINGS, port },
+        shopLayout(root),
+        join(home, 'shop.log'),
+      ),
+      'utf8',
+    );
+
+    const child = spawn(
+      process.execPath,
+      [shopEntry(), configPath, '127.0.0.1', String(port)],
+      { stdio: 'ignore', detached: true },
+    );
+
+    try {
+      expect(await answered(`http://127.0.0.1:${port}`)).toBe(true);
+    } finally {
+      child.kill('SIGKILL');
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
+
+/** Ждёт, пока раздача ответит на `/-/ping`. */
+async function answered(address: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      const response = await fetch(`${address}/-/ping`, {
+        signal: AbortSignal.timeout(1000),
+      });
+      if (response.ok) return true;
+    } catch {
+      // Ещё не поднялся — это ожидаемо, ждём дальше.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  return false;
+}
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const port = (server.address() as AddressInfo).port;
+      server.close(() => resolve(port));
+    });
+  });
+}
