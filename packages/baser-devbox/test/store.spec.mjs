@@ -34,6 +34,8 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { containerEnv } from './env.mjs';
+// Порог помеченных им проб — с причиной и замером на ЗАГРУЖЕННОЙ машине там же.
+import { MANAGER_PROBE_MS } from './limits.mjs';
 import {
   consumerConfig,
   installConsumer,
@@ -114,55 +116,76 @@ describe('настройка делает обещанное: pnpm ходит В
     expect(json.containerEnv.PNPM_CONFIG_STORE_DIR).toBe(mounted);
   });
 
-  it('ФАКТ: с этими переменными `pnpm store path` указывает В ТОМ', async () => {
-    const json = await materialize(tuning({ presets: ['omnifield'] }));
-    const target = fakeVolume();
+  // Настоящий `pnpm store path`: он разворачивает пин менеджера и читает конфиг.
+  it(
+    'ФАКТ: с этими переменными `pnpm store path` указывает В ТОМ',
+    {
+      timeout: MANAGER_PROBE_MS,
+    },
+    async () => {
+      const json = await materialize(tuning({ presets: ['omnifield'] }));
+      const target = fakeVolume();
 
-    // Имена берутся ИЗ АРТЕФАКТА, значение подменяется на каталог, который в
-    // контейнере был бы томом: проверяется механика имён, а адрес тома проверен
-    // отдельно выше. Своих имён проба не знает — иначе она доказывала бы себя.
-    const names = Object.keys(json.containerEnv).filter((key) =>
-      key.endsWith('_STORE_DIR'),
-    );
-    const path = storePath(
-      Object.fromEntries(names.map((name) => [name, target])),
-    );
+      // Имена берутся ИЗ АРТЕФАКТА, значение подменяется на каталог, который в
+      // контейнере был бы томом: проверяется механика имён, а адрес тома проверен
+      // отдельно выше. Своих имён проба не знает — иначе она доказывала бы себя.
+      const names = Object.keys(json.containerEnv).filter((key) =>
+        key.endsWith('_STORE_DIR'),
+      );
+      const path = storePath(
+        Object.fromEntries(names.map((name) => [name, target])),
+      );
 
-    expect(path.startsWith(target), `стор лёг мимо тома: ${path}`).toBe(true);
-  });
+      expect(path.startsWith(target), `стор лёг мимо тома: ${path}`).toBe(true);
+    },
+  );
 
-  it('БЕЗ них pnpm выбирает место сам — и это не том', async () => {
-    // Дефект воспроизводится, а не пересказывается: то же окружение, тот же
-    // каталог, разница ровно в переменных. Не будь этой пробы, «настройка
-    // работает» опиралось бы на то, что мы её написали.
-    const target = fakeVolume();
+  // Тот же настоящий `pnpm store path`, разница только в переменных.
+  it(
+    'БЕЗ них pnpm выбирает место сам — и это не том',
+    {
+      timeout: MANAGER_PROBE_MS,
+    },
+    async () => {
+      // Дефект воспроизводится, а не пересказывается: то же окружение, тот же
+      // каталог, разница ровно в переменных. Не будь этой пробы, «настройка
+      // работает» опиралось бы на то, что мы её написали.
+      const target = fakeVolume();
 
-    const path = storePath({});
+      const path = storePath({});
 
-    expect(path.startsWith(target)).toBe(false);
-  });
+      expect(path.startsWith(target)).toBe(false);
+    },
+  );
 
-  it('имён ДВА, потому что каждая линия pnpm читает своё', async () => {
-    // pnpm до 11-й читает npm-конфиг (`NPM_CONFIG_*`), с 11-й — свой
-    // (`PNPM_CONFIG_*`), и чужое имя каждая игнорирует молча. Назови одно — стор
-    // починится ровно половине потребителей, и снова молча. Проба не гадает,
-    // какая линия стоит на машине: она требует, чтобы РОВНО ОДНО из двух имён
-    // рулило этим pnpm, — то есть чтобы второе было не украшением, а страховкой.
-    const json = await materialize(tuning({ presets: ['omnifield'] }));
-    const target = fakeVolume();
-    const names = Object.keys(json.containerEnv).filter((key) =>
-      key.endsWith('_STORE_DIR'),
-    );
+  // ДВА прогона настоящего `pnpm store path` — по одному на каждое имя.
+  it(
+    'имён ДВА, потому что каждая линия pnpm читает своё',
+    {
+      timeout: MANAGER_PROBE_MS,
+    },
+    async () => {
+      // pnpm до 11-й читает npm-конфиг (`NPM_CONFIG_*`), с 11-й — свой
+      // (`PNPM_CONFIG_*`), и чужое имя каждая игнорирует молча. Назови одно — стор
+      // починится ровно половине потребителей, и снова молча. Проба не гадает,
+      // какая линия стоит на машине: она требует, чтобы РОВНО ОДНО из двух имён
+      // рулило этим pnpm, — то есть чтобы второе было не украшением, а страховкой.
+      const json = await materialize(tuning({ presets: ['omnifield'] }));
+      const target = fakeVolume();
+      const names = Object.keys(json.containerEnv).filter((key) =>
+        key.endsWith('_STORE_DIR'),
+      );
 
-    expect(names.sort()).toEqual([
-      'NPM_CONFIG_STORE_DIR',
-      'PNPM_CONFIG_STORE_DIR',
-    ]);
-    const steering = names.filter((name) =>
-      storePath({ [name]: target }).startsWith(target),
-    );
-    expect(steering.length, `имена, которые рулят: ${steering}`).toBe(1);
-  });
+      expect(names.sort()).toEqual([
+        'NPM_CONFIG_STORE_DIR',
+        'PNPM_CONFIG_STORE_DIR',
+      ]);
+      const steering = names.filter((name) =>
+        storePath({ [name]: target }).startsWith(target),
+      );
+      expect(steering.length, `имена, которые рулят: ${steering}`).toBe(1);
+    },
+  );
 
   it('тома нет — нет и переменных: пустое обещание не выдаётся за настройку', async () => {
     const json = await materialize(

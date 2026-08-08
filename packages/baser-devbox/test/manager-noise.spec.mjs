@@ -49,6 +49,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { containerEnv } from './env.mjs';
+// Порог помеченных им проб — с причиной и замером на ЗАГРУЖЕННОЙ машине там же.
+import { MANAGER_PROBE_MS } from './limits.mjs';
 import {
   consumerConfig,
   installConsumer,
@@ -220,31 +222,38 @@ const credentials = (port) =>
   `${SCOPE}:registry=http://127.0.0.1:${port}/\n//127.0.0.1:${port}/:_authToken=tok\n`;
 
 describe('проверка реестра спрашивает ТОГО, КЕМ СТАВИТ', () => {
-  it('ЛОВУШКА: npm за весь шаг не позвали ни разу', async () => {
-    const artifact = await materialize();
-    const step = checkStep(artifact);
-    const trap = npmTrap();
+  // Шаг доходит до НАСТОЯЩЕГО `pnpm whoami` — ловушка стоит только на npm.
+  it(
+    'ЛОВУШКА: npm за весь шаг не позвали ни разу',
+    {
+      timeout: MANAGER_PROBE_MS,
+    },
+    async () => {
+      const artifact = await materialize();
+      const step = checkStep(artifact);
+      const trap = npmTrap();
 
-    const result = await withRegistry(({ port }) =>
-      sh(
-        step,
-        env(artifact, {
-          npmrc: credentials(port),
-          named: { PATH: trap.PATH },
-        }).named,
-      ),
-    );
+      const result = await withRegistry(({ port }) =>
+        sh(
+          step,
+          env(artifact, {
+            npmrc: credentials(port),
+            named: { PATH: trap.PATH },
+          }).named,
+        ),
+      );
 
-    // Журнал проверяется ПЕРВЫМ, до кода возврата: с ловушкой в `PATH` шаг,
-    // который зовёт npm, отказывает и по существу — и упавшая проба называла бы
-    // отказ вместо причины, по которой он случился.
-    //
-    // Пустой журнал — и есть утверждение: обвес ставит pnpm'ом, спрашивает
-    // pnpm'ом, и npm в этом шаге не участвует ни прямо, ни через `pnpm whoami`
-    // (до 11-й линии pnpm отдаёт его npm'у — `passThruToNpm`).
-    expect(trap.calls()).toEqual([]);
-    expect(result.code, result.err).toBe(0);
-  });
+      // Журнал проверяется ПЕРВЫМ, до кода возврата: с ловушкой в `PATH` шаг,
+      // который зовёт npm, отказывает и по существу — и упавшая проба называла бы
+      // отказ вместо причины, по которой он случился.
+      //
+      // Пустой журнал — и есть утверждение: обвес ставит pnpm'ом, спрашивает
+      // pnpm'ом, и npm в этом шаге не участвует ни прямо, ни через `pnpm whoami`
+      // (до 11-й линии pnpm отдаёт его npm'у — `passThruToNpm`).
+      expect(trap.calls()).toEqual([]);
+      expect(result.code, result.err).toBe(0);
+    },
+  );
 
   it('НЕГАТИВНЫЙ КОНТРОЛЬ: ловушка ловит — иначе пустой журнал ничего не значит', async () => {
     const artifact = await materialize();
@@ -296,39 +305,56 @@ describe('одноразовая настройка тома тоже идёт �
 });
 
 describe('прогон постсоздания молчит целиком', () => {
-  it('с переменными ИЗ АРТЕФАКТА шаг проходит и не печатает ни строки', async () => {
-    const artifact = await materialize();
-    const step = checkStep(artifact);
+  // Настоящий `pnpm whoami` доходит до стаб-реестра и получает ответ.
+  it(
+    'с переменными ИЗ АРТЕФАКТА шаг проходит и не печатает ни строки',
+    {
+      timeout: MANAGER_PROBE_MS,
+    },
+    async () => {
+      const artifact = await materialize();
+      const step = checkStep(artifact);
 
-    const { result, seen } = await withRegistry(async ({ port, seen }) => ({
-      result: await sh(step, env(artifact, { npmrc: credentials(port) }).named),
-      seen,
-    }));
+      const { result, seen } = await withRegistry(async ({ port, seen }) => ({
+        result: await sh(
+          step,
+          env(artifact, { npmrc: credentials(port) }).named,
+        ),
+        seen,
+      }));
 
-    // Ровно то, что видит потребитель на пересоздании: тишина и проход дальше.
-    // Шаг, печатающий в норме, приучает не читать вывод — и предупреждение,
-    // приехавшее следом, тоже не прочтут.
-    expect(result.code, result.err).toBe(0);
-    expect(result.out).toBe('');
-    expect(result.err).toBe('');
-    // И проверка была настоящей: реестр действительно спрашивали.
-    expect(seen).toEqual(['GET /-/whoami']);
-  });
+      // Ровно то, что видит потребитель на пересоздании: тишина и проход дальше.
+      // Шаг, печатающий в норме, приучает не читать вывод — и предупреждение,
+      // приехавшее следом, тоже не прочтут.
+      expect(result.code, result.err).toBe(0);
+      expect(result.out).toBe('');
+      expect(result.err).toBe('');
+      // И проверка была настоящей: реестр действительно спрашивали.
+      expect(seen).toEqual(['GET /-/whoami']);
+    },
+  );
 
-  it('СТОР ДОЖИВАЕТ ДО УСТАНОВКИ: снятое у проверки не снято у неё', async () => {
-    const artifact = await materialize();
-    const step = checkStep(artifact);
-    const { named, store } = env(artifact, { npmrc: '' });
+  // ДВА настоящих вызова подряд: шаг проверки и `pnpm store path` за ним.
+  it(
+    'СТОР ДОЖИВАЕТ ДО УСТАНОВКИ: снятое у проверки не снято у неё',
+    {
+      timeout: MANAGER_PROBE_MS,
+    },
+    async () => {
+      const artifact = await materialize();
+      const step = checkStep(artifact);
+      const { named, store } = env(artifact, { npmrc: '' });
 
-    // Имя снимается у ОДНОЙ команды, а не у шелла: за проверкой в том же
-    // постсоздании идёт установка, и ей адрес стора нужен. Проверяется это тем
-    // же вопросом, на который потребитель получил неверный ответ, — куда
-    // указывает `pnpm store path` ПОСЛЕ шага проверки.
-    const result = await sh(`{ ${step}; }; pnpm store path`, named);
+      // Имя снимается у ОДНОЙ команды, а не у шелла: за проверкой в том же
+      // постсоздании идёт установка, и ей адрес стора нужен. Проверяется это тем
+      // же вопросом, на который потребитель получил неверный ответ, — куда
+      // указывает `pnpm store path` ПОСЛЕ шага проверки.
+      const result = await sh(`{ ${step}; }; pnpm store path`, named);
 
-    expect(
-      result.out.trim().startsWith(store),
-      `стор лёг мимо тома: ${result.out.trim()}`,
-    ).toBe(true);
-  });
+      expect(
+        result.out.trim().startsWith(store),
+        `стор лёг мимо тома: ${result.out.trim()}`,
+      ).toBe(true);
+    },
+  );
 });
