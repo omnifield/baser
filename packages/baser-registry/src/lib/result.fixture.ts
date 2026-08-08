@@ -37,6 +37,7 @@ export function sampleResult(patch: Partial<ShopResult> = {}): ShopResult {
         '//127.0.0.1:4873/:_authToken=baser-registry',
       ],
     },
+    published: null,
     writes: [],
     trace: [],
     problems: [],

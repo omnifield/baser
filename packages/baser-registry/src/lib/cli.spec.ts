@@ -52,6 +52,15 @@ describe('разбор вызова', () => {
     expect(outcome.result).toBeNull();
   });
 
+  it('лишний путь у команды, которая его не берёт, — отказ', async () => {
+    // У `up` лишний аргумент это опечатка. Проглотить её молча значит сделать
+    // не то, о чём просили, и не сказать об этом.
+    const outcome = await cli(['up', 'какой-то/путь'], process.cwd());
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.result).toBeNull();
+  });
+
   it('незнакомый флаг — отказ, а не тихо проигнорированная просьба', async () => {
     const outcome = await cli(['status', '--подробно'], process.cwd());
 

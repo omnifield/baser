@@ -37,7 +37,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { shopLayout, type ShopLayout } from './layout.js';
 import { locateRoot } from './locate.js';
@@ -59,6 +59,13 @@ import {
   type ShopState,
   type WriteReport,
 } from './result.js';
+import {
+  chooseManager,
+  managerAvailable,
+  readManifest,
+  runPublish,
+  type PublishReport,
+} from './publish.js';
 import { createTrace, type TraceRecorder } from './trace.js';
 import { shopEntry, verdaccioConfig } from './verdaccio.js';
 
@@ -99,6 +106,17 @@ export interface ShopOptions {
   readonly cwd: string;
   /** Подменяется пробами: настоящий `npm` дорог, а спрашиваем мы его ради факта. */
   readonly scopes?: (address: string, cwd: string) => Promise<ScopeConflict[]>;
+}
+
+export interface PublishOptions extends ShopOptions {
+  /**
+   * Каталог публикуемого пакета; по умолчанию — тот, откуда позвали команду.
+   *
+   * Относительный путь считается от каталога вызова, а не от корня локации:
+   * человек называет его, стоя где-то, и «относительно чего» для него очевидно
+   * ровно одно — относительно того места, где он стоит.
+   */
+  readonly directory?: string;
 }
 
 /** Поднять раздачу. Идемпотентна: на поднятом магазине не делает ничего. */
@@ -216,6 +234,89 @@ export async function down(options: ShopOptions): Promise<ShopResult> {
   return run.finish('stopped', 'closed');
 }
 
+/**
+ * Положить товар на склад локации.
+ *
+ * Команда делает правильное независимо от менеджера и от того, что настроено у
+ * человека: чистит окружение, называет адрес и на скоуп, выбирает менеджера по
+ * содержимому манифеста и сверяет назначение ДО живой публикации. Человеку
+ * знать про `.npmrc`, флаги скоупа и разницу менеджеров не нужно — в этом вся
+ * причина, по которой команда существует (`publish.ts`).
+ */
+export async function publish(options: PublishOptions): Promise<ShopResult> {
+  const run = await prepare('publish', options, { create: false });
+  if (run.refused) return run.finish('refused', 'closed');
+
+  const { settings, trace } = run;
+  const address = clientAddress(settings);
+  const directory = resolve(options.cwd, options.directory ?? '.');
+
+  const manifest = await trace.span('manifest', () =>
+    readManifest(directory, run.problems),
+  );
+  if (manifest === null) return run.finish('refused', 'closed');
+
+  // Склад закрыт — класть некуда. Спрашиваем ДО того, как трогать чужой
+  // `.npmrc`: отказ не должен оставлять следов в каталоге человека.
+  const knock = await trace.span('knock', () => knockOn(address));
+  if (knock !== 'registry') {
+    run.problems.add(
+      'shop-closed',
+      address,
+      `магазин закрыт — класть товар некуда. Поднимите его: baser-registry up`,
+    );
+    return run.finish('refused', 'closed');
+  }
+
+  const manager = chooseManager(manifest.needsWorkspace);
+  if (!managerAvailable(manager)) {
+    run.problems.add(
+      manager === 'pnpm' ? 'pnpm-required' : 'publish-failed',
+      directory,
+      manager === 'pnpm'
+        ? `у пакета есть зависимости workspace:, а pnpm в системе нет. ` +
+            `npm опубликовал бы его УСПЕШНО и сломанным — с workspace:* в манифесте, ` +
+            `который не ставится нигде`
+        : `npm в системе нет — публиковать нечем`,
+    );
+    return run.finish('refused', 'running');
+  }
+
+  const outcome = await trace.span('publish', () =>
+    runPublish({
+      manager,
+      directory,
+      address,
+      packageName: manifest.name,
+    }),
+  );
+
+  const report = {
+    name: manifest.name,
+    version: manifest.version,
+    directory,
+    manager,
+    needsWorkspace: manifest.needsWorkspace,
+    destination: outcome.destination ?? 'неизвестно',
+  };
+
+  if (!outcome.published) {
+    const wrongPlace =
+      outcome.destination === null || outcome.destination !== address;
+    run.problems.add(
+      wrongPlace ? 'wrong-destination' : 'publish-failed',
+      wrongPlace ? (outcome.destination ?? directory) : directory,
+      wrongPlace
+        ? `${manager} собрался публиковать в ${outcome.destination ?? 'неизвестно куда'}, ` +
+            `а магазин локации — ${address}. Живой публикации не было`
+        : `${manager} отказал на публикации:\n${outcome.said.trim()}`,
+    );
+    return run.finish('failed', 'running', null, report);
+  }
+
+  return run.finish('published', 'running', null, report);
+}
+
 /** Спросить, что сейчас. Ничего не меняет — в том числе не прибирает заявку. */
 export async function status(options: ShopOptions): Promise<ShopResult> {
   const run = await prepare('status', options, { create: false });
@@ -302,6 +403,7 @@ async function prepare(
     outcome: ShopOutcome,
     state: ShopState,
     pid: number | null = null,
+    published: PublishReport | null = null,
   ): ShopResult => ({
     schemaVersion: SCHEMA_VERSION,
     command,
@@ -326,6 +428,7 @@ async function prepare(
     },
     scopeConflicts,
     access: { npmrc: npmrcLines(address, scopeConflicts) },
+    published,
     writes,
     trace: trace.snapshot(),
     problems: problems.list(),

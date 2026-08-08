@@ -17,13 +17,14 @@
 import { createRequire } from 'node:module';
 import { renderText } from './render.js';
 import { exitCodeOf, SCHEMA_VERSION, type ShopResult } from './result.js';
-import { down, status, up } from './shop.js';
+import { down, publish, status, up } from './shop.js';
 
 export const USAGE = `baser-registry — магазин локации: раздача, пока жив контейнер, и склад, который её переживает
 
-  baser-registry up      поднять раздачу в этой локации
-  baser-registry down    остановить раздачу; товар остаётся на месте
-  baser-registry status  что сейчас: работает ли, по какому адресу, сколько товара
+  baser-registry up               поднять раздачу в этой локации
+  baser-registry down             остановить раздачу; товар остаётся на месте
+  baser-registry status           что сейчас: работает ли, по какому адресу, сколько товара
+  baser-registry publish [папка]  положить пакет на склад этой локации
 
   --json     ответ данными; текст — рендер поверх них
   --help     эта подсказка
@@ -43,7 +44,17 @@ const COMMANDS = {
   up,
   down,
   status,
+  publish,
 } as const;
+
+/**
+ * Команды, принимающие путь позиционным аргументом.
+ *
+ * Перечень, а не «любой аргумент, начинающийся не с дефиса»: у `up` лишний
+ * аргумент — это опечатка, и молча её проглотить значит сделать не то, о чём
+ * просили.
+ */
+const TAKES_PATH = new Set(['publish']);
 
 export async function cli(argv: string[], cwd: string): Promise<CliOutcome> {
   if (argv.includes('--help') || argv.includes('-h')) {
@@ -77,16 +88,30 @@ export async function cli(argv: string[], cwd: string): Promise<CliOutcome> {
   }
 
   const json = rest.includes('--json');
-  const unknown = rest.filter((one) => one !== '--json');
-  if (unknown.length > 0) {
+  const loose = rest.filter((one) => one !== '--json');
+
+  const flags = loose.filter((one) => one.startsWith('-'));
+  if (flags.length > 0) {
     return {
-      stdout: `${refusal('unknown-flag', unknown[0], `флага "${unknown[0]}" у команды "${name}" нет`)}\n${USAGE}\n`,
+      stdout: `${refusal('unknown-flag', flags[0], `флага "${flags[0]}" у команды "${name}" нет`)}\n${USAGE}\n`,
       exitCode: 2,
       result: null,
     };
   }
 
-  const result = await COMMANDS[name as keyof typeof COMMANDS]({ cwd });
+  const paths = loose.filter((one) => !one.startsWith('-'));
+  if (paths.length > (TAKES_PATH.has(name) ? 1 : 0)) {
+    return {
+      stdout: `${refusal('unknown-flag', paths[0], `команда "${name}" столько аргументов не принимает`)}\n${USAGE}\n`,
+      exitCode: 2,
+      result: null,
+    };
+  }
+
+  const result = await COMMANDS[name as keyof typeof COMMANDS]({
+    cwd,
+    ...(paths.length > 0 ? { directory: paths[0] } : {}),
+  });
 
   return {
     stdout: json ? `${JSON.stringify(result, null, 2)}\n` : renderText(result),
