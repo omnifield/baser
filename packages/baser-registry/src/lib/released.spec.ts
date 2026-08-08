@@ -34,7 +34,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /** Корень нашего пакета — отсюда собирается тарбол. */
@@ -46,16 +46,19 @@ const CASE_TIMEOUT_MS = 120_000;
 
 let box: string;
 let consumer: string;
-let location: string;
+let building: string;
+let shopRoot: string;
 let command: string;
 let port: number;
 
 beforeAll(async () => {
   box = mkdtempSync(join(tmpdir(), 'baser-registry-released-'));
   consumer = join(box, 'consumer');
-  location = join(box, 'location');
+  building = join(box, 'building');
+  shopRoot = join(box, 'shop');
   mkdirSync(consumer, { recursive: true });
-  mkdirSync(location, { recursive: true });
+  mkdirSync(building, { recursive: true });
+  mkdirSync(shopRoot, { recursive: true });
 
   // Тарбол собирается ровно тем же способом, каким пакет уедет в реестр.
   const packed = execFileSync(
@@ -75,12 +78,11 @@ beforeAll(async () => {
 
   command = join(consumer, 'node_modules', '.bin', 'baser-registry');
 
-  // Порт свой: приёмка не должна спорить за адрес с магазином, который мог
-  // остаться поднятым в этом же контейнере. Задаётся он единственным законным
-  // способом — файлом настроек локации, как это сделал бы человек.
+  // Порт и место магазина — свои: приёмка не должна спорить ни за адрес, ни за
+  // склад с магазином, который мог остаться поднятым в этом же контейнере.
+  // Место называет ЛОКАЦИЯ переменной, порт — файл настроек, как у человека.
   port = await freePort();
-  const config = join(location, '.omnifield', 'omnifield-registry.yaml');
-  mkdirSync(dirname(config), { recursive: true });
+  const config = join(shopRoot, 'config.yml');
   writeFileSync(config, `port: ${port}\n`, 'utf8');
 }, SETUP_TIMEOUT_MS);
 
@@ -164,9 +166,8 @@ describe('выпущенный пакет ставится и работает',
     'товар пережил остановку, и up возвращает раздачу',
     () => {
       // Обещание инструмента целиком, проверенное на ВЫПУЩЕННОМ пакете.
-      expect(existsSync(join(location, '.baser-registry', 'storage'))).toBe(
-        true,
-      );
+      // Склад лежит на уровне локации, а не внутри постройки.
+      expect(existsSync(join(shopRoot, 'storage'))).toBe(true);
 
       const again = JSON.parse(run(['up', '--json']).said) as {
         outcome: string;
@@ -285,8 +286,9 @@ describe('выпущенный пакет ставится и работает',
 
 function run(argv: string[]): { code: number | null; said: string } {
   const outcome = spawnSync(command, argv, {
-    cwd: location,
+    cwd: building,
     encoding: 'utf8',
+    env: { ...process.env, BASER_REGISTRY_HOME: shopRoot },
   });
   return {
     code: outcome.status,

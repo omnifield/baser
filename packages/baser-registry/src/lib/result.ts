@@ -17,7 +17,8 @@
 
 import type { ShopProblem } from './problems.js';
 import type { PublishReport } from './publish.js';
-import type { RootOrigin } from './locate.js';
+import type { ShopHomeOrigin } from './location.js';
+import type { BuildingOrigin } from './locate.js';
 import type { TraceSpan } from './trace.js';
 
 export type ShopCommand = 'up' | 'down' | 'status' | 'publish';
@@ -51,15 +52,35 @@ export type ShopOutcome =
   /** Вход непригоден: до попытки не дошли. */
   | 'refused';
 
-/** Где команда работала и почему именно там. */
+/**
+ * УРОВНИ МИРА, РАЗВЕДЁННЫЕ ПОЛЯМИ.
+ *
+ * Раньше здесь был один `location`, означавший клон, — и ровно в этой склейке
+ * жил дефект: команда не могла сказать, что раздача принадлежит УЧАСТКУ, а
+ * позвали её из ОДНОЙ ИЗ построек на нём (`tasker:BASER2-254`). Теперь оба
+ * уровня названы, и потребитель видит разницу без догадок.
+ */
 export interface LocationReport {
+  /** Корень магазина этой локации — общий для всех её построек. */
+  readonly shopHome: string;
+  /** Чем это место определилось: переменной локации, XDG или домашним каталогом. */
+  readonly origin: ShopHomeOrigin;
+}
+
+/** Постройка, из которой позвали команду. */
+export interface BuildingReport {
   readonly root: string;
+  /** Чем опознан её корень: клоном или каталогом вызова. */
+  readonly origin: BuildingOrigin;
   /**
-   * Чем корень опознан. Уезжает в ответ, чтобы «почему тут» не выяснялось на
-   * глаз: команда ставится глобально и зовётся откуда угодно.
+   * ЭТА постройка поднимала раздачу, которая сейчас работает.
+   *
+   * Отвечает на вопрос, из-за которого всё чинилось: «магазин работает» —
+   * правда для всей локации, но постройка, которая его не поднимала, обязана
+   * видеть разницу. `false` при работающем магазине — не ошибка и не конфликт:
+   * раздача общая, как и участок.
    */
-  readonly origin: RootOrigin;
-  readonly home: string;
+  readonly startedShop: boolean;
 }
 
 /** Сам магазин: где, по какому адресу и чем поднят. */
@@ -155,6 +176,8 @@ export interface ShopResult {
   readonly outcome: ShopOutcome;
   readonly state: ShopState;
   readonly location: LocationReport;
+  /** Откуда позвали команду. Уровень постройки, а не участка. */
+  readonly building: BuildingReport;
   readonly shop: ShopReport;
   readonly stock: StockReport;
   /**

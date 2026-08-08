@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { shopLayout } from './layout.js';
+import { HOME_VARIABLE } from './location.js';
 import { ShopProblemLog } from './problems.js';
 import {
   DEFAULT_SETTINGS,
@@ -10,7 +11,7 @@ import {
   settingsTemplate,
 } from './settings.js';
 
-const AT = '.baser-registry/config.yml';
+const AT = 'config.yml';
 
 function read(text: string | null) {
   const problems = new ShopProblemLog();
@@ -48,7 +49,7 @@ describe('рождённый файл — это дефолты, а не выб�
     // Главная проба этого файла. Шаблон рождается с ЗАКОММЕНТИРОВАННЫМИ
     // значениями, и если хоть одно окажется раскомментированным, человек
     // получит замороженный дефолт, не выбрав его: инструмент поднимет свой
-    // номер, а у локации навсегда останется вчерашний.
+    // номер, а у человека навсегда останется вчерашний.
     const { settings, problems } = read(settingsTemplate());
 
     expect(settings).toEqual(DEFAULT_SETTINGS);
@@ -143,24 +144,28 @@ describe('магазин по умолчанию виден только сво�
   });
 });
 
-describe('лог — настройка, и путь у него от корня локации', () => {
-  it('дефолт лога совпадает с раскладкой папки магазина', () => {
+describe('лог — настройка, и путь у него от корня магазина', () => {
+  it('дефолт лога совпадает с раскладкой магазина', () => {
     // Два места про один факт разъезжаются молча; здесь они сверены.
-    expect(logPath(DEFAULT_SETTINGS, '/локация')).toBe(
-      shopLayout('/локация').log,
-    );
+    const layout = shopLayout({ [HOME_VARIABLE]: '/участок/магазин' });
+
+    expect(logPath(DEFAULT_SETTINGS, layout.home.path)).toBe(layout.log);
   });
 
-  it('относительный путь считается от корня, а не от каталога вызова', () => {
-    // Ровно тот мусор, который поймало ревью: файл лёг там, где стоял человек.
-    expect(logPath({ ...DEFAULT_SETTINGS, log: 'свой.log' }, '/локация')).toBe(
-      '/локация/свой.log',
-    );
+  it('относительный путь считается от корня МАГАЗИНА, а не от постройки', () => {
+    // Лог принадлежит раздаче, а раздача — вещь локации: класть её след внутрь
+    // клона, из которого её сегодня позвали, неверно по уровню.
+    expect(
+      logPath({ ...DEFAULT_SETTINGS, log: 'свой.log' }, '/участок/магазин'),
+    ).toBe('/участок/магазин/свой.log');
   });
 
   it('абсолютный путь берётся как есть', () => {
     expect(
-      logPath({ ...DEFAULT_SETTINGS, log: '/var/log/магазин.log' }, '/локация'),
+      logPath(
+        { ...DEFAULT_SETTINGS, log: '/var/log/магазин.log' },
+        '/участок/магазин',
+      ),
     ).toBe('/var/log/магазин.log');
   });
 });

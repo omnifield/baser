@@ -25,21 +25,32 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { shopLayout } from './layout.js';
+import { HOME_VARIABLE } from './location.js';
 import { ShopProblemLog } from './problems.js';
 import { chooseManager, npmrcFor, readManifest } from './publish.js';
 import { down, publish, up } from './shop.js';
 
 let root: string;
+let shopRoot: string;
 let address: string;
 let port: number;
 
-const options = { scopes: async () => [] };
+/** Магазин пробы живёт в своём месте: чужой ~/.local/share не трогаем. */
+let options: {
+  environment: NodeJS.ProcessEnv;
+  scopes: () => Promise<never[]>;
+};
 
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), 'baser-registry-publish-'));
+  shopRoot = mkdtempSync(join(tmpdir(), 'baser-registry-publish-shop-'));
+  options = {
+    environment: { [HOME_VARIABLE]: shopRoot },
+    scopes: async () => [],
+  };
   port = await freePort();
 
-  const config = shopLayout(root).config;
+  const config = shopLayout(options.environment).config;
   mkdirSync(dirname(config), { recursive: true });
   writeFileSync(config, `port: ${port}\n`, 'utf8');
 
@@ -51,6 +62,7 @@ afterAll(async () => {
   if (root) {
     await down({ cwd: root, ...options });
     rmSync(root, { recursive: true, force: true });
+    rmSync(shopRoot, { recursive: true, force: true });
   }
 }, 120_000);
 
@@ -147,7 +159,9 @@ describe('отказы называются, а не случаются', () => 
 
   it('магазин закрыт — класть некуда, и это сказано до правки чужих файлов', async () => {
     const closed = mkdtempSync(join(tmpdir(), 'baser-registry-closed-'));
-    const config = shopLayout(closed).config;
+    const closedShop = mkdtempSync(join(tmpdir(), 'baser-registry-closed-shop-'));
+    const closedEnv = { [HOME_VARIABLE]: closedShop };
+    const config = shopLayout(closedEnv).config;
     mkdirSync(dirname(config), { recursive: true });
     writeFileSync(config, `port: ${await freePort()}\n`, 'utf8');
     const where = makePackage('@omnifield/publish-nowhere', '0.1.0', closed);
@@ -156,7 +170,8 @@ describe('отказы называются, а не случаются', () => 
       const answer = await publish({
         cwd: closed,
         directory: where,
-        ...options,
+        environment: closedEnv,
+        scopes: async () => [],
       });
 
       expect(answer.outcome).toBe('refused');
@@ -165,6 +180,7 @@ describe('отказы называются, а не случаются', () => 
       expect(existsSync(join(where, '.npmrc'))).toBe(false);
     } finally {
       rmSync(closed, { recursive: true, force: true });
+      rmSync(closedShop, { recursive: true, force: true });
     }
   }, 60_000);
 });

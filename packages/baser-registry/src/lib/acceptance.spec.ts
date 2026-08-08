@@ -49,14 +49,20 @@ import { dirname, join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { shopLayout } from './layout.js';
+import { HOME_VARIABLE } from './location.js';
 import { down, status, up } from './shop.js';
 import type { ShopResult } from './result.js';
 
 /** Локация с магазином: корень, порт и конфиг, которым в неё ходят. */
 interface Shop {
+  /** Постройка, из которой зовут команды. */
   readonly root: string;
+  /** Корень магазина ЛОКАЦИИ, в которой живёт эта постройка. */
+  readonly shopRoot: string;
   readonly port: number;
   readonly npmrc: string;
+  /** Окружение, называющее место магазина: у каждой пробы оно своё. */
+  readonly environment: NodeJS.ProcessEnv;
 }
 
 let upstream: Shop;
@@ -69,7 +75,7 @@ beforeAll(async () => {
   // Наверху — такая же раздача. Ей апстрим не нужен: всё, что у неё спросят,
   // положено туда пробой руками.
   upstream = await makeShop({ uplink: null });
-  await up({ cwd: upstream.root });
+  await up({ cwd: upstream.root, environment: upstream.environment });
   await npmrcFromAnswer(upstream);
   publish(upstream, '@sosed/from-upstream', '2.0.0');
 
@@ -80,20 +86,21 @@ afterAll(async () => {
   // Процессы гасим ВСЕГДА, даже если пробы упали: утёкшая раздача займёт порт
   // и покрасит следующий прогон причиной, которая к нему не относится.
   for (const one of [shop, upstream]) {
-    if (one) await down({ cwd: one.root });
+    if (one) await down({ cwd: one.root, environment: one.environment });
     if (one) rmSync(one.root, { recursive: true, force: true });
+    if (one) rmSync(one.shopRoot, { recursive: true, force: true });
   }
   if (cache) rmSync(cache, { recursive: true, force: true });
 }, 60_000);
 
 describe('1 · в пустой локации магазин поднимается и называет себя', () => {
   it('up поднимает раздачу, а status подтверждает её ответом', async () => {
-    const started = await up({ cwd: shop.root });
+    const started = await up({ cwd: shop.root, environment: shop.environment });
 
     expect(started.outcome).toBe('started');
     expect(started.state).toBe('running');
 
-    const asked = await status({ cwd: shop.root });
+    const asked = await status({ cwd: shop.root, environment: shop.environment });
 
     expect(asked.state).toBe('running');
     expect(asked.shop.address).toBe(`http://127.0.0.1:${shop.port}`);
@@ -105,19 +112,20 @@ describe('1 · в пустой локации магазин поднимает�
   });
 
   it('второй up ничего не перезапускает — установки, идущие сейчас, живы', async () => {
-    const again = await up({ cwd: shop.root });
+    const again = await up({ cwd: shop.root, environment: shop.environment });
 
     expect(again.outcome).toBe('already-running');
     expect(again.state).toBe('running');
   });
 
   it('от магазина осталась ровно одна папка в корне локации', () => {
-    // Человеческое — в общей папке локации, машинное — в папке магазина.
-    expect(existsSync(shopLayout(shop.root).config)).toBe(true);
-    expect(existsSync(join(shop.root, '.baser-registry', 'storage'))).toBe(true);
+    // Весь магазин — на уровне локации; в постройке от него не остаётся ничего.
+    const layout = shopLayout(shop.environment);
+    expect(existsSync(layout.config)).toBe(true);
+    expect(existsSync(layout.storage)).toBe(true);
     expect(
-      existsSync(join(shop.root, '.baser-registry', 'config.yml')),
-      'в папке магазина не должно оставаться ничего человеческого',
+      existsSync(join(shop.root, '.baser-registry')),
+      'в постройке не должно оставаться ничего от магазина',
     ).toBe(false);
   });
 });
@@ -149,7 +157,7 @@ describe('2 · в магазин публикуется пакет', () => {
   });
 
   it('товар виден в ответе магазина', async () => {
-    const asked = await status({ cwd: shop.root });
+    const asked = await status({ cwd: shop.root, environment: shop.environment });
 
     expect(asked.stock.packages).toBeGreaterThan(0);
   });
@@ -174,12 +182,12 @@ describe('3 · из магазина пакет ставится — тот са
 
 describe('4 · down закрывает раздачу, и оттуда больше не ставится', () => {
   it('down отвечает закрытием, status с ним согласен', async () => {
-    const stopped = await down({ cwd: shop.root });
+    const stopped = await down({ cwd: shop.root, environment: shop.environment });
 
     expect(stopped.outcome).toBe('stopped');
     expect(stopped.state).toBe('closed');
 
-    const asked = await status({ cwd: shop.root });
+    const asked = await status({ cwd: shop.root, environment: shop.environment });
 
     expect(asked.state).toBe('closed');
     expect(asked.shop.pid).toBeNull();
@@ -192,7 +200,7 @@ describe('4 · down закрывает раздачу, и оттуда боль�
   });
 
   it('второй down — не ошибка: команда идемпотентна', async () => {
-    const again = await down({ cwd: shop.root });
+    const again = await down({ cwd: shop.root, environment: shop.environment });
 
     expect(again.outcome).toBe('already-closed');
   });
@@ -200,7 +208,7 @@ describe('4 · down закрывает раздачу, и оттуда боль�
 
 describe('5 · up после down — товар на месте. Ради этого всё', () => {
   it('раздача возвращается, и тот же пакет ставится снова', async () => {
-    const started = await up({ cwd: shop.root });
+    const started = await up({ cwd: shop.root, environment: shop.environment });
 
     expect(started.outcome).toBe('started');
     expect(started.stock.packages).toBeGreaterThan(0);
@@ -217,7 +225,7 @@ describe('5 · up после down — товар на месте. Ради эт�
 
 describe('6 · перезапуск контейнера: магазин закрыт, товар цел', () => {
   it('заявка пережила процесс — и магазин честно говорит «закрыт»', async () => {
-    const before = await status({ cwd: shop.root });
+    const before = await status({ cwd: shop.root, environment: shop.environment });
     const pid = before.shop.pid;
     expect(pid).not.toBeNull();
 
@@ -226,17 +234,17 @@ describe('6 · перезапуск контейнера: магазин зак�
     process.kill(pid as number, 'SIGKILL');
     await waitUntilClosed(shop);
 
-    const asked = await status({ cwd: shop.root });
+    const asked = await status({ cwd: shop.root, environment: shop.environment });
 
     expect(asked.state).toBe('closed');
     // Заявка на диске осталась: по ней и видно, что магазин НЕ ПЕРЕЖИЛ
     // остановку, а не «его тут никогда не было».
     expect(asked.shop.claimed).toBe(true);
-    expect(existsSync(join(shop.root, '.baser-registry', 'storage'))).toBe(true);
+    expect(existsSync(shopLayout(shop.environment).storage)).toBe(true);
   });
 
   it('up возвращает раздачу с прежним товаром', async () => {
-    const started = await up({ cwd: shop.root });
+    const started = await up({ cwd: shop.root, environment: shop.environment });
 
     expect(started.outcome).toBe('started');
 
@@ -252,7 +260,7 @@ describe('6 · перезапуск контейнера: магазин зак�
 
 describe('7 · чего у нас нет — берётся наверху и кэшируется', () => {
   it('пакет, которого на складе не было, ставится ЧЕРЕЗ магазин', () => {
-    const storage = join(shop.root, '.baser-registry', 'storage', '@sosed');
+    const storage = join(shopLayout(shop.environment).storage, '@sosed');
     expect(existsSync(storage)).toBe(false);
 
     const where = install(shop, '@sosed/from-upstream');
@@ -270,17 +278,19 @@ describe('7 · чего у нас нет — берётся наверху и к
     // Ради этого прокси и ставится: локация переживает падение апстрима на
     // том, что уже спрашивала.
     expect(
-      existsSync(join(shop.root, '.baser-registry', 'storage', '@sosed')),
+      existsSync(join(shopLayout(shop.environment).storage, '@sosed')),
     ).toBe(true);
   });
 });
 
-/** Заводит локацию с настройками и отдаёт то, чем в неё ходить. */
+/** Заводит постройку и магазин её локации; отдаёт то, чем в него ходить. */
 async function makeShop(options: { uplink: string | null }): Promise<Shop> {
   const root = mkdtempSync(join(tmpdir(), 'baser-registry-loc-'));
+  const shopRoot = mkdtempSync(join(tmpdir(), 'baser-registry-loc-shop-'));
+  const environment = { [HOME_VARIABLE]: shopRoot };
   const port = await freePort();
 
-  const config = shopLayout(root).config;
+  const config = shopLayout(environment).config;
   mkdirSync(dirname(config), { recursive: true });
   writeFileSync(
     config,
@@ -293,7 +303,7 @@ async function makeShop(options: { uplink: string | null }): Promise<Shop> {
   );
 
   const npmrc = join(root, 'proba.npmrc');
-  return { root, port, npmrc };
+  return { root, shopRoot, port, npmrc, environment };
 }
 
 /**
@@ -303,7 +313,10 @@ async function makeShop(options: { uplink: string | null }): Promise<Shop> {
  * обещает человеку. Обещание и его мерило заведены парой.
  */
 async function npmrcFromAnswer(one: Shop): Promise<string> {
-  const answer: ShopResult = await status({ cwd: one.root });
+  const answer: ShopResult = await status({
+    cwd: one.root,
+    environment: one.environment,
+  });
   writeFileSync(one.npmrc, `${answer.access.npmrc.join('\n')}\n`, 'utf8');
   return one.npmrc;
 }

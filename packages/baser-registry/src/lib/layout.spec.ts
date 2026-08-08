@@ -1,60 +1,90 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  SETTINGS_DIRECTORY,
-  SETTINGS_FILE,
-  SHOP_DIRECTORY,
+  LEGACY_SETTINGS_PATH,
+  LEGACY_SHOP_DIRECTORY,
+  buildingLayout,
   shopLayout,
 } from './layout.js';
+import { HOME_VARIABLE, SHOP_DIRECTORY, shopHome } from './location.js';
 
-describe('человеческое и машинное лежат в РАЗНЫХ местах', () => {
-  const layout = shopLayout('/локация');
+describe('магазин целиком лежит на уровне ЛОКАЦИИ', () => {
+  const layout = shopLayout({ [HOME_VARIABLE]: '/участок/магазин' });
 
-  it('настройки — в общей папке локации, рядом с настройками соседей', () => {
-    // Человек ходит в одно место, а не ищет по дереву, где что настраивается.
-    expect(layout.config).toBe(
-      `/локация/${SETTINGS_DIRECTORY}/${SETTINGS_FILE}`,
-    );
-  });
-
-  it('имя файла — по конвенции соседей, а не «похожее»', () => {
-    // omnifield/registry → omnifield-registry.yaml, как omnifield/devbox →
-    // omnifield-devbox.yaml. Инструмент отдают другим продуктам, и каждый из
-    // них должен искать настройки там же, где искал бы у любого другого.
-    expect(SETTINGS_FILE).toBe('omnifield-registry.yaml');
-    expect(SETTINGS_DIRECTORY).toBe('.omnifield');
-  });
-
-  it('в папке магазина не остаётся НИЧЕГО человеческого', () => {
-    // Ради этого переезд и делался: папка целиком машинная, поэтому целиком
-    // годится под один игнор. Конфиг, закрытый тем же игнором, человек не
-    // увидел бы и не закоммитил.
+  it('склад, настройки и состояние — под одним корнем', () => {
+    // Вещь живёт на одном уровне. Раньше процесс и порт принадлежали
+    // контейнеру, а склад лежал в клоне, — и товар одной постройки уезжал на
+    // склад другой (`tasker:BASER2-254`).
     for (const path of [
+      layout.config,
       layout.storage,
       layout.runtime,
       layout.generatedConfig,
       layout.claim,
       layout.log,
     ]) {
-      expect(path.startsWith(`${layout.home}/`)).toBe(true);
+      expect(path.startsWith('/участок/магазин/')).toBe(true);
     }
-    expect(layout.config.startsWith(layout.home)).toBe(false);
   });
 
-  it('папка магазина лежит в корне локации', () => {
-    expect(layout.home).toBe(`/локация/${SHOP_DIRECTORY}`);
+  it('ничего из магазина не лежит внутри постройки', () => {
+    // Требование задачи дословно: место не принадлежит ни одной постройке и не
+    // попадает ни в один `git status`. Проверяется формой пути, а не обещанием.
+    const building = buildingLayout('/участок/постройка');
+
+    for (const path of [layout.config, layout.storage, layout.runtime]) {
+      expect(path.startsWith(building.root)).toBe(false);
+    }
   });
 
-  it('товар переживает остановку, состояние запуска — нет', () => {
-    // Граница, ради которой инструмент существует: контейнер остановился —
-    // магазин закрыт, ТОВАР ОСТАЛСЯ.
-    expect(layout.storage).toBe(`${layout.home}/storage`);
+  it('товар отдельно от состояния запуска: чистка одного не уносит другое', () => {
     expect(layout.storage.startsWith(layout.runtime)).toBe(false);
     for (const path of [layout.generatedConfig, layout.claim, layout.log]) {
       expect(path.startsWith(`${layout.runtime}/`)).toBe(true);
     }
   });
+});
 
-  it('прежнее место настроек названо — чтобы его заметить, а не читать', () => {
-    expect(layout.legacyConfig).toBe(`${layout.home}/config.yml`);
+describe('место магазина называет локация, а не инструмент', () => {
+  it('переменная локации сильнее всего — судьба склада её решение', () => {
+    expect(shopHome({ [HOME_VARIABLE]: '/том/магазин' })).toEqual({
+      path: '/том/магазин',
+      origin: 'variable',
+    });
+  });
+
+  it('иначе — общее место данных по стандарту рынка', () => {
+    expect(shopHome({ XDG_DATA_HOME: '/данные' })).toEqual({
+      path: `/данные/${SHOP_DIRECTORY}`,
+      origin: 'xdg',
+    });
+  });
+
+  it('иначе — домашний каталог, и это тоже названо', () => {
+    expect(shopHome({})).toEqual({
+      path: join(homedir(), '.local', 'share', SHOP_DIRECTORY),
+      origin: 'home',
+    });
+  });
+
+  it('пустое значение переменной не считается выбором', () => {
+    // Пустая строка в окружении — частый след «переменная объявлена, но не
+    // заполнена». Принять её значило бы положить магазин в корень файловой
+    // системы.
+    expect(shopHome({ [HOME_VARIABLE]: '   ' }).origin).toBe('home');
+  });
+});
+
+describe('прежние места названы, чтобы их ЗАМЕТИТЬ', () => {
+  it('оба лежат в постройке — оба были неверным уровнем', () => {
+    const building = buildingLayout('/участок/постройка');
+
+    expect(building.legacyShopConfig).toBe(
+      `/участок/постройка/${LEGACY_SHOP_DIRECTORY}/config.yml`,
+    );
+    expect(building.legacySettings).toBe(
+      `/участок/постройка/${LEGACY_SETTINGS_PATH}`,
+    );
   });
 });

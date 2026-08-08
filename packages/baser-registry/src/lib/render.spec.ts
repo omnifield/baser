@@ -7,7 +7,7 @@ describe('текст рисуется поверх данных и ничего 
   it('называет состояние, адрес, товар и апстрим', () => {
     const text = renderText(sampleResult());
 
-    expect(text).toContain('магазин работает');
+    expect(text).toContain('раздача локации работает');
     expect(text).toContain('http://127.0.0.1:4873');
     expect(text).toContain('3 пакета');
     expect(text).toContain('https://registry.npmjs.org/');
@@ -46,6 +46,20 @@ describe('текст рисуется поверх данных и ничего 
 
     expect(text).toContain('не пережил');
     expect(text).toContain('baser-registry up');
+  });
+
+  it('постройка видит, что раздачу подняла НЕ она', () => {
+    // Пункт, ради которого чинились уровни: «магазин работает» — правда для
+    // всей локации, но постройка, которая его не поднимала, обязана видеть
+    // разницу, иначе принимает общую раздачу за свою.
+    const text = renderText(
+      sampleResult({
+        building: { ...sampleResult().building, startedShop: false },
+      }),
+    );
+
+    expect(text).toContain('не эта постройка');
+    expect(text).toContain('Это не конфликт');
   });
 
   it('чужой скоуп назван вместе с адресом, куда он уводит', () => {
