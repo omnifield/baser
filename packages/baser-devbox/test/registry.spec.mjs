@@ -29,6 +29,8 @@ import { join } from 'node:path';
 // `cli`, как и `run` (`tasker:BASER2-59`).
 import { soleRun } from '../../baser-cli/src/index.ts';
 import { containerEnv } from './env.mjs';
+// Порог помеченных им проб — с причиной и замером на ЗАГРУЖЕННОЙ машине там же.
+import { MANAGER_PROBE_MS } from './limits.mjs';
 import {
   consumerConfig,
   installConsumer,
@@ -188,138 +190,168 @@ function npmrc(content = '') {
 }
 
 describe('стена без указателя: проверка ловит оба состояния', () => {
-  it('РЕЕСТР НЕ НАСТРОЕН — отказ до установки, с адресом и командами', async () => {
-    const step = await checkStep();
-    const env = npmrc();
+  // Один прогон шага: `pnpm config get` в собранном окружении.
+  it(
+    'РЕЕСТР НЕ НАСТРОЕН — отказ до установки, с адресом и командами',
+    { timeout: MANAGER_PROBE_MS },
+    async () => {
+      const step = await checkStep();
+      const env = npmrc();
 
-    const result = await sh(step, env);
+      const result = await sh(step, env);
 
-    // Отказ, а не предупреждение: установка дальше не идёт вовсе.
-    expect(result.code).toBe(1);
-    expect(result.err).toContain(
-      'тянутся из приватного реестра, а он не настроен',
-    );
-    // Названа ПРИЧИНА путаницы, а не только факт: иначе человек идёт искать пакет.
-    expect(result.err).toContain('404, пакета нет');
-    // И названо, КУДА идти — конкретным файлом, а не «настрой доступ».
-    expect(result.err).toContain('~/.npmrc');
-    expect(result.err).toContain(`npm config set ${SCOPE}:registry`);
-    expect(result.err).toContain(':_authToken');
-    // Без тома креды не переживут пересоздание контейнера — это сказано вслух, иначе
-    // человек положит токен, пересоздаст девбокс и упрётся в ту же стену второй раз.
-    expect(result.err).toContain('не переживёт пересоздание');
-    expect(env.path.endsWith('npmrc')).toBe(true);
-  });
-
-  it('С ТОМОМ КРЕДОВ адрес другой — и это тот, который реально смонтирован', async () => {
-    consumer = installConsumer({
-      repoName: 'weber',
-      config: consumerConfig(),
-      tuning: tuning({
-        presets: ['omnifield'],
-        settings: { npmScope: SCOPE, installAssistant: false },
-      }),
-    });
-    await run({ command: 'apply', cwd: consumer.root });
-    const artifact = parseJsonc(consumer.read(LIVE));
-    const post = artifact.postCreateCommand;
-    const step = post.slice(
-      post.indexOf('( reg='),
-      post.indexOf(` && ${INSTALL}`),
-    );
-
-    const result = await sh(step, npmrc());
-
-    expect(result.code).toBe(1);
-    // Путь в сообщении = путь, на который смотрит npm внутри контейнера, = точка
-    // монтирования тома. Разъедься они — человек положил бы токен мимо.
-    expect(result.err).toContain('/home/node/.secrets/npmrc');
-    expect(artifact.containerEnv.NPM_CONFIG_USERCONFIG).toBe(
-      '/home/node/.secrets/npmrc',
-    );
-    expect(artifact.mounts).toContain(
-      'source=omnifield-secrets,target=/home/node/.secrets,type=volume',
-    );
-    expect(result.err).toContain('переживает пересоздание');
-  });
-
-  it('РЕЕСТР ЕСТЬ, ДОСТУПА НЕТ — другой отказ, с адресом реестра и хостом', async () => {
-    const step = await checkStep();
-    // Порт, на котором заведомо никого нет: сетевого доступа проверке не нужно.
-    const env = npmrc(`${SCOPE}:registry=http://127.0.0.1:1/\n`);
-
-    const result = await sh(step, env);
-
-    expect(result.code).toBe(1);
-    expect(result.err).toContain('токен не положен или протух');
-    // Два состояния — два разных сообщения: чинят их по-разному.
-    expect(result.err).not.toContain('а он не настроен');
-    expect(result.err).toContain('реестр: http://127.0.0.1:1/');
-    // Хост вынут из адреса в самом шелле — команда для копипасты уже готовая.
-    expect(result.err).toContain('npm config set //127.0.0.1:1/:_authToken');
-  });
-
-  it('ДОСТУП ЕСТЬ — проверка молчит и пропускает установку', async () => {
-    const step = await checkStep();
-
-    const { result, seen } = await withRegistry(async ({ port, seen }) => {
-      const env = npmrc(
-        `${SCOPE}:registry=http://127.0.0.1:${port}/\n` +
-          `//127.0.0.1:${port}/:_authToken=tok\n`,
+      // Отказ, а не предупреждение: установка дальше не идёт вовсе.
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(
+        'тянутся из приватного реестра, а он не настроен',
       );
-      return { result: await sh(step, env), seen };
-    });
+      // Названа ПРИЧИНА путаницы, а не только факт: иначе человек идёт искать пакет.
+      expect(result.err).toContain('404, пакета нет');
+      // И названо, КУДА идти — конкретным файлом, а не «настрой доступ».
+      expect(result.err).toContain('~/.npmrc');
+      expect(result.err).toContain(`npm config set ${SCOPE}:registry`);
+      expect(result.err).toContain(':_authToken');
+      // Без тома креды не переживут пересоздание контейнера — это сказано вслух, иначе
+      // человек положит токен, пересоздаст девбокс и упрётся в ту же стену второй раз.
+      expect(result.err).toContain('не переживёт пересоздание');
+      expect(env.path.endsWith('npmrc')).toBe(true);
+    },
+  );
 
-    expect(result.code).toBe(0);
-    // Молчит целиком: шаг, печатающий в норме, приучает не читать вывод.
-    expect(result.out).toBe('');
-    expect(result.err).toBe('');
-    // И проверка была НАСТОЯЩЕЙ — реестр действительно спрашивали.
-    expect(seen).toEqual(['GET /-/whoami']);
-  });
+  // Один прогон шага, профиль полный: раскладка тяжелее, менеджер тот же.
+  it(
+    'С ТОМОМ КРЕДОВ адрес другой — и это тот, который реально смонтирован',
+    { timeout: MANAGER_PROBE_MS },
+    async () => {
+      consumer = installConsumer({
+        repoName: 'weber',
+        config: consumerConfig(),
+        tuning: tuning({
+          presets: ['omnifield'],
+          settings: { npmScope: SCOPE, installAssistant: false },
+        }),
+      });
+      await run({ command: 'apply', cwd: consumer.root });
+      const artifact = parseJsonc(consumer.read(LIVE));
+      const post = artifact.postCreateCommand;
+      const step = post.slice(
+        post.indexOf('( reg='),
+        post.indexOf(` && ${INSTALL}`),
+      );
+
+      const result = await sh(step, npmrc());
+
+      expect(result.code).toBe(1);
+      // Путь в сообщении = путь, на который смотрит npm внутри контейнера, = точка
+      // монтирования тома. Разъедься они — человек положил бы токен мимо.
+      expect(result.err).toContain('/home/node/.secrets/npmrc');
+      expect(artifact.containerEnv.NPM_CONFIG_USERCONFIG).toBe(
+        '/home/node/.secrets/npmrc',
+      );
+      expect(artifact.mounts).toContain(
+        'source=omnifield-secrets,target=/home/node/.secrets,type=volume',
+      );
+      expect(result.err).toContain('переживает пересоздание');
+    },
+  );
+
+  // Прогон шага доходит до `pnpm whoami` — то есть до настоящей сетевой попытки.
+  it(
+    'РЕЕСТР ЕСТЬ, ДОСТУПА НЕТ — другой отказ, с адресом реестра и хостом',
+    { timeout: MANAGER_PROBE_MS },
+    async () => {
+      const step = await checkStep();
+      // Порт, на котором заведомо никого нет: сетевого доступа проверке не нужно.
+      const env = npmrc(`${SCOPE}:registry=http://127.0.0.1:1/\n`);
+
+      const result = await sh(step, env);
+
+      expect(result.code).toBe(1);
+      expect(result.err).toContain('токен не положен или протух');
+      // Два состояния — два разных сообщения: чинят их по-разному.
+      expect(result.err).not.toContain('а он не настроен');
+      expect(result.err).toContain('реестр: http://127.0.0.1:1/');
+      // Хост вынут из адреса в самом шелле — команда для копипасты уже готовая.
+      expect(result.err).toContain('npm config set //127.0.0.1:1/:_authToken');
+    },
+  );
+
+  // `pnpm whoami` доходит до стаб-реестра и получает ответ — самый длинный путь шага.
+  it(
+    'ДОСТУП ЕСТЬ — проверка молчит и пропускает установку',
+    { timeout: MANAGER_PROBE_MS },
+    async () => {
+      const step = await checkStep();
+
+      const { result, seen } = await withRegistry(async ({ port, seen }) => {
+        const env = npmrc(
+          `${SCOPE}:registry=http://127.0.0.1:${port}/\n` +
+            `//127.0.0.1:${port}/:_authToken=tok\n`,
+        );
+        return { result: await sh(step, env), seen };
+      });
+
+      expect(result.code).toBe(0);
+      // Молчит целиком: шаг, печатающий в норме, приучает не читать вывод.
+      expect(result.out).toBe('');
+      expect(result.err).toBe('');
+      // И проверка была НАСТОЯЩЕЙ — реестр действительно спрашивали.
+      expect(seen).toEqual(['GET /-/whoami']);
+    },
+  );
 });
 
 describe('обещание в тексте отказа — контракт', () => {
-  it('команды ИЗ САМОГО СООБЩЕНИЯ выполняются и снимают стену', async () => {
-    const step = await checkStep();
+  // САМАЯ ДОРОГАЯ ПРОБА ЗОНЫ, и цена названа числом: четыре прогона настоящего
+  // менеджера подряд — стена, две команды `npm config set` из её же текста и
+  // повторная проверка, что стены больше нет. Замер под полным прогоном — до 9.6 с.
+  it(
+    'команды ИЗ САМОГО СООБЩЕНИЯ выполняются и снимают стену',
+    { timeout: MANAGER_PROBE_MS },
+    async () => {
+      const step = await checkStep();
 
-    await withRegistry(async ({ port }) => {
-      const env = npmrc();
-      const blocked = await sh(step, env);
-      expect(blocked.code).toBe(1);
+      await withRegistry(async ({ port }) => {
+        const env = npmrc();
+        const blocked = await sh(step, env);
+        expect(blocked.code).toBe(1);
 
-      // Человек делает ровно то, что ему написали: берём команды из сообщения как
-      // есть и подставляем свои значения на места угловых скобок.
-      const commands = blocked.err
-        .split('\n')
-        .filter((line) => line.includes('npm config set'))
-        .map((line) =>
-          line
-            .replace(/^\[devbox\]\s+/, '')
-            .replace('<адрес-реестра>', `http://127.0.0.1:${port}/`)
-            .replace('<хост-реестра>', `127.0.0.1:${port}`)
-            .replace('<токен>', 'tok'),
+        // Человек делает ровно то, что ему написали: берём команды из сообщения как
+        // есть и подставляем свои значения на места угловых скобок.
+        const commands = blocked.err
+          .split('\n')
+          .filter((line) => line.includes('npm config set'))
+          .map((line) =>
+            line
+              .replace(/^\[devbox\]\s+/, '')
+              .replace('<адрес-реестра>', `http://127.0.0.1:${port}/`)
+              .replace('<хост-реестра>', `127.0.0.1:${port}`)
+              .replace('<токен>', 'tok'),
+          );
+        expect(commands).toHaveLength(2);
+
+        for (const command of commands) {
+          expect((await sh(command, env)).code, command).toBe(0);
+        }
+
+        // Команды написали ровно в тот файл, который сообщение назвало, — и ни в
+        // какой другой. Второе не придирка: адрес в сообщении обязан указывать на
+        // конфиг, который девбокс потом и прочитает.
+        const written = readFileSync(env.path, 'utf-8');
+        expect(written).toContain(
+          `${SCOPE}:registry=http://127.0.0.1:${port}/`,
         );
-      expect(commands).toHaveLength(2);
+        expect(written).toContain('_authToken=tok');
+        expect(
+          existsSync(env.global),
+          'креды уехали мимо названного файла',
+        ).toBe(false);
 
-      for (const command of commands) {
-        expect((await sh(command, env)).code, command).toBe(0);
-      }
-
-      // Команды написали ровно в тот файл, который сообщение назвало, — и ни в
-      // какой другой. Второе не придирка: адрес в сообщении обязан указывать на
-      // конфиг, который девбокс потом и прочитает.
-      const written = readFileSync(env.path, 'utf-8');
-      expect(written).toContain(`${SCOPE}:registry=http://127.0.0.1:${port}/`);
-      expect(written).toContain('_authToken=tok');
-      expect(existsSync(env.global), 'креды уехали мимо названного файла').toBe(
-        false,
-      );
-
-      // И стена исчезла — путь восстановления рабочий, а не правдоподобный.
-      expect((await sh(step, env)).code).toBe(0);
-    });
-  });
+        // И стена исчезла — путь восстановления рабочий, а не правдоподобный.
+        expect((await sh(step, env)).code).toBe(0);
+      });
+    },
+  );
 });
 
 describe('внешнему потребителю приватный реестр не нужен вообще', () => {
@@ -439,36 +471,41 @@ describe('scope публичный — сказано ЗНАЧЕНИЕМ, а н�
     expect(silent.value('npmScope').ours).toBe(true);
   });
 
-  it('ДЕНЬ ADR-19: публичный scope не встаёт стеной там, где приватный встаёт', async () => {
-    // Живой сценарий заявки, исполняемый: `@omnifield/*` стал публичным, пин в
-    // user-конфиге больше не нужен, `pnpm config get` возвращает `undefined`.
-    // Приватный профиль в этом окружении ОСТАНАВЛИВАЕТ установку — и правильно
-    // делает. Публичный обязан пройти, и проходит он не потому, что проверка
-    // смолчала, а потому, что её в артефакте нет вовсе.
-    const step = await checkStep();
-    const env = npmrc();
-    expect(
-      (await sh(step, env)).code,
-      'приватный профиль обязан вставать стеной',
-    ).toBe(1);
-    consumer.cleanup();
-    consumer = null;
+  // Два прогона менеджера: приватный профиль встаёт стеной, публичный проходит.
+  it(
+    'ДЕНЬ ADR-19: публичный scope не встаёт стеной там, где приватный встаёт',
+    { timeout: MANAGER_PROBE_MS },
+    async () => {
+      // Живой сценарий заявки, исполняемый: `@omnifield/*` стал публичным, пин в
+      // user-конфиге больше не нужен, `pnpm config get` возвращает `undefined`.
+      // Приватный профиль в этом окружении ОСТАНАВЛИВАЕТ установку — и правильно
+      // делает. Публичный обязан пройти, и проходит он не потому, что проверка
+      // смолчала, а потому, что её в артефакте нет вовсе.
+      const step = await checkStep();
+      const env = npmrc();
+      expect(
+        (await sh(step, env)).code,
+        'приватный профиль обязан вставать стеной',
+      ).toBe(1);
+      consumer.cleanup();
+      consumer = null;
 
-    const { text } = await withScope({
-      npmScope: SCOPE,
-      npmScopeIsPrivate: false,
-    });
-    const post = afterToolchain(parseJsonc(text).postCreateCommand);
-    const before = post.endsWith(INSTALL)
-      ? post.slice(0, -INSTALL.length).replace(/ && $/, '')
-      : post;
+      const { text } = await withScope({
+        npmScope: SCOPE,
+        npmScopeIsPrivate: false,
+      });
+      const post = afterToolchain(parseJsonc(text).postCreateCommand);
+      const before = post.endsWith(INSTALL)
+        ? post.slice(0, -INSTALL.length).replace(/ && $/, '')
+        : post;
 
-    // Всё, что публичный профиль делает до установки СВЕРХ названных потерь
-    // тулчейна, — ничто. Исполняем это ничто в том же окружении: отказу взяться
-    // неоткуда.
-    expect(before).toBe('');
-    expect((await sh(before || 'true', env)).code).toBe(0);
-  });
+      // Всё, что публичный профиль делает до установки СВЕРХ названных потерь
+      // тулчейна, — ничто. Исполняем это ничто в том же окружении: отказу взяться
+      // неоткуда.
+      expect(before).toBe('');
+      expect((await sh(before || 'true', env)).code).toBe(0);
+    },
+  );
 
   it('приватность по умолчанию: заполнил только scope — проверка ЕСТЬ', async () => {
     // Дефолт `true` выбран не по симметрии. Заполняет `npmScope` тот, у кого
