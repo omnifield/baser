@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { shopLayout } from './layout.js';
 import { ShopProblemLog } from './problems.js';
 import {
   DEFAULT_SETTINGS,
   clientAddress,
   listenAddress,
+  logPath,
   readSettings,
   settingsTemplate,
 } from './settings.js';
@@ -124,6 +126,45 @@ describe('непригодное названо кодом, а не молчан
   });
 });
 
+describe('магазин по умолчанию виден только своей локации', () => {
+  it('дефолтом слушается петлевой адрес, а не все интерфейсы', () => {
+    // Наружу у нас выходит одна дверь :8080 (kb:FUND-5). Дефолт 0.0.0.0 раздал
+    // бы склад всей docker-сети, и этого никто не выбирал — проба стоит здесь,
+    // чтобы возврат к нему был красным, а не незамеченным.
+    expect(DEFAULT_SETTINGS.host).toBe('127.0.0.1');
+    expect(listenAddress(DEFAULT_SETTINGS)).toBe('127.0.0.1:4873');
+  });
+
+  it('открыться всей сети можно — но это выбор человека, а не наш', () => {
+    const { settings, problems } = read('host: 0.0.0.0\n');
+
+    expect(settings.host).toBe('0.0.0.0');
+    expect(problems).toEqual([]);
+  });
+});
+
+describe('лог — настройка, и путь у него от корня локации', () => {
+  it('дефолт лога совпадает с раскладкой папки магазина', () => {
+    // Два места про один факт разъезжаются молча; здесь они сверены.
+    expect(logPath(DEFAULT_SETTINGS, '/локация')).toBe(
+      shopLayout('/локация').log,
+    );
+  });
+
+  it('относительный путь считается от корня, а не от каталога вызова', () => {
+    // Ровно тот мусор, который поймало ревью: файл лёг там, где стоял человек.
+    expect(logPath({ ...DEFAULT_SETTINGS, log: 'свой.log' }, '/локация')).toBe(
+      '/локация/свой.log',
+    );
+  });
+
+  it('абсолютный путь берётся как есть', () => {
+    expect(
+      logPath({ ...DEFAULT_SETTINGS, log: '/var/log/магазин.log' }, '/локация'),
+    ).toBe('/var/log/магазин.log');
+  });
+});
+
 describe('адрес назначения — не то же, что слушаемый интерфейс', () => {
   it('на всех интерфейсах ходить некуда — адресом становится петлевой', () => {
     expect(clientAddress({ ...DEFAULT_SETTINGS, host: '0.0.0.0' })).toBe(
@@ -137,7 +178,9 @@ describe('адрес назначения — не то же, что слуша�
     ).toBe('http://127.0.0.1:4900');
   });
 
-  it('слушаемый адрес отдаётся процессу как есть', () => {
-    expect(listenAddress(DEFAULT_SETTINGS)).toBe('0.0.0.0:4873');
+  it('слушаемый адрес отдаётся процессу как есть, каким его задали', () => {
+    expect(listenAddress({ ...DEFAULT_SETTINGS, host: '0.0.0.0' })).toBe(
+      '0.0.0.0:4873',
+    );
   });
 });

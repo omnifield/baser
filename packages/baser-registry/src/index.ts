@@ -13,10 +13,14 @@ export {
   DEFAULT_SETTINGS,
   clientAddress,
   listenAddress,
+  logPath,
   readSettings,
   settingsTemplate,
 } from './lib/settings.js';
 export type { ShopSettings } from './lib/settings.js';
+
+export { locateRoot } from './lib/locate.js';
+export type { LocatedRoot, RootOrigin } from './lib/locate.js';
 
 export { ShopProblemLog } from './lib/problems.js';
 export type { ShopProblem, ShopProblemCode } from './lib/problems.js';
