@@ -60,7 +60,7 @@ import {
   type WriteReport,
 } from './result.js';
 import { createTrace, type TraceRecorder } from './trace.js';
-import { verdaccioBin, verdaccioConfig } from './verdaccio.js';
+import { shopEntry, verdaccioConfig } from './verdaccio.js';
 
 /**
  * Сколько ждём ПЕРВОГО ответа раздачи после запуска.
@@ -375,11 +375,13 @@ function startProcess(
     const child = spawn(
       process.execPath,
       [
-        verdaccioBin(),
-        '--config',
+        // Наш запускатель, а не чужой bin: подпуть `verdaccio/bin/verdaccio` тот
+        // пакет публичным не объявлял, и у потребителя он закрыт
+        // (`tasker:BASER2-251`, разбор в `serve.ts`).
+        shopEntry(),
         layout.generatedConfig,
-        '--listen',
-        listenAddress(settings),
+        settings.host,
+        String(settings.port),
       ],
       {
         // Отвязан от команды: `up` кончится, магазин останется. Ради этого всё.

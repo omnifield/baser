@@ -18,7 +18,8 @@
  * маршрутизацию имён, ради устранения которой магазин и заводится.
  */
 
-import { createRequire } from 'node:module';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { stringify } from 'yaml';
 import type { ShopLayout } from './layout.js';
 import type { ShopSettings } from './settings.js';
@@ -90,12 +91,37 @@ export function verdaccioConfig(
 }
 
 /**
- * Где лежит исполняемый файл раздачи.
+ * ФАЙЛ, КОТОРЫЙ СПАВНИТСЯ, ЧТОБЫ ПОДНЯТЬ РАЗДАЧУ, — НАШ, а не чужой.
  *
- * Резолвится от НАШЕГО пакета, а не от каталога локации: магазин ставится
+ * Было `resolve('verdaccio/bin/verdaccio')` — подпуть чужого пакета, который тот
+ * никогда не объявлял публичным. У потребителя приезжала другая сборка (замер:
+ * 6.9.2 против 6.8.0 в монорепе), в ней появилось поле `exports` — и `up` падал
+ * с `ERR_PACKAGE_PATH_NOT_EXPORTED` (`tasker:BASER2-251`). Разбор целиком —
+ * в `serve.ts`.
+ *
+ * Теперь резолвится СОСЕДНИЙ НАШ ФАЙЛ: он лежит в нашем же `dist`, приезжает
+ * тем же тарболом и не может разойтись с нами по версии. Всё, что осталось от
+ * чужого пакета, — его главный вход, и он объявлен в `exports`.
+ *
+ * `import.meta.url`, а не `process.cwd()` и не корень локации: магазин ставится
  * глобально и работает в чужих деревьях, где своего `node_modules` нет и быть не
  * должно.
  */
-export function verdaccioBin(): string {
-  return createRequire(import.meta.url).resolve('verdaccio/bin/verdaccio');
+export function shopEntry(): string {
+  // У ПОТРЕБИТЕЛЯ раскладка одна: `dist/lib/verdaccio.js` и `dist/lib/serve.js`
+  // лежат рядом, приехав одним тарболом.
+  const shipped = fileURLToPath(new URL('./serve.js', import.meta.url));
+  if (existsSync(shipped)) return shipped;
+
+  // В МОНОРЕПЕ пробы бегут из исходников (`src/lib/verdaccio.ts`), и рядом
+  // лежит `serve.ts`, который спавнить нечем. Значит берём собранный файл
+  // своего же пакета.
+  //
+  // Это не запасной путь «на всякий случай», а вторая настоящая раскладка, в
+  // которой мы живём. Названа она здесь ровно потому, что прошлый выпуск
+  // сломался на молчаливом предположении о единственной раскладке: в монорепе
+  // резолвилось, у потребителя нет, и узнали мы об этом от человека. Свежесть
+  // этой сборки обеспечена связкой целей (`test` зависит от `build` в манифесте
+  // пакета), а не надеждой.
+  return fileURLToPath(new URL('../../dist/lib/serve.js', import.meta.url));
 }
