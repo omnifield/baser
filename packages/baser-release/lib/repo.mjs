@@ -18,6 +18,12 @@ import { join } from 'node:path';
 /** Каталог с пакетами монорепы — раскладка «один пакет = одна зона». */
 const PACKAGES = 'packages';
 
+/**
+ * Объявление прежних имён пакетов — данные СУДИМОГО репозитория, путь от его
+ * корня. Что там лежит и почему именно там — в самом файле и в README.
+ */
+const FORMER_NAMES = join(PACKAGES, 'baser-release', 'former-names.json');
+
 /** Ломающее в заголовке — `feat(cli)!: …`; форма из conventional commits. */
 const BANG = /^[a-z]+(\([^)]*\))?!:/;
 
@@ -57,8 +63,63 @@ function git(root, ...args) {
 
 /**
  * @typedef {import('./guard.mjs').Manifest} Manifest
+ * @typedef {import('./guard.mjs').Release} Release
  * @typedef {import('./trace.mjs').Trace} Trace
  */
+
+/**
+ * ПРЕЖНИЕ ИМЕНА ПАКЕТОВ — читаются из объявления, а не выводятся из строки.
+ *
+ * Тег выпуска несёт имя, каким пакет звался в момент выпуска, и после
+ * переименования история под нынешним именем пуста. Догадка «отрежь прежний
+ * скоуп» здесь запрещена сознательно: она верна до следующего переименования и
+ * молчит, когда врёт, — а ослепший гейт пропускает номер, который уже уехал.
+ *
+ * Файла нет — карта пуста, и гейт судит ровно так же, как судил до этой работы:
+ * репозиторий без переименований ничего объявлять не обязан.
+ *
+ * Файл есть, но не разбирается — ОШИБКА, а не пустая карта. Пустая карта здесь
+ * означала бы «переименований не было», то есть тихую слепоту с тем же исходом,
+ * ради которого всё это и написано.
+ *
+ * @param {string} root корень судимого репозитория
+ * @returns {Map<string, string[]>} нынешнее имя → прежние имена
+ */
+export function readFormerNames(root) {
+  const file = join(root, FORMER_NAMES);
+  if (!existsSync(file)) return new Map();
+
+  let declared;
+  try {
+    declared = JSON.parse(readFileSync(file, 'utf-8'));
+  } catch (cause) {
+    throw new Error(
+      `${FORMER_NAMES}: объявление прежних имён не разбирается как JSON`,
+      { cause },
+    );
+  }
+
+  const map = declared?.formerNames;
+  if (map === null || typeof map !== 'object' || Array.isArray(map)) {
+    throw new Error(
+      `${FORMER_NAMES}: ожидался объект "formerNames" вида {"<нынешнее имя>": ["<прежнее имя>", …]}`,
+    );
+  }
+
+  return new Map(
+    Object.entries(map).map(([name, former]) => {
+      if (
+        !Array.isArray(former) ||
+        former.some((entry) => typeof entry !== 'string' || entry === '')
+      ) {
+        throw new Error(
+          `${FORMER_NAMES}: прежние имена "${name}" — ожидался список непустых строк`,
+        );
+      }
+      return [name, former];
+    }),
+  );
+}
 
 /**
  * Пакеты монорепы с их номерами. Зона — leaf-имя каталога (`baser-cli` → `cli`).
@@ -69,6 +130,8 @@ function git(root, ...args) {
 export function readPackages(root) {
   const dir = join(root, PACKAGES);
   if (!existsSync(dir)) return [];
+
+  const former = readFormerNames(root);
 
   return readdirSync(dir)
     .filter((entry) => existsSync(join(dir, entry, 'package.json')))
@@ -82,23 +145,43 @@ export function readPackages(root) {
         dir: join(PACKAGES, entry),
         zone: entry.replace(/^baser-/, ''),
         private: Boolean(manifest.private),
+        formerNames: former.get(manifest.name) ?? [],
       };
     });
 }
 
+/** Все теги репозитория — для проб, которые судят сам реестр тегов. */
+export function allTags(/** @type {string} */ root) {
+  return git(root, 'tag', '--list').split('\n').filter(Boolean);
+}
+
 /**
- * Номера, выпущенные тегами пакета. Тег выпуска — `<имя>@<номер>`, форма задана
- * `nx.json` (`releaseTag.pattern`), поэтому имя отрезается по длине, а не по
- * первому `@`: у имён со скоупом их два.
+ * Выпуски пакета — под нынешним именем И под прежними.
+ *
+ * Тег выпуска — `<имя>@<номер>`, форма задана `nx.json` (`releaseTag.pattern`),
+ * поэтому имя отрезается по длине, а не по первому `@`: у имён со скоупом их два.
+ *
+ * ТЕГ ВОЗВРАЩАЕТСЯ ВМЕСТЕ С НОМЕРОМ, а не собирается потом из нынешнего имени.
+ * После переименования собранный тег указывал бы на несуществующую ревизию: и
+ * человеку («номер занят тегом X» — а такого тега нет), и `git log` в окне
+ * ломающих коммитов, который на нём просто упал бы.
  *
  * @param {string} root
- * @param {string} name
+ * @param {string} name нынешнее имя пакета
+ * @param {readonly string[]} [formerNames] имена, под которыми он выпускался раньше
+ * @returns {Release[]}
  */
-export function releasedVersions(root, name) {
-  return git(root, 'tag', '--list', `${name}@*`)
-    .split('\n')
-    .filter(Boolean)
-    .map((tag) => tag.slice(name.length + 1));
+export function releases(root, name, formerNames = []) {
+  return [name, ...formerNames].flatMap((tagged) =>
+    git(root, 'tag', '--list', `${tagged}@*`)
+      .split('\n')
+      .filter(Boolean)
+      .map((tag) => ({
+        tag,
+        name: tagged,
+        version: tag.slice(tagged.length + 1),
+      })),
+  );
 }
 
 /**
@@ -159,8 +242,19 @@ export function factsOf(root, trace) {
 
   return {
     packages,
-    /** @param {string} name */
-    releasedVersions: (name) => releasedVersions(root, name),
+    /** @param {Manifest} pkg */
+    releases: (pkg) => {
+      const found = releases(root, pkg.name, pkg.formerNames);
+      // Замер называет ИМЕНА, под которыми искали: зелёный гейт на пакете без
+      // истории выглядит одинаково и когда пакет не выпускался, и когда его
+      // историю не нашли под нынешним именем.
+      trace?.event('release.history', {
+        package: pkg.name,
+        names: [pkg.name, ...(pkg.formerNames ?? [])],
+        found: found.length,
+      });
+      return found;
+    },
     /**
      * @param {string} tag
      * @param {Manifest} pkg
