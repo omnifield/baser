@@ -1,5 +1,5 @@
 {
-  "name": "@omnifield/baser-cli",
+  "name": "@baser/cli",
   "version": "0.9.0-dev.1",
   "repository": {
     "type": "git",
@@ -17,7 +17,7 @@
   "exports": {
     "./package.json": "./package.json",
     ".": {
-      "@omnifield/baser-source": "./src/index.ts",
+      "@baser/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
@@ -28,10 +28,10 @@
     "!**/*.tsbuildinfo"
   ],
   "dependencies": {
-    "@omnifield/baser-check": "workspace:*",
-    "@omnifield/baser-contracts": "workspace:*",
-    "@omnifield/baser-materialize": "workspace:*",
-    "@omnifield/baser-pack": "workspace:*",
+    "@baser/check": "workspace:*",
+    "@baser/contracts": "workspace:*",
+    "@baser/materialize": "workspace:*",
+    "@baser/pack": "workspace:*",
     "ejs": "^5.0.1",
     "tslib": "^2.3.0",
     "yaml": "^2.9.0"

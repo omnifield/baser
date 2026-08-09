@@ -4,7 +4,7 @@ export default defineConfig(() => ({
   root: __dirname,
   cacheDir: '../../node_modules/.vite/packages/baser-git',
   test: {
-    name: '@omnifield/baser-git',
+    name: '@baser/git',
     watch: false,
     globals: true,
     environment: 'node',

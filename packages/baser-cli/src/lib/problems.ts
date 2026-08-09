@@ -12,11 +12,11 @@
  * поверх чужой она не изобретает (`tasker:BASER2-20`).
  */
 
-import type { FormProblem, FormProblemCode } from '@omnifield/baser-contracts';
+import type { FormProblem, FormProblemCode } from '@baser/contracts';
 import type {
   CapabilityProblemCode,
   EngineProblemCode,
-} from '@omnifield/baser-materialize';
+} from '@baser/materialize';
 
 /**
  * Что не так на стороне двери.

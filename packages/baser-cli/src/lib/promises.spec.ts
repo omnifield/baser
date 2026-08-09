@@ -29,7 +29,7 @@ import {
   type Consumer,
   type SourceSpec,
 } from './devbox.fixture.js';
-import type { PackReport } from '@omnifield/baser-pack';
+import type { PackReport } from '@baser/pack';
 
 let consumer: Consumer | null = null;
 

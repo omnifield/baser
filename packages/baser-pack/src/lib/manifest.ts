@@ -31,11 +31,11 @@
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 
-import type { CheckStage } from '@omnifield/baser-check';
+import type { CheckStage } from '@baser/check';
 import type {
   ArtifactClass,
   SourceDeclaration,
-} from '@omnifield/baser-contracts';
+} from '@baser/contracts';
 
 /**
  * Версия формы ОПИСИ. Отдельная от формы объявления и формы ответа проверки.

@@ -1,5 +1,5 @@
 {
-  "name": "@omnifield/baser-pack",
+  "name": "@baser/pack",
   "version": "0.0.4",
   "description": "Проверенный обвес, нормализованный и с манифестом выдачи: обвес подходит посадочному месту — значит собран к выдаче",
   "license": "MIT",
@@ -15,7 +15,7 @@
   "exports": {
     "./package.json": "./package.json",
     ".": {
-      "@omnifield/baser-source": "./src/index.ts",
+      "@baser/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
@@ -26,8 +26,8 @@
     "!**/*.tsbuildinfo"
   ],
   "dependencies": {
-    "@omnifield/baser-check": "workspace:*",
-    "@omnifield/baser-contracts": "workspace:*",
+    "@baser/check": "workspace:*",
+    "@baser/contracts": "workspace:*",
     "tslib": "^2.3.0"
   },
   "publishConfig": {

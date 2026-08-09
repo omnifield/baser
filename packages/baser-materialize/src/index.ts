@@ -1,5 +1,5 @@
 /**
- * `@omnifield/baser-materialize` — ядро материализации baser.
+ * `@baser/materialize` — ядро материализации baser.
  *
  * Декларация → план → применение → владение (`kb:BASER2-2`).
  *

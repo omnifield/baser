@@ -1,4 +1,4 @@
-# `@omnifield/baser-materialize` — движок
+# `@baser/materialize` — движок
 
 Рама и мотор станка (`kb:BASER2-4`): **декларация → план → применение →
 владение**.
@@ -191,7 +191,7 @@
 const declaration: Declaration = {
   source: {
     id: 'omnifield/devbox', // идентичность обвеса, не имя npm-пакета
-    contentRoot: 'node_modules/@omnifield/baser-devbox/template',
+    contentRoot: 'node_modules/@baser/devbox/template',
     version: '1.4.0', // из манифеста ПАКЕТА; null — источник её не назвал
     // что обвес говорит человеку про своё применение ЗДЕСЬ; считает дверь
     warning: { kind: 'said', text: 'хук ляжет, но эта локация смотрит мимо' },
@@ -787,7 +787,7 @@ computePlan({ tree, declaration, confirm: ['b.yml'] });
 | `declare-supply` | объявляет поставку в локации: создаёт `baser.json`, добавляет запись либо меняет закрепление |
 
 ```ts
-import { declareSupply, describeSupplyChange } from '@omnifield/baser-materialize';
+import { declareSupply, describeSupplyChange } from '@baser/materialize';
 
 const result = declareSupply.run(tree, { use: 'pkg', channel: 'dev' });
 
@@ -833,7 +833,7 @@ describeSupplyChange(result.value); // текст для человека — р
 ### Форму объявления судит форма, а не движок
 
 Пригодность получившегося файла проверяет `parseConsumerConfig` из
-`@omnifield/baser-contracts` — тот же разборщик, которым файл читают все
+`@baser/contracts` — тот же разборщик, которым файл читают все
 остальные. Своей копии грамматики (номер формы, метка канала, точная версия) в
 движке нет: она была бы второй правдой и разъехалась бы молча в день, когда форма
 поднимется до следующего номера.
@@ -855,8 +855,8 @@ import {
   applyPlan,
   computePlan,
   describePlan,
-} from '@omnifield/baser-materialize';
-import type { Declaration } from '@omnifield/baser-materialize';
+} from '@baser/materialize';
+import type { Declaration } from '@baser/materialize';
 
 // declaration собрала ДВЕРЬ: объявление обвеса + конфиг потребителя +
 // разрешённые значения настроек. Движок его только читает как структуру.
@@ -942,7 +942,7 @@ Nx и у двери; в git режим файла и вовсе один бит 
 
 **Предупреждение обвеса своего экспорта здесь НЕ имеет** — и это не пропуск.
 Едет оно полем `warning` у `Declaration.source` (вход) и у `MaterializationPlan`
-(выход), а тип у него чужой: `SourceWarning` из `@omnifield/baser-contracts`.
+(выход), а тип у него чужой: `SourceWarning` из `@baser/contracts`.
 Второго дома одному слову мы не заводим — форма его объявила, форма им и владеет
 (`tasker:BASER2-232`).
 
@@ -1078,7 +1078,7 @@ BaserMaterializeError            ← ловит ВСЁ, что отказал д
 ## Тесты
 
 ```
-nx test @omnifield/baser-materialize
+nx test @baser/materialize
 ```
 
 Unit на мок-дереве (`createTreeWithEmptyWorkspace` из `@nx/devkit/testing`) +

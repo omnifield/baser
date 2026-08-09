@@ -32,10 +32,10 @@
  * и стёрло бы различение, на котором построена вся цепь.
  */
 
-import { checkPackage, type CheckReport } from '@omnifield/baser-check';
-import { FORM_VERSION } from '@omnifield/baser-contracts';
-import { OUTPUT_SCHEMA_VERSION } from '@omnifield/baser-materialize';
-import { packPackage, type PackReport } from '@omnifield/baser-pack';
+import { checkPackage, type CheckReport } from '@baser/check';
+import { FORM_VERSION } from '@baser/contracts';
+import { OUTPUT_SCHEMA_VERSION } from '@baser/materialize';
+import { packPackage, type PackReport } from '@baser/pack';
 import { add, addExitCode, type AddResult } from './add.js';
 import { bundle, BUNDLE_SCHEMA_VERSION, type BundleReport } from './bundle.js';
 import {

@@ -42,7 +42,7 @@ function context(repoName = 'baser', root = undefined) {
     repo: { name: repoName, root: root ?? `/tmp/${repoName}` },
     source: {
       id: 'omnifield/devbox',
-      packageName: '@omnifield/baser-devbox',
+      packageName: '@baser/devbox',
       version: '0.1.0',
     },
   };

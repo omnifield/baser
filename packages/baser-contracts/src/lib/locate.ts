@@ -27,15 +27,15 @@
  *
  * ── ПОЧЕМУ ЭТО ОТДЕЛЬНЫЙ ВХОД ПАКЕТА ────────────────────────────────────────
  *
- * `@omnifield/baser-contracts` обещает, что **ничего не читает и ничего не
+ * `@baser/contracts` обещает, что **ничего не читает и ничего не
  * исполняет**: JSON подаёт дверь, резолверы зовёт тоже она. Обещание несущее —
  * против него написаны все зоны, — и размывать его до «ничего, кроме вот
  * этого» нельзя: обещание с оговоркой перестаёт быть обещанием.
  *
  * Здесь оно не размыто, а РАЗГРАНИЧЕНО, и граница машинная, а не словесная:
  *
- *   `@omnifield/baser-contracts`         — форма. Ничего не читает. Как было.
- *   `@omnifield/baser-contracts/locate`  — этот модуль. Читает ФС и резолвит
+ *   `@baser/contracts`         — форма. Ничего не читает. Как было.
+ *   `@baser/contracts/locate`  — этот модуль. Читает ФС и резолвит
  *                                          пакеты, и это видно прямо в импорте.
  *
  * Разбор формы чистым и остался: то, что делает этот модуль, — не разбор.
@@ -354,7 +354,7 @@ function findRepoRoot(from: string): string | null {
  * Находит пакет ПО ИМЕНИ так же, как его нашёл бы сам репозиторий потребителя.
  *
  * ```js
- * const пакет = locatePackage('@omnifield/baser-devbox', repoRoot);
+ * const пакет = locatePackage('@baser/devbox', repoRoot);
  * if (!пакет.ok) { console.error(describeProblems(пакет.problems)); return; }
  * readSourceDeclaration(пакет.value.manifest, `${пакет.value.packageName}/package.json`);
  * ```

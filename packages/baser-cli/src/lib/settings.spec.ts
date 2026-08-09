@@ -29,8 +29,8 @@ import { parse } from 'yaml';
 import {
   sourceConfigPath,
   SOURCE_CONFIG_KEY,
-} from '@omnifield/baser-contracts';
-import { MANIFEST_PATH } from '@omnifield/baser-materialize';
+} from '@baser/contracts';
+import { MANIFEST_PATH } from '@baser/materialize';
 import {
   devboxManifest,
   installDevbox,

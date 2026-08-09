@@ -53,7 +53,7 @@ import {
   type DeclareSupplyInput,
   type DeclareSupplyOutcome,
   type TraceSpan,
-} from '@omnifield/baser-materialize';
+} from '@baser/materialize';
 import type { DoorProblem } from './problems.js';
 import { readRepo } from './repo.js';
 import { exitCodeOf, type DoorResult } from './result.js';

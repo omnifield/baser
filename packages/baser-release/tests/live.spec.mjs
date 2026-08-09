@@ -37,7 +37,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const IS_REPO = existsSync(join(ROOT, '.git'));
 
 /**
- * Пакет, на котором стоят пробы: `@omnifield/baser-cli` — единственный наш, у
+ * Пакет, на котором стоят пробы: `@baser/cli` — единственный наш, у
  * которого между тегами лежит ЖИВОЙ ломающий коммит.
  *
  * Имя, каталог и зона названы здесь, а не вычитаны из дерева: в пробах о
@@ -45,7 +45,7 @@ const IS_REPO = existsSync(join(ROOT, '.git'));
  * касаются пробы, она одна и та же (сверено `git ls-tree` 2026-08-04).
  */
 const CLI = {
-  name: '@omnifield/baser-cli',
+  name: '@baser/cli',
   dir: 'packages/baser-cli',
   zone: 'cli',
   private: false,
@@ -106,19 +106,19 @@ function asOf(version, { released, until }) {
  */
 const ПЕРЕД_МИНОРОМ = {
   released: '0.0.4',
-  until: '@omnifield/baser-cli@0.1.0',
+  until: '@baser/cli@0.1.0',
 };
 
 /** Момент после выпуска минора: выпущены `0.0.4` и `0.1.0`, ломающего с них нет. */
 const ПОСЛЕ_МИНОРА = {
   released: '0.1.0',
-  until: '@omnifield/baser-cli@0.2.0-dev.1',
+  until: '@baser/cli@0.2.0-dev.1',
 };
 
 /** Момент после первой дев-сборки: старший выпущенный — предвыпускной. */
 const ПОСЛЕ_ДЕВ_СБОРКИ = {
   released: '0.2.0-dev.1',
-  until: '@omnifield/baser-cli@0.2.0-dev.1',
+  until: '@baser/cli@0.2.0-dev.1',
 };
 
 describe.runIf(IS_REPO && ЕСТЬ_ИСТОРИЯ)('живой ломающий коммит cli', () => {

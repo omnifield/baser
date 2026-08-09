@@ -122,7 +122,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import {
   locatePackage,
   type LocatedPackage,
-} from '@omnifield/baser-contracts/locate';
+} from '@baser/contracts/locate';
 import type { DoorProblem } from './problems.js';
 
 /** Где лежит кэш поставок, если человек не сказал иначе. */

@@ -42,7 +42,7 @@ import {
   SOURCE_CONFIG_KEY,
   type SourceConfig,
   type SourceDeclaration,
-} from '@omnifield/baser-contracts';
+} from '@baser/contracts';
 import { DoorProblemLog } from './problems.js';
 import type { Repo } from './repo.js';
 import type { SettingMovement } from './values.js';

@@ -73,10 +73,10 @@ import {
   type SourceConfig,
   type SourceDeclaration,
   type SourceWarning,
-} from '@omnifield/baser-contracts';
+} from '@baser/contracts';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type LocatedPackage } from '@omnifield/baser-contracts/locate';
+import { type LocatedPackage } from '@baser/contracts/locate';
 import {
   applyPlan,
   BaserMaterializeError,
@@ -90,7 +90,7 @@ import {
   type Declaration,
   type MaterializationPlan,
   type TraceRecorder,
-} from '@omnifield/baser-materialize';
+} from '@baser/materialize';
 import { createRepoTree, type ChangeKind, type RepoTree } from './tree.js';
 import { DOOR_SCHEMA_VERSION } from './schema.js';
 import {

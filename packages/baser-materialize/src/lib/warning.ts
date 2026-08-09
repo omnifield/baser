@@ -52,8 +52,8 @@
  * считала бы, что её предупреждение работает, а оно бы исчезало.
  */
 
-import type { FormProblem, SourceWarning } from '@omnifield/baser-contracts';
-import { describeValue } from '@omnifield/baser-contracts';
+import type { FormProblem, SourceWarning } from '@baser/contracts';
+import { describeValue } from '@baser/contracts';
 import type { MaterializationSource } from './declaration.js';
 
 /**

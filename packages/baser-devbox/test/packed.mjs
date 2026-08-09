@@ -38,7 +38,7 @@
  *   остался пустым. Кэш машины при этом не читается ни разу, а уход на склад
  *   перестал быть возможен молча: он оставил бы след.
  *
- * Каталог поставки остался прежним — `node_modules/@omnifield/baser-devbox`
+ * Каталог поставки остался прежним — `node_modules/@baser/devbox`
  * внутри локации, — и это не инерция. Пробы зоны выпускают новую версию обвеса
  * ПРЯМО В ПОСТАВКЕ (`bumpPin`, `swapResolvers`), а источник внутри дерева — та
  * ветка `contentRoot`, которой живут оба живых потребителя. Ветку «источник
@@ -82,7 +82,7 @@ export const PACKAGE_DIR = resolve(here, '..');
 /** Корень ЭТОГО репозитория: живой `.devcontainer` — эталон приёмки. */
 export const REPO_ROOT = resolve(here, '../../..');
 
-export const DEVBOX_PACKAGE = '@omnifield/baser-devbox';
+export const DEVBOX_PACKAGE = '@baser/devbox';
 
 /** `dest` обоих артефактов обвеса — они же адреса в живом репозитории. */
 export const LIVE = '.devcontainer/devcontainer.json';

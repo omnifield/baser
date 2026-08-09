@@ -34,7 +34,7 @@ import { createHash } from 'node:crypto';
 import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { byBytes } from '@omnifield/baser-contracts';
+import { byBytes } from '@baser/contracts';
 
 import type { PayloadFile } from './manifest.js';
 

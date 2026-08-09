@@ -33,7 +33,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { declareSupply } from '@omnifield/baser-materialize';
+import { declareSupply } from '@baser/materialize';
 import { cli, USAGE } from './cli.js';
 import { createRepoTree } from './tree.js';
 import { SUPPLY_CACHE_ENV } from './supply.js';

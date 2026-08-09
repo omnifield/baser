@@ -1,4 +1,4 @@
-# `@omnifield/baser-check` — обвес подходит посадочному месту
+# `@baser/check` — обвес подходит посадочному месту
 
 **Одно обещание: «подходит или нет, и если нет, то почему».** На вход — каталог
 распакованного обвеса, на выход — данные: все проблемы списком, у каждой код,
@@ -21,7 +21,7 @@
 ## Вход — каталог, а не имя пакета
 
 ```ts
-import { checkPackage } from '@omnifield/baser-check';
+import { checkPackage } from '@baser/check';
 
 const report = checkPackage('packages/baser-devbox');
 if (!report.ok) {

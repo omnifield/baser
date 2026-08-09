@@ -6,7 +6,7 @@
  * хоть одно из трёх, проверяла бы не дверь.
  *
  * Поэтому здесь именно УСТАНОВКА: обвес девбокса раскладывается в
- * `node_modules/@omnifield/baser-devbox` временного репозитория — манифест,
+ * `node_modules/@baser/devbox` временного репозитория — манифест,
  * резолверы, каталог шаблонов, всё настоящее и на настоящем диске.
  *
  * ── ПОЧЕМУ КАТАЛОГ НАЗЫВАЕТСЯ ДВЕРИ, А НЕ НАХОДИТСЯ ЕЮ ──────────────────────
@@ -27,7 +27,7 @@
  *
  * ── ОТКУДА БЕРЁТСЯ ОБВЕС (`tasker:BASER2-26`) ───────────────────────────────
  *
- * Из ТАРБОЛА настоящего пакета `@omnifield/baser-devbox` (`npm pack`), а не из
+ * Из ТАРБОЛА настоящего пакета `@baser/devbox` (`npm pack`), а не из
  * копии-примера зоны контрактов, на которой приёмка стояла раньше. Копия
  * разъехалась ровно так, как и должна была: пример остался на своём рантайме и
  * своих комментариях, пакет уехал вперёд, обе стороны зеленели — до дня, когда
@@ -72,12 +72,12 @@ import {
   sourceConfigPath,
   FORM_VERSION,
   SOURCE_CONFIG_KEY,
-} from '@omnifield/baser-contracts';
+} from '@baser/contracts';
 import {
   MANIFEST_PATH,
   readManifest,
   type ManifestRecord,
-} from '@omnifield/baser-materialize';
+} from '@baser/materialize';
 import { inject } from 'vitest';
 import type { SupplyOverride } from './supply.js';
 
@@ -86,7 +86,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 /** Корень ЭТОГО репозитория — из него берётся живой `.devcontainer`. */
 export const REPO_ROOT = resolve(here, '../../../..');
 
-export const DEVBOX_PACKAGE = '@omnifield/baser-devbox';
+export const DEVBOX_PACKAGE = '@baser/devbox';
 
 /**
  * Каталог с содержимым тарбола: то и только то, что уедет потребителю.

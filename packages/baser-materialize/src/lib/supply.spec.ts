@@ -18,7 +18,7 @@
  * так же, как разъехалось бы в коде.
  */
 
-import { parseConsumerConfig } from '@omnifield/baser-contracts';
+import { parseConsumerConfig } from '@baser/contracts';
 import type { Tree } from '@nx/devkit';
 import { createTreeWithEmptyWorkspace } from '@nx/devkit/testing';
 import { describe, expect, it } from 'vitest';
@@ -55,7 +55,7 @@ describe('объявление рождается в пустой локации
   it('создаёт файл с одной поставкой, и форма его принимает', () => {
     const tree = emptyLocation();
 
-    const result = declareSupply.run(tree, { use: '@omnifield/baser-devbox' });
+    const result = declareSupply.run(tree, { use: '@baser/devbox' });
 
     expect(result.ok).toBe(true);
     if (!result.ok) {
@@ -71,7 +71,7 @@ describe('объявление рождается в пустой локации
     if (!form.ok) {
       return;
     }
-    expect(form.value.sources).toEqual([{ use: '@omnifield/baser-devbox' }]);
+    expect(form.value.sources).toEqual([{ use: '@baser/devbox' }]);
   });
 
   it('кладёт закрепление, когда оно названо', () => {
@@ -113,7 +113,7 @@ describe('чужое не затирается', () => {
         },
         {
             "channel": "dev",
-            "use": "@omnifield/baser-devbox"
+            "use": "@baser/devbox"
         }
     ]
 }
@@ -155,7 +155,7 @@ describe('чужое не затирается', () => {
     }
     expect(form.value.sources.map((source) => source.use)).toEqual([
       '@omnifield/brainer-harness',
-      '@omnifield/baser-devbox',
+      '@baser/devbox',
       'weber-web',
     ]);
   });

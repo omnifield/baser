@@ -46,8 +46,8 @@ import type {
   ResolverContext,
   ResolverRef,
   SourceDeclaration,
-} from '@omnifield/baser-contracts';
-import type { LocatedPackage } from '@omnifield/baser-contracts/locate';
+} from '@baser/contracts';
+import type { LocatedPackage } from '@baser/contracts/locate';
 import type { Repo } from './repo.js';
 
 /** Готовые к вызову резолверы обвеса: модули загружены, обстановка собрана. */

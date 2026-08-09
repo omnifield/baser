@@ -37,7 +37,7 @@ describe('приёмка на живом обвесе девбокса', () => {
   it('обвес подходит посадочному месту', () => {
     expect(report.problems).toEqual([]);
     expect(report.ok).toBe(true);
-    expect(report.packageName).toBe('@omnifield/baser-devbox');
+    expect(report.packageName).toBe('@baser/devbox');
     expect(report.declaration?.source.id).toBe('omnifield/devbox');
   });
 

@@ -4,7 +4,7 @@ export default defineConfig(() => ({
   root: __dirname,
   cacheDir: '../../node_modules/.vite/packages/baser-registry',
   test: {
-    name: '@omnifield/baser-registry',
+    name: '@baser/registry',
     watch: false,
     globals: true,
     environment: 'node',

@@ -40,7 +40,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { chmodSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MANIFEST_PATH } from '@omnifield/baser-materialize';
+import { MANIFEST_PATH } from '@baser/materialize';
 import {
   BUMPED_RESOLVERS,
   DEVBOX_PACKAGE,

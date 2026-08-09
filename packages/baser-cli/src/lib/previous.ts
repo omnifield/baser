@@ -55,7 +55,7 @@
  * планом, как и раньше. Пропадает только рассказ, которому нечем быть правдой.
  */
 
-import type { SettingValue } from '@omnifield/baser-contracts';
+import type { SettingValue } from '@baser/contracts';
 
 /** Прежнее значение и артефакт, которым оно доказано. */
 export interface PlacedValue {

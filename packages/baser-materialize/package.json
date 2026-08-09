@@ -1,5 +1,5 @@
 {
-  "name": "@omnifield/baser-materialize",
+  "name": "@baser/materialize",
   "version": "0.6.0-dev.1",
   "repository": {
     "type": "git",
@@ -14,7 +14,7 @@
   "exports": {
     "./package.json": "./package.json",
     ".": {
-      "@omnifield/baser-source": "./src/index.ts",
+      "@baser/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
@@ -25,7 +25,7 @@
     "!**/*.tsbuildinfo"
   ],
   "dependencies": {
-    "@omnifield/baser-contracts": "workspace:*",
+    "@baser/contracts": "workspace:*",
     "tslib": "^2.3.0"
   },
   "devDependencies": {

@@ -19,7 +19,7 @@ import {
   FORM_VERSION,
   type SettingValue,
   type SourceDeclaration,
-} from '@omnifield/baser-contracts';
+} from '@baser/contracts';
 import {
   declaredSettings,
   installDevbox,

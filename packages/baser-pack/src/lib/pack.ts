@@ -63,7 +63,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 
-import { checkPackage, type CheckReport } from '@omnifield/baser-check';
+import { checkPackage, type CheckReport } from '@baser/check';
 
 import { copyShipped, listShippedFiles } from './contents.js';
 import {

@@ -60,8 +60,8 @@ import {
   type SettingValue,
   type SourceConfig,
   type SourceDeclaration,
-} from '@omnifield/baser-contracts';
-import type { LocatedPackage } from '@omnifield/baser-contracts/locate';
+} from '@baser/contracts';
+import type { LocatedPackage } from '@baser/contracts/locate';
 import type { PlacedValue } from './previous.js';
 import type { Repo } from './repo.js';
 import { loadResolvers, refKey } from './resolvers.js';

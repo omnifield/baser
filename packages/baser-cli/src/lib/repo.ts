@@ -27,8 +27,8 @@ import {
   type ConsumerConfig,
   type FormProblem,
   type FormResult,
-} from '@omnifield/baser-contracts';
-import { locatePackage } from '@omnifield/baser-contracts/locate';
+} from '@baser/contracts';
+import { locatePackage } from '@baser/contracts/locate';
 import type { SupplyOverride } from './supply.js';
 
 /** Куда дверь пришла работать. */
@@ -41,7 +41,7 @@ export interface Repo {
    * Из него растут имена, которые обвес считает резолвером (`ctx.repo.name`):
    * девбокс `<репозиторий>-devbox`, алиас в сети и прочее. Берётся каталог, а не
    * `name` из `package.json`: имя пакета бывает scope'нутым и служебным
-   * (`@omnifield/baser-source`), а «имя репозитория» человек читает с диска.
+   * (`@baser/source`), а «имя репозитория» человек читает с диска.
    */
   readonly name: string;
 }

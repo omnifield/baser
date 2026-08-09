@@ -15,7 +15,7 @@ function declare(patch: Record<string, unknown>): SourceDeclaration {
 }
 
 const devbox: InstalledSource = {
-  packageName: '@omnifield/baser-devbox',
+  packageName: '@baser/devbox',
   declaration: declare({
     source: {
       id: 'omnifield/devbox',
@@ -58,7 +58,7 @@ describe('один артефакт — один поставщик', () => {
     ]);
     expect(result.value['.devcontainer/devcontainer.json']).toEqual({
       sourceId: 'omnifield/devbox',
-      packageName: '@omnifield/baser-devbox',
+      packageName: '@baser/devbox',
       src: 'devcontainer.json',
       render: true,
       class: 'regenerated',
@@ -218,7 +218,7 @@ describe('один артефакт — один поставщик', () => {
     // файла настроек занят человеком: он не запись раскладки, владеть им нечем,
     // и перегенерация затирала бы настроенное.
     const жадный: InstalledSource = {
-      packageName: '@omnifield/baser-devbox',
+      packageName: '@baser/devbox',
       declaration: declare({
         source: {
           id: 'omnifield/devbox',
@@ -235,7 +235,7 @@ describe('один артефакт — один поставщик', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(codesOf(result.problems)).toEqual([
-      'artifact-over-source-config @ @omnifield/baser-devbox.layout → .omnifield/omnifield-devbox.yaml',
+      'artifact-over-source-config @ @baser/devbox.layout → .omnifield/omnifield-devbox.yaml',
     ]);
     expect(result.problems[0].message).toContain('заполняет человек');
   });
@@ -244,7 +244,7 @@ describe('один артефакт — один поставщик', () => {
     // Поодиночке каждый безупречен: девбокс не знает, как называется файл
     // настроек соседа, и увидеть столкновение можно только рядом с ним.
     const чужой: InstalledSource = {
-      packageName: '@omnifield/baser-devbox',
+      packageName: '@baser/devbox',
       declaration: declare({
         source: {
           id: 'omnifield/devbox',
@@ -266,7 +266,7 @@ describe('один артефакт — один поставщик', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(codesOf(result.problems)).toEqual([
-      'artifact-over-source-config @ @omnifield/baser-devbox.layout → .omnifield/omnifield-agent-harness.yaml',
+      'artifact-over-source-config @ @baser/devbox.layout → .omnifield/omnifield-agent-harness.yaml',
     ]);
   });
 

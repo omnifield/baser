@@ -34,7 +34,7 @@
  * которой требует приёмка, даёт сама способность — она несёт свой `spec`.
  */
 
-import type { FormProblemCode } from '@omnifield/baser-contracts';
+import type { FormProblemCode } from '@baser/contracts';
 import type { Tree } from './tree.js';
 import type { TraceRecorder } from './trace.js';
 

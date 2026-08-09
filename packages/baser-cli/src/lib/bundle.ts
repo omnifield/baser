@@ -46,7 +46,7 @@ import {
   PAYLOAD_DIR,
   PAYLOAD_MANIFEST_FILE,
   type PackReport,
-} from '@omnifield/baser-pack';
+} from '@baser/pack';
 import { installDoc } from './install-doc.js';
 import { DoorProblemLog, type DoorProblem } from './problems.js';
 
@@ -124,7 +124,7 @@ export interface BundleOptions {
 }
 
 /** Пакеты, с которых начинается замыкание зависимостей двери. */
-const DOOR_PACKAGE = '@omnifield/baser-cli';
+const DOOR_PACKAGE = '@baser/cli';
 
 /** Импорт по имени пакета: не относительный и не встроенный в Node. */
 const BARE_IMPORT = /\bfrom\s+'([^'.][^']*)'|\brequire\('([^'.][^']*)'\)/g;
