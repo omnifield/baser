@@ -375,7 +375,7 @@ describe('слой ПРЕСЕТ omnifield: ходовое положение р�
 
     // Ровно четыре регулировки — и ни одной строки содержимого сверх них.
     expect(fromPreset).toEqual([
-      'installAssistant',
+      'globalTools',
       'network',
       'pnpmStoreVolume',
       'secretsVolume',

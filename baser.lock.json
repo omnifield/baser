@@ -134,32 +134,32 @@
       "source": "omnifield/devbox",
       "version": "0.10.0-dev.1",
       "class": "regenerated",
-      "hash": "sha256:36ee75894f7ba1b8cd71a857f6a999bafd18ff4d0023a970f837799921808a1b"
+      "hash": "sha256:dfe1a650730bd3afce743d20aeb485d5c636ebc5c62e196554be1f571e54347a"
     },
     {
       "dest": ".git/hooks/pre-commit",
       "src": "pre-commit.ejs",
       "source": "omnifield/git",
-      "version": "0.2.0-dev.1",
+      "version": "0.3.0-dev.1",
       "class": "regenerated",
-      "hash": "sha256:fc7e0d570d2bd0a51b38b52912447639d2ccd5674f7283f45a86cb5b5e8fa73a",
+      "hash": "sha256:a0b314438bf4441e8b717cb4cefa8242bd42c604993e9a5d9295b0ac6dc12e26",
       "executable": true
     },
     {
       "dest": ".github/scripts/pr-title.mjs",
       "src": "pr-title.mjs.ejs",
       "source": "omnifield/git",
-      "version": "0.2.0-dev.1",
+      "version": "0.3.0-dev.1",
       "class": "regenerated",
-      "hash": "sha256:543b7d230276a6880a5eb05e2fad6cd47d1d491f98b8c7a7de66b6a7f114c41f"
+      "hash": "sha256:9f326d6a2d919d3494e953377bb53720f910929be4338f5b0c3eb1f8508f0bc2"
     },
     {
       "dest": ".github/workflows/pr-title.yml",
       "src": "pr-title.yml.ejs",
       "source": "omnifield/git",
-      "version": "0.2.0-dev.1",
+      "version": "0.3.0-dev.1",
       "class": "regenerated",
-      "hash": "sha256:c3bfdbeb5e556f42bbf9fef106ad6c9bf5b95457c4243c322c7a1ca1ec42a943"
+      "hash": "sha256:58041dd99f245cf10a91ab2a708b26459455a91131b02e1b20aab5239158ef4f"
     },
     {
       "dest": ".omnifield/harness.yaml",
