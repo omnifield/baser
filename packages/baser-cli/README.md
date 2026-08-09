@@ -1,4 +1,4 @@
-# `@omnifield/baser-cli` — консоль
+# `@baser/cli` — консоль
 
 **Раннер, который зовёт станок и кладёт файлы на диск, — и входная точка к
 подготовке обвеса.** Движок работает только
@@ -253,7 +253,7 @@ run({command: 'apply'})                                 ← уже написа�
 devcontainer features, Terraform.
 
 ```
-baser.json: { "use": "@omnifield/baser-devbox", "version": "0.8.1" }
+baser.json: { "use": "@baser/devbox", "version": "0.8.1" }
       ↓ цепочка версии                     ← консоль НАЗЫВАЕТ выбор до применения
 npm install <имя>@<версия> --prefix <кэш>   ← тем же пакетным менеджером
       ↓
@@ -346,7 +346,7 @@ npm install <имя>@<версия> --prefix <кэш>   ← тем же паке
 ```json
 {
   "formVersion": 5,
-  "sources": [{ "use": "@omnifield/baser-devbox", "channel": "dev" }]
+  "sources": [{ "use": "@baser/devbox", "channel": "dev" }]
 }
 ```
 
@@ -1263,7 +1263,7 @@ YAML, а не склеивается руками: кавычки, списки 
 
 ### Резолв по имени — не наш: консоль его ЗОВЁТ
 
-`locatePackage` из `@omnifield/baser-contracts/locate`: имя пакета плюс корень, от
+`locatePackage` из `@baser/contracts/locate`: имя пакета плюс корень, от
 которого резолвить, → корень пакета, версия и разобранный манифест как есть.
 Консоль спрашивает им два своих места: засев конфига (корень — локация) и
 доставание поставки (корень — каталог кэша, куда её положил пакетный менеджер).
@@ -1726,7 +1726,7 @@ npx vitest run --config packages/baser-cli/vitest.config.mts
 поверхностью, файлы уезжают на настоящий диск, а эталон — **живой
 `.devcontainer` этого репозитория**.
 
-**Обвес берётся ТАРБОЛОМ настоящего пакета** `@omnifield/baser-devbox`
+**Обвес берётся ТАРБОЛОМ настоящего пакета** `@baser/devbox`
 (`npm pack` каталога `packages/baser-devbox`, распаковка в `node_modules`
 временного репозитория) — `tasker:BASER2-26`. Не каталогом монорепы: между
 «файл лежит в репозитории» и «файл приехал потребителю» стоит `files` из
@@ -2137,7 +2137,7 @@ npx vitest run --config packages/baser-cli/vitest.config.mts
 предупреждение вычисляется от посадочного места, а не печатается заготовкой
 всякому.
 
-**Обвес здесь свой, а не `@omnifield/baser-git`, — и причина не в том, что
+**Обвес здесь свой, а не `@baser/git`, — и причина не в том, что
 живому нечего сказать.** Поле он объявляет с `tasker:BASER2-235`, и живой случай
 целиком судит его собственная проба (`packages/baser-git`,
 `test/warning.spec.mjs`) — через ту же argv-поверхность консоли. Здесь предмет
@@ -2390,7 +2390,7 @@ npm pack + tar: 254 · 274 · 255 мс в одиночку
 **Снято с поверхности — ЛОМАЮЩЕЕ изменение** (`tasker:BASER2-128`):
 `resolveInstalledPackage`, `InstalledResult`, `InstalledPackage` и код отказа
 `package-not-found`. Резолв пакета по имени уехал в
-`@omnifield/baser-contracts/locate` (`locatePackage`, `LocatedPackage`), и
+`@baser/contracts/locate` (`locatePackage`, `LocatedPackage`), и
 реэкспорта тут нет намеренно: второе имя одного факта — это ровно тот дубль, ради
 снятия которого заход и делался. Кто держался за старое имя, узнаёт об этом
 красным при сборке, а не молчаливым «условие больше не срабатывает»; поля

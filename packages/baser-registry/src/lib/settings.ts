@@ -321,7 +321,7 @@ export function logPath(settings: ShopSettings, shopRoot: string): string {
  */
 export function settingsTemplate(): string {
   const head = [
-    '# Раздача пакетов этой ЛОКАЦИИ — настройки @omnifield/baser-registry.',
+    '# Раздача пакетов этой ЛОКАЦИИ — настройки @baser/registry.',
     '#',
     '# Магазин принадлежит локации (контейнеру), а не отдельной постройке: порт',
     '# и процесс всё равно одни на весь контейнер, поэтому склад и эти настройки',

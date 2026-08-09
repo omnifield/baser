@@ -14,7 +14,7 @@
  * зелёная сборка, которая ничего не собрала, читается как успешная.
  */
 
-import type { CheckReport } from '@omnifield/baser-check';
+import type { CheckReport } from '@baser/check';
 
 import type { PayloadManifest } from './manifest.js';
 import type { PackProblem } from './problems.js';

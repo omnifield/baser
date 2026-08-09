@@ -30,9 +30,9 @@ import {
   checkTemplate,
   type SettingValue,
   type SourceDeclaration,
-} from '@omnifield/baser-contracts';
-import type { LocatedPackage } from '@omnifield/baser-contracts/locate';
-import { toRepoPath, type CanonSource } from '@omnifield/baser-materialize';
+} from '@baser/contracts';
+import type { LocatedPackage } from '@baser/contracts/locate';
+import { toRepoPath, type CanonSource } from '@baser/materialize';
 import { DoorProblemLog, type DoorProblem } from './problems.js';
 
 export interface RenderedLayout {

@@ -15,13 +15,13 @@
  * прочиталось бы уже после решения.
  */
 
-import { describeProblems, type FormProblem } from '@omnifield/baser-contracts';
+import { describeProblems, type FormProblem } from '@baser/contracts';
 import {
   describePlan,
   describeSupplyChange,
-} from '@omnifield/baser-materialize';
-import type { CheckReport } from '@omnifield/baser-check';
-import type { PackReport } from '@omnifield/baser-pack';
+} from '@baser/materialize';
+import type { CheckReport } from '@baser/check';
+import type { PackReport } from '@baser/pack';
 import type { AddResult } from './add.js';
 import type { BundleReport } from './bundle.js';
 import type {

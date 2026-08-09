@@ -38,13 +38,13 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { SourceWarning } from '@omnifield/baser-contracts';
+import type { SourceWarning } from '@baser/contracts';
 import {
   FORM_VERSION,
   parseSourceDeclaration,
   readSourceDeclaration,
   resolveWarning,
-} from '@omnifield/baser-contracts';
+} from '@baser/contracts';
 import type { Declaration, LayoutEntry } from './declaration.js';
 import type { Tree } from './tree.js';
 import { computePlan, describePlan } from './plan.js';

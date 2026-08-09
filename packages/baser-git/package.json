@@ -1,5 +1,5 @@
 {
-  "name": "@omnifield/baser-git",
+  "name": "@baser/git",
   "version": "0.3.0-dev.1",
   "description": "Обвес git-обвязки: гейт заголовка PR и машинные хуки репозитория",
   "license": "MIT",

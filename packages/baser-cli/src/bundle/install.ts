@@ -5,7 +5,7 @@
  * Этот файл уезжает в бандл ручной выдачи и работает уже ТАМ: рядом с ним лежат
  * нагрузка (`payload/`), её опись (`payload.json`) и `node_modules` с дверью и
  * её зависимостями. Node резолвит от места файла вверх, поэтому импорт
- * `@omnifield/baser-cli` находит дверь внутри бандла, а не в репозитории
+ * `@baser/cli` находит дверь внутри бандла, а не в репозитории
  * человека — и бандл остаётся самодостаточным (`tasker:BASER2-29`).
  *
  * ## Обвес НЕ кладётся в чужой репозиторий вовсе
@@ -33,7 +33,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cli } from '@omnifield/baser-cli';
+import { cli } from '@baser/cli';
 
 /**
  * Корень бандла — каталог ЭТОГО файла.

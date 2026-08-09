@@ -48,7 +48,7 @@ import {
   FORM_VERSION,
   parseConsumerConfig,
   type ConsumerSourceEntry,
-} from '@omnifield/baser-contracts';
+} from '@baser/contracts';
 import type {
   Capability,
   CapabilityProblem,

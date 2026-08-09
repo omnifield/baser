@@ -23,7 +23,7 @@ import {
   DEFAULT_ARTIFACT_CLASS,
   FORM_VERSION,
   MIN_FORM_VERSION,
-} from '@omnifield/baser-contracts';
+} from '@baser/contracts';
 
 import {
   cleanupBoxes,
@@ -113,7 +113,7 @@ describe('приёмка на живом обвесе девбокса', () => {
   it('принимающая сторона узнаёт обвес, не вскрывая нагрузку', () => {
     expect(manifest.source.id).toBe('omnifield/devbox');
     expect(manifest.source.title).toBe('Девбокс: проект целиком в контейнере');
-    expect(manifest.source.package.name).toBe('@omnifield/baser-devbox');
+    expect(manifest.source.package.name).toBe('@baser/devbox');
     // Класс здесь — не литерал: девбокс его не объявляет, и в описи стоит
     // умолчание, которое проставляет ФОРМА. Поедет умолчание формы — поедет и
     // эта проба вместе с ним, а не покраснеет на ровном месте.

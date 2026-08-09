@@ -30,7 +30,7 @@ import {
 const DEVBOX = 'omnifield/devbox';
 const AGENTS = 'omnifield/agent-harness';
 
-const DEVBOX_ROOT = 'node_modules/@omnifield/baser-devbox/template';
+const DEVBOX_ROOT = 'node_modules/@baser/devbox/template';
 const AGENTS_ROOT = 'node_modules/@omnifield/brain-harness/template';
 
 const DEVCONTAINER = '.devcontainer/devcontainer.json';

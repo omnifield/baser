@@ -8,8 +8,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { ARTIFACT_CLASSES } from '@omnifield/baser-contracts';
-import type { SourceDeclaration } from '@omnifield/baser-contracts';
+import { ARTIFACT_CLASSES } from '@baser/contracts';
+import type { SourceDeclaration } from '@baser/contracts';
 
 import {
   buildPayloadManifest,
@@ -44,7 +44,7 @@ const VERDICT = { ok: true, stages: [] };
 function manifestOf(files: readonly PayloadFile[]) {
   return buildPayloadManifest({
     declaration: DECLARATION,
-    packageName: '@omnifield/baser-devbox',
+    packageName: '@baser/devbox',
     packageVersion: '0.2.0',
     shipping: { claim: 'declared', decidedBy: 'npm' },
     files,
@@ -107,7 +107,7 @@ describe('опись', () => {
             class: declared,
           })),
         },
-        packageName: '@omnifield/baser-devbox',
+        packageName: '@baser/devbox',
         packageVersion: '0.2.0',
         shipping: { claim: 'declared', decidedBy: 'npm' },
         files: FILES,

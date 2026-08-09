@@ -10,7 +10,9 @@ export { judge } from './guard.mjs';
 export {
   factsOf,
   readPackages,
-  releasedVersions,
+  readFormerNames,
+  releases,
+  allTags,
   breakingSince,
   scopeOf,
 } from './repo.mjs';

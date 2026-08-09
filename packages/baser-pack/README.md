@@ -1,4 +1,4 @@
-# `@omnifield/baser-pack` — проверенный обвес к выдаче
+# `@baser/pack` — проверенный обвес к выдаче
 
 **Одно обещание: «проверенный обвес, нормализованный и с манифестом выдачи».**
 На вход — каталог обвеса, на выход — полезная нагрузка, готовая к любому
@@ -39,7 +39,7 @@
 ## Вход и выход
 
 ```ts
-import { packPackage } from '@omnifield/baser-pack';
+import { packPackage } from '@baser/pack';
 
 const packed = packPackage('packages/baser-devbox', { into: 'tmp/выдача' });
 if (!packed.ok) {
@@ -135,7 +135,7 @@ npm вместе. Переписывать эту семантику к себе
   "source": {
     "id": "omnifield/devbox",
     "title": "Девбокс: проект целиком в контейнере",
-    "package": { "name": "@omnifield/baser-devbox", "version": "…" }
+    "package": { "name": "@baser/devbox", "version": "…" }
   },
   "shipping": { "claim": "declared", "decidedBy": "npm" },
   "artifacts": [

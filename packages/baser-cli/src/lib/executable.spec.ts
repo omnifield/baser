@@ -32,7 +32,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { chmodSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { MANIFEST_PATH } from '@omnifield/baser-materialize';
+import { MANIFEST_PATH } from '@baser/materialize';
 import {
   installDevbox,
   DEVBOX_PACKAGE,

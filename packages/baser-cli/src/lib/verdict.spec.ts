@@ -41,7 +41,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkPackage, type CheckReport } from '@omnifield/baser-check';
+import { checkPackage, type CheckReport } from '@baser/check';
 import { bundle } from './bundle.js';
 import { cli } from './cli.js';
 import { HUMAN_VERDICT, renderBundle, renderCheck } from './report.js';

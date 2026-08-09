@@ -71,7 +71,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { FORM_VERSION } from '@omnifield/baser-contracts';
+import { FORM_VERSION } from '@baser/contracts';
 import {
   runSealed,
   spawnSealed,

@@ -164,14 +164,14 @@ describe('цена чтения — видна, а не спрятана', () =>
 describe('манифест потребителя на имя НЕ влияет — ни настоящий, ни наш', () => {
   it('наш собственный корневой манифест назван иначе, чем репозиторий', async () => {
     // Живой контрпример, а не выдуманный: корень ЭТОГО репозитория объявлен
-    // `@omnifield/baser-source`, а репозиторий называется `baser`. Имя из
+    // `@baser/source`, а репозиторий называется `baser`. Имя из
     // манифеста дало бы `baser-source-devbox` — то есть разошлось бы с живым
     // `.devcontainer`, который и есть эталон приёмки этой зоны.
     const { json } = await materialize({
       repoName: 'baser-live',
       gitOrigin: 'https://github.com/omnifield/baser.git',
       manifest: {
-        name: '@omnifield/baser-source',
+        name: '@baser/source',
         version: '0.0.0',
         private: true,
         devDependencies: { [DEVBOX_PACKAGE]: '0.2.0' },

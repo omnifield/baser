@@ -1,6 +1,6 @@
 name: PR title
 
-# ФАЙЛ КЛАДЁТ ОБВЕС `@omnifield/baser-git` — правки затираются при следующем
+# ФАЙЛ КЛАДЁТ ОБВЕС `@baser/git` — правки затираются при следующем
 # применении. Версия Node приезжает настройкой `nodeVersion`, само правило —
 # настройками `titleTypes` · `titleScopeRequired` · `titleScopes`.
 #

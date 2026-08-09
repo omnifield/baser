@@ -1,5 +1,5 @@
 {
-  "name": "@omnifield/baser-registry",
+  "name": "@baser/registry",
   "version": "0.2.0-dev.2",
   "repository": {
     "type": "git",
@@ -17,7 +17,7 @@
   "exports": {
     "./package.json": "./package.json",
     ".": {
-      "@omnifield/baser-source": "./src/index.ts",
+      "@baser/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"

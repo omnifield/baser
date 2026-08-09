@@ -1,4 +1,4 @@
-# `@omnifield/baser-contracts` — хвостовик
+# `@baser/contracts` — хвостовик
 
 **Форма, которой обвес объявляет себя станку.** Станок не знает, что за инструмент
 в патроне, — он знает форму крепления (`kb:BASER2-4`). Против этой формы программируют
@@ -67,7 +67,7 @@
 {
   "formVersion": 4,
   "sources": [
-    { "use": "@omnifield/baser-devbox", "version": "0.2.0" }, // закреплено
+    { "use": "@baser/devbox", "version": "0.2.0" }, // закреплено
     { "use": "@brainer/agent-harness" }, // не закреплено — и это законно
   ],
 }
@@ -106,7 +106,7 @@
 {
   "formVersion": 5,
   "sources": [
-    { "use": "@omnifield/baser-devbox", "channel": "dev" }, // «последнее из дев-канала»
+    { "use": "@baser/devbox", "channel": "dev" }, // «последнее из дев-канала»
     { "use": "@omnifield/brainer-harness", "version": "0.2.0" }, // закреплено номером
   ],
 }
@@ -362,7 +362,7 @@
 ```jsonc
 // package.json пакета обвеса — ФОРМА блока, а не выписка из живого файла
 {
-  "name": "@omnifield/baser-devbox",
+  "name": "@baser/devbox",
   "version": "1.0.0", // ← версия обвеса живёт ЗДЕСЬ, и только здесь
   "baser": {
     "formVersion": 2,
@@ -932,7 +932,7 @@ export function devboxName(ctx) {
 {
   "formVersion": 5,
   "sources": [
-    { "use": "@omnifield/baser-devbox", "version": "0.2.0" },
+    { "use": "@baser/devbox", "version": "0.2.0" },
     { "use": "@omnifield/brainer-agent-harness", "channel": "dev" },
   ],
 }
@@ -1206,8 +1206,8 @@ baser:
 держится за наши внутренности, мы уже видели (`tasker:BASER2-59`).
 
 ```js
-import { locateSourceContent } from '@omnifield/baser-contracts/locate';
-import { describeProblems } from '@omnifield/baser-contracts';
+import { locateSourceContent } from '@baser/contracts/locate';
+import { describeProblems } from '@baser/contracts';
 
 // Всё, что знает автор хука: своя личность и имя своего файла.
 const эталон = locateSourceContent(
@@ -1247,8 +1247,8 @@ readFileSync(эталон.value, 'utf-8');
 
 | вход                                | что делает                                       |
 | ----------------------------------- | ------------------------------------------------ |
-| `@omnifield/baser-contracts`        | форма. Ничего не читает и не исполняет, как было |
-| `@omnifield/baser-contracts/locate` | читает ФС и резолвит пакеты у потребителя        |
+| `@baser/contracts`        | форма. Ничего не читает и не исполняет, как было |
+| `@baser/contracts/locate` | читает ФС и резолвит пакеты у потребителя        |
 
 Разбор формы чистым и остался: то, что делает второй вход, — не разбор. «Где у
 потребителя лежит установленный пакет» — факт файловой системы, и чистой функцией он не
@@ -1279,13 +1279,13 @@ readFileSync(эталон.value, 'utf-8');
 поставленного, кто угодно — по зависимостям манифеста потребителя.
 
 ```js
-import { locatePackage } from '@omnifield/baser-contracts/locate';
+import { locatePackage } from '@baser/contracts/locate';
 import {
   readSourceDeclaration,
   describeProblems,
-} from '@omnifield/baser-contracts';
+} from '@baser/contracts';
 
-const пакет = locatePackage('@omnifield/baser-devbox', repoRoot);
+const пакет = locatePackage('@baser/devbox', repoRoot);
 if (!пакет.ok) {
   console.error(describeProblems(пакет.problems));
   return;
@@ -1417,7 +1417,7 @@ npx vitest run --config packages/baser-contracts/vitest.config.mts
 (`tasker:BASER2-27`).
 
 **Выразительность формы на НАСТОЯЩЕМ обвесе доказывает дверь** (`tasker:BASER2-26`,
-`tasker:BASER2-78`): её приёмка ставит `@omnifield/baser-devbox` так же, как его получит
+`tasker:BASER2-78`): её приёмка ставит `@baser/devbox` так же, как его получит
 потребитель — распакованным тарболом от `npm pack`, — и сверяет уложенное с живым
 репозиторием байт в байт. У двери для этого есть и настоящий пакет, и движок; у формы
 нет ни того, ни другого, и заводить их ради пробы значило бы завести второй девбокс.

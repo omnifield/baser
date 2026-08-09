@@ -31,7 +31,7 @@
  * разные: там — откуда брать текст, здесь — что вышло, когда его взяли.
  */
 
-import type { SourceWarning } from '@omnifield/baser-contracts';
+import type { SourceWarning } from '@baser/contracts';
 import type { ArtifactClass } from './classes.js';
 
 /**

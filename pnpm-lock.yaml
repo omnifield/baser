@@ -50,7 +50,7 @@ importers:
 
   packages/baser-check:
     dependencies:
-      '@omnifield/baser-contracts':
+      '@baser/contracts':
         specifier: workspace:*
         version: link:../baser-contracts
       tslib:
@@ -59,16 +59,16 @@ importers:
 
   packages/baser-cli:
     dependencies:
-      '@omnifield/baser-check':
+      '@baser/check':
         specifier: workspace:*
         version: link:../baser-check
-      '@omnifield/baser-contracts':
+      '@baser/contracts':
         specifier: workspace:*
         version: link:../baser-contracts
-      '@omnifield/baser-materialize':
+      '@baser/materialize':
         specifier: workspace:*
         version: link:../baser-materialize
-      '@omnifield/baser-pack':
+      '@baser/pack':
         specifier: workspace:*
         version: link:../baser-pack
       ejs:
@@ -100,7 +100,7 @@ importers:
 
   packages/baser-materialize:
     dependencies:
-      '@omnifield/baser-contracts':
+      '@baser/contracts':
         specifier: workspace:*
         version: link:../baser-contracts
       tslib:
@@ -113,10 +113,10 @@ importers:
 
   packages/baser-pack:
     dependencies:
-      '@omnifield/baser-check':
+      '@baser/check':
         specifier: workspace:*
         version: link:../baser-check
-      '@omnifield/baser-contracts':
+      '@baser/contracts':
         specifier: workspace:*
         version: link:../baser-contracts
       tslib:

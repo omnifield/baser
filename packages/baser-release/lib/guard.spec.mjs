@@ -5,11 +5,22 @@ import { judge } from './guard.mjs';
 /**
  * Суждение на подставленных фактах: пакеты, выпущенные теги, ломающие коммиты.
  * Ни диска, ни git — только те номера, которые проверяются.
+ *
+ * `tags` — номера, уехавшие под НЫНЕШНИМ именем: обычный случай, и записывать
+ * его в развёрнутой форме значило бы утопить в шуме всё остальное. Выпуски под
+ * прежним именем подаются `releases` целиком — им отведён свой раздел ниже.
  */
-function verdictOf({ pkg, tags = [], breaking = {} }) {
+function verdictOf({ pkg, tags = [], releases, breaking = {} }) {
+  const manifest = { dir: 'packages/baser-cli', zone: 'cli', ...pkg };
   return judge({
-    packages: [{ dir: 'packages/baser-cli', zone: 'cli', ...pkg }],
-    releasedVersions: () => tags,
+    packages: [manifest],
+    releases: () =>
+      releases ??
+      tags.map((version) => ({
+        tag: `${manifest.name}@${version}`,
+        name: manifest.name,
+        version,
+      })),
     breakingSince: (tag) => breaking[tag] ?? [],
   });
 }
@@ -224,6 +235,86 @@ describe('предвыпускной номер судится, а не отве
   });
 });
 
+/**
+ * ПЕРЕИМЕНОВАННЫЙ ПАКЕТ — история уехала под ПРЕЖНИМ именем, и она такой же
+ * факт, как своя. Случай пойман живьём 2026-08-09 (`tasker:BASER2-260`): после
+ * переезда на канон имён (`kb:MECH-15`) гейт под новым именем видел пакет,
+ * который никогда не выпускался, — то есть пропустил бы номер, уже уехавший
+ * потребителям.
+ *
+ * Суждение о прежних именах НЕ ЗНАЕТ: оно получает выпуски вместе с тегами, и
+ * этого достаточно, чтобы судить одинаково и называть тег, который существует.
+ */
+describe('пакет со сменённым именем', () => {
+  /** Выпуски под прежним именем — так их подаёт `repo.mjs` после объявления. */
+  const ПРЕЖНИЕ = ['0.1.0', '0.2.0-dev.1'].map((version) => ({
+    tag: `@старое/p@${version}`,
+    name: '@старое/p',
+    version,
+  }));
+
+  it('номер, уехавший под прежним именем, занят — и тег назван настоящий', () => {
+    const { problems } = verdictOf({
+      pkg: { name: '@новое/p', version: '0.1.0' },
+      releases: ПРЕЖНИЕ,
+    });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(
+      'уже выпущен тегом @старое/p@0.1.0 (прежнее имя пакета)',
+    );
+    // Собери гейт тег из нынешнего имени — человек пошёл бы искать
+    // `@новое/p@0.1.0`, которого в репозитории нет.
+    expect(problems[0]).not.toContain('@новое/p@0.1.0');
+  });
+
+  it('откат назад отвергнут — история прежнего имени считается выпущенной', () => {
+    const { problems } = verdictOf({
+      pkg: { name: '@новое/p', version: '0.1.1' },
+      releases: ПРЕЖНИЕ,
+    });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(
+      'не старше выпущенной 0.2.0-dev.1 (прежнее имя пакета)',
+    );
+  });
+
+  it('окно ломающих открывается тем тегом, который есть, а не собранным', () => {
+    const asked = [];
+    const { said, problems } = judge({
+      packages: [
+        {
+          name: '@новое/p',
+          version: '0.2.0',
+          dir: 'packages/baser-p',
+          zone: 'p',
+        },
+      ],
+      releases: () => ПРЕЖНИЕ,
+      breakingSince: (tag) => {
+        asked.push(tag);
+        return tag === '@старое/p@0.1.0' ? BREAKING : [];
+      },
+    });
+
+    expect(asked).toEqual(['@старое/p@0.1.0']);
+    expect(problems).toEqual([]);
+    expect(said[0]).toContain('0.1.0 → 0.2.0, ломающих коммитов 1 — минор набран');
+  });
+
+  it('без объявленных прежних имён история пуста — то самое ослепление', () => {
+    // Проба держит ЦЕНУ пропущенного объявления, а не поведение гейта: с пустой
+    // историей он честно говорит «не выпускался» и пропускает занятый номер.
+    const { said, problems } = verdictOf({
+      pkg: { name: '@новое/p', version: '0.1.0' },
+      releases: [],
+    });
+    expect(problems).toEqual([]);
+    expect(said).toEqual([
+      '@новое/p: тегов выпуска нет — пакет не выпускался, сравнивать не с чем',
+    ]);
+  });
+});
+
 describe('набор пакетов', () => {
   it('судится каждый, а вердикты не смешиваются', () => {
     const { said, problems } = judge({
@@ -238,8 +329,10 @@ describe('набор пакетов', () => {
           private: true,
         },
       ],
-      releasedVersions: (name) =>
-        name === 'a' ? ['0.1.0'] : name === 'b' ? ['0.1.0'] : [],
+      releases: ({ name }) =>
+        name === 'c'
+          ? []
+          : [{ tag: `${name}@0.1.0`, name, version: '0.1.0' }],
       breakingSince: (tag) => (tag === 'b@0.1.0' ? BREAKING : []),
     });
 
@@ -273,7 +366,7 @@ describe('трейсы', () => {
           private: true,
         },
       ],
-      releasedVersions: () => ['0.1.0'],
+      releases: ({ name }) => [{ tag: `${name}@0.1.0`, name, version: '0.1.0' }],
       breakingSince: () => [],
       trace,
     });

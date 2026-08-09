@@ -1,5 +1,5 @@
 /**
- * `@omnifield/baser-cli` — дверь.
+ * `@baser/cli` — дверь.
  *
  * Раннер, который зовёт станок и кладёт файлы на реальную ФС. Движок работает
  * только с виртуальным деревом и файловой системы не касается вовсе
@@ -88,7 +88,7 @@ export {
 export type { ConsumerConfigState, Repo } from './lib/repo.js';
 
 // Резолв пакета ПО ИМЕНИ отсюда ушёл: он живёт одним экземпляром в
-// `@omnifield/baser-contracts/locate` (`locatePackage`), и второго имени у него
+// `@baser/contracts/locate` (`locatePackage`), и второго имени у него
 // нет — реэкспорт был бы вторым именем одного факта (`tasker:BASER2-128`).
 export { locateContentRoot } from './lib/installed.js';
 export type { SourceLocation } from './lib/installed.js';

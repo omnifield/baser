@@ -33,7 +33,7 @@ import type {
   ApplyReport,
   MaterializationPlan,
   TraceSpan,
-} from '@omnifield/baser-materialize';
+} from '@baser/materialize';
 import type { DerivedMove } from './derived.js';
 import type { ArtifactDifference } from './difference.js';
 import type { DoorProblem } from './problems.js';

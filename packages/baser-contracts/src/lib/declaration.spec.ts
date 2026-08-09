@@ -41,7 +41,7 @@ describe('объявление обвеса', () => {
 
   it('достаёт блок из манифеста пакета и называет его отсутствие', () => {
     const manifest = {
-      name: '@omnifield/baser-devbox',
+      name: '@baser/devbox',
       baser: declarationBlock(),
     };
     expect(readSourceDeclaration(manifest).ok).toBe(true);
@@ -167,7 +167,7 @@ describe('объявление обвеса', () => {
     it('объясняет, что это не имя пакета', () => {
       const problems = refusals({
         source: {
-          id: '@omnifield/baser-devbox',
+          id: '@baser/devbox',
           title: 'Девбокс',
           contentRoot: 'template',
         },

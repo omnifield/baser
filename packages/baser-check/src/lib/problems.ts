@@ -12,7 +12,7 @@
  * от проверки стали бы двумя правдами об одном событии.
  */
 
-import type { FormProblem, FormProblemCode } from '@omnifield/baser-contracts';
+import type { FormProblem, FormProblemCode } from '@baser/contracts';
 
 /**
  * Что не так с ПОСТАВКОЙ обвеса — то, чего форма сказать не может.

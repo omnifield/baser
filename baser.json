@@ -2,14 +2,14 @@
   "formVersion": 5,
   "sources": [
     {
-      "use": "@omnifield/baser-devbox",
+      "use": "@baser/devbox",
       "channel": "dev"
     },
     {
       "use": "@omnifield/brainer-harness"
     },
     {
-      "use": "@omnifield/baser-git",
+      "use": "@baser/git",
       "version": "0.2.0-dev.1"
     }
   ]

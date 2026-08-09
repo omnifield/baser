@@ -15,7 +15,7 @@
  * что она ничего не пишет и ничего не собирает: это события самой сборки.
  */
 
-import type { CheckProblem, CheckProblemCode } from '@omnifield/baser-check';
+import type { CheckProblem, CheckProblemCode } from '@baser/check';
 
 /**
  * Что не так со СБОРКОЙ нагрузки — то, чего проверка сказать не может.

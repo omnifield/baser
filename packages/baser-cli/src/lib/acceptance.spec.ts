@@ -28,7 +28,7 @@
  * Под приёмкой сменились ОБА основания, и оба в одну сторону — в сторону
  * настоящего.
  *
- * 1. **Обвес.** Ставится тарбол пакета `@omnifield/baser-devbox`, а не копия
+ * 1. **Обвес.** Ставится тарбол пакета `@baser/devbox`, а не копия
  *    примера из чужой зоны. Копия успела разъехаться с пакетом, и разъезд был
  *    невидим: обе стороны зеленели, потому что каждая проверяла свою половину.
  *
@@ -59,7 +59,7 @@ import {
   type Consumer,
 } from './devbox.fixture.js';
 import { run } from './run.js';
-import { MANIFEST_PATH } from '@omnifield/baser-materialize';
+import { MANIFEST_PATH } from '@baser/materialize';
 
 const LOCK = '.devcontainer/devcontainer-lock.json';
 /** Живой артефакт девбокса — он же настоящий `dest` обвеса, без подмен. */

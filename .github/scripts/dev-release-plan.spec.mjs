@@ -20,7 +20,7 @@ import { plan, readPackages, releasedTags, report } from './dev-release-plan.mjs
 const pkg = (name, version, rest = {}) => ({
   name,
   version,
-  dir: `packages/${name.replace('@omnifield/', '')}`,
+  dir: `packages/${name.replace('@baser/', '')}`,
   private: false,
   dependencies: {},
   ...rest,
@@ -32,15 +32,15 @@ const NOTHING_RELEASED = new Set();
 describe('набор — только предвыпускные номера нашей схемы', () => {
   it('дев-номер уезжает, стабильная тройка — нет', () => {
     const { publish } = plan(
-      [pkg('@omnifield/baser-cli', '0.9.0-dev.1'), pkg('@omnifield/baser-pack', '0.4.0')],
+      [pkg('@baser/cli', '0.9.0-dev.1'), pkg('@baser/pack', '0.4.0')],
       NOTHING_RELEASED,
     );
-    expect(publish.map((entry) => entry.name)).toEqual(['@omnifield/baser-cli']);
+    expect(publish.map((entry) => entry.name)).toEqual(['@baser/cli']);
   });
 
   it('невыпускаемый не уезжает, даже с дев-номером', () => {
     const { publish } = plan(
-      [pkg('@omnifield/baser-source', '0.9.0-dev.1', { private: true })],
+      [pkg('@baser/source', '0.9.0-dev.1', { private: true })],
       NOTHING_RELEASED,
     );
     expect(publish).toEqual([]);
@@ -57,14 +57,14 @@ describe('набор — только предвыпускные номера н
       '0.3.0-dev.1-rc',
     ];
     for (const version of near) {
-      const { publish } = plan([pkg('@omnifield/baser-cli', version)], NOTHING_RELEASED);
+      const { publish } = plan([pkg('@baser/cli', version)], NOTHING_RELEASED);
       expect(publish, version).toEqual([]);
     }
   });
 
   it('номера нет вовсе — план не падает, а не берёт пакет', () => {
     const { publish } = plan(
-      [{ name: '@omnifield/baser-cli', dir: 'packages/baser-cli', private: false }],
+      [{ name: '@baser/cli', dir: 'packages/baser-cli', private: false }],
       NOTHING_RELEASED,
     );
     expect(publish).toEqual([]);
@@ -72,37 +72,37 @@ describe('набор — только предвыпускные номера н
 
   it('тег выпуска — `<имя>@<номер>`, форма из nx.json', () => {
     const { publish } = plan(
-      [pkg('@omnifield/baser-cli', '0.9.0-dev.1')],
+      [pkg('@baser/cli', '0.9.0-dev.1')],
       NOTHING_RELEASED,
     );
-    expect(publish[0].tag).toBe('@omnifield/baser-cli@0.9.0-dev.1');
+    expect(publish[0].tag).toBe('@baser/cli@0.9.0-dev.1');
   });
 });
 
 /**
  * СЛУЧАЙ, РАДИ КОТОРОГО ЗАВЕДЁН `held` (`tasker:BASER2-168`). Выпуск номер в
- * манифесте не двигает: `@omnifield/baser-release@0.1.0-dev.1` уехал, номер
+ * манифесте не двигает: `@baser/release@0.1.0-dev.1` уехал, номер
  * остался, и следующий дев-выпуск девбокса потянул его за собой — упираясь в
  * собственную проверку «номер занят». Ловится это планом, а не прогоном.
  */
 describe('уже выпущенный номер в набор не попадает', () => {
   const packages = [
-    pkg('@omnifield/baser-devbox', '0.9.0-dev.1'),
-    pkg('@omnifield/baser-release', '0.1.0-dev.1'),
+    pkg('@baser/devbox', '0.9.0-dev.1'),
+    pkg('@baser/release', '0.1.0-dev.1'),
   ];
-  const released = new Set(['@omnifield/baser-release@0.1.0-dev.1']);
+  const released = new Set(['@baser/release@0.1.0-dev.1']);
 
   it('уезжает только тот, чей номер ещё не выпускался', () => {
     const { publish } = plan(packages, released);
     expect(publish.map((entry) => entry.tag)).toEqual([
-      '@omnifield/baser-devbox@0.9.0-dev.1',
+      '@baser/devbox@0.9.0-dev.1',
     ]);
   });
 
   it('придержанный назван, а не пропал молча', () => {
     const { held } = plan(packages, released);
     expect(held.map((entry) => entry.tag)).toEqual([
-      '@omnifield/baser-release@0.1.0-dev.1',
+      '@baser/release@0.1.0-dev.1',
     ]);
   });
 
@@ -110,14 +110,14 @@ describe('уже выпущенный номер в набор не попада
     const { publish, held } = plan(
       packages,
       new Set([
-        '@omnifield/baser-release@0.0.9',
-        '@omnifield/baser-release@0.1.0-dev.0',
-        '@omnifield/baser-devbox@0.8.0-dev.7',
+        '@baser/release@0.0.9',
+        '@baser/release@0.1.0-dev.0',
+        '@baser/devbox@0.8.0-dev.7',
       ]),
     );
     expect(publish.map((entry) => entry.name)).toEqual([
-      '@omnifield/baser-devbox',
-      '@omnifield/baser-release',
+      '@baser/devbox',
+      '@baser/release',
     ]);
     expect(held).toEqual([]);
   });
@@ -126,8 +126,8 @@ describe('уже выпущенный номер в набор не попада
     const { publish, held } = plan(
       packages,
       new Set([
-        '@omnifield/baser-devbox@0.9.0-dev.1',
-        '@omnifield/baser-release@0.1.0-dev.1',
+        '@baser/devbox@0.9.0-dev.1',
+        '@baser/release@0.1.0-dev.1',
       ]),
     );
     expect(publish).toEqual([]);
@@ -139,18 +139,18 @@ describe('соседи, на которых ссылается выпускае�
   it('сосед не уезжает — значит обязан уже лежать в реестре', () => {
     const { requires } = plan(
       [
-        pkg('@omnifield/baser-cli', '0.9.0-dev.1', {
-          dependencies: { '@omnifield/baser-contracts': 'workspace:*' },
+        pkg('@baser/cli', '0.9.0-dev.1', {
+          dependencies: { '@baser/contracts': 'workspace:*' },
         }),
-        pkg('@omnifield/baser-contracts', '0.5.0'),
+        pkg('@baser/contracts', '0.5.0'),
       ],
       NOTHING_RELEASED,
     );
     expect(requires).toEqual([
       {
-        name: '@omnifield/baser-contracts',
+        name: '@baser/contracts',
         version: '0.5.0',
-        neededBy: '@omnifield/baser-cli',
+        neededBy: '@baser/cli',
       },
     ]);
   });
@@ -158,10 +158,10 @@ describe('соседи, на которых ссылается выпускае�
   it('сосед уезжает этим же прогоном — спрашивать про него реестр нечего', () => {
     const { requires } = plan(
       [
-        pkg('@omnifield/baser-cli', '0.9.0-dev.1', {
-          dependencies: { '@omnifield/baser-contracts': 'workspace:*' },
+        pkg('@baser/cli', '0.9.0-dev.1', {
+          dependencies: { '@baser/contracts': 'workspace:*' },
         }),
-        pkg('@omnifield/baser-contracts', '0.5.0-dev.3'),
+        pkg('@baser/contracts', '0.5.0-dev.3'),
       ],
       NOTHING_RELEASED,
     );
@@ -171,18 +171,18 @@ describe('соседи, на которых ссылается выпускае�
   it('придержанный сосед — тоже требование к реестру, и оно выполнено', () => {
     const { requires } = plan(
       [
-        pkg('@omnifield/baser-cli', '0.9.0-dev.1', {
-          dependencies: { '@omnifield/baser-release': 'workspace:*' },
+        pkg('@baser/cli', '0.9.0-dev.1', {
+          dependencies: { '@baser/release': 'workspace:*' },
         }),
-        pkg('@omnifield/baser-release', '0.1.0-dev.1'),
+        pkg('@baser/release', '0.1.0-dev.1'),
       ],
-      new Set(['@omnifield/baser-release@0.1.0-dev.1']),
+      new Set(['@baser/release@0.1.0-dev.1']),
     );
     expect(requires).toEqual([
       {
-        name: '@omnifield/baser-release',
+        name: '@baser/release',
         version: '0.1.0-dev.1',
-        neededBy: '@omnifield/baser-cli',
+        neededBy: '@baser/cli',
       },
     ]);
   });
@@ -190,10 +190,10 @@ describe('соседи, на которых ссылается выпускае�
   it('ссылка не на соседа по монорепе — не наше требование', () => {
     const { requires } = plan(
       [
-        pkg('@omnifield/baser-cli', '0.9.0-dev.1', {
-          dependencies: { vitest: '^4.1.0', '@omnifield/baser-contracts': '^0.5.0' },
+        pkg('@baser/cli', '0.9.0-dev.1', {
+          dependencies: { vitest: '^4.1.0', '@baser/contracts': '^0.5.0' },
         }),
-        pkg('@omnifield/baser-contracts', '0.5.0'),
+        pkg('@baser/contracts', '0.5.0'),
       ],
       NOTHING_RELEASED,
     );
@@ -204,10 +204,10 @@ describe('соседи, на которых ссылается выпускае�
     for (const range of ['workspace:*', 'workspace:^', 'workspace:~']) {
       const { requires } = plan(
         [
-          pkg('@omnifield/baser-cli', '0.9.0-dev.1', {
-            dependencies: { '@omnifield/baser-contracts': range },
+          pkg('@baser/cli', '0.9.0-dev.1', {
+            dependencies: { '@baser/contracts': range },
           }),
-          pkg('@omnifield/baser-contracts', '0.5.0'),
+          pkg('@baser/contracts', '0.5.0'),
         ],
         NOTHING_RELEASED,
       );
@@ -218,13 +218,13 @@ describe('соседи, на которых ссылается выпускае�
   it('один сосед у двух выпускаемых — одна запись, а не две', () => {
     const { requires } = plan(
       [
-        pkg('@omnifield/baser-cli', '0.9.0-dev.1', {
-          dependencies: { '@omnifield/baser-contracts': 'workspace:*' },
+        pkg('@baser/cli', '0.9.0-dev.1', {
+          dependencies: { '@baser/contracts': 'workspace:*' },
         }),
-        pkg('@omnifield/baser-pack', '0.2.0-dev.4', {
-          dependencies: { '@omnifield/baser-contracts': 'workspace:*' },
+        pkg('@baser/pack', '0.2.0-dev.4', {
+          dependencies: { '@baser/contracts': 'workspace:*' },
         }),
-        pkg('@omnifield/baser-contracts', '0.5.0'),
+        pkg('@baser/contracts', '0.5.0'),
       ],
       NOTHING_RELEASED,
     );
@@ -234,7 +234,7 @@ describe('соседи, на которых ссылается выпускае�
   it('ссылка на пакет, которого в дереве нет — не требование', () => {
     const { requires } = plan(
       [
-        pkg('@omnifield/baser-cli', '0.9.0-dev.1', {
+        pkg('@baser/cli', '0.9.0-dev.1', {
           dependencies: { '@omnifield/baser-ghost': 'workspace:*' },
         }),
       ],
@@ -246,13 +246,13 @@ describe('соседи, на которых ссылается выпускае�
   it('придержанный на соседей не ссылается — он не уезжает', () => {
     const { requires } = plan(
       [
-        pkg('@omnifield/baser-release', '0.1.0-dev.1', {
-          dependencies: { '@omnifield/baser-contracts': 'workspace:*' },
+        pkg('@baser/release', '0.1.0-dev.1', {
+          dependencies: { '@baser/contracts': 'workspace:*' },
         }),
-        pkg('@omnifield/baser-devbox', '0.9.0-dev.1'),
-        pkg('@omnifield/baser-contracts', '0.5.0'),
+        pkg('@baser/devbox', '0.9.0-dev.1'),
+        pkg('@baser/contracts', '0.5.0'),
       ],
-      new Set(['@omnifield/baser-release@0.1.0-dev.1']),
+      new Set(['@baser/release@0.1.0-dev.1']),
     );
     expect(requires).toEqual([]);
   });
@@ -266,16 +266,16 @@ describe('план словами', () => {
   const said = (result, packages) => report(result, packages).join('\n');
 
   it('дев-номеров нет — так и сказано, и дерево названо', () => {
-    const packages = [pkg('@omnifield/baser-cli', '0.9.0')];
+    const packages = [pkg('@baser/cli', '0.9.0')];
     const text = said(plan(packages, NOTHING_RELEASED), packages);
     expect(text).toMatch(/Ни один пакет не несёт дев-номера/);
-    expect(text).toMatch(/@omnifield\/baser-cli: 0\.9\.0/);
+    expect(text).toMatch(/@baser\/cli: 0\.9\.0/);
   });
 
   it('дев-номера есть, но выпущены — причина названа ЭТА, а не «номеров нет»', () => {
-    const packages = [pkg('@omnifield/baser-cli', '0.9.0-dev.1')];
+    const packages = [pkg('@baser/cli', '0.9.0-dev.1')];
     const text = said(
-      plan(packages, new Set(['@omnifield/baser-cli@0.9.0-dev.1'])),
+      plan(packages, new Set(['@baser/cli@0.9.0-dev.1'])),
       packages,
     );
     expect(text).toMatch(/УЖЕ ВЫПУЩЕНЫ/);
@@ -284,34 +284,34 @@ describe('план словами', () => {
   });
 
   it('невыпускаемый в перечне дерева помечен', () => {
-    const packages = [pkg('@omnifield/baser-source', '0.0.0', { private: true })];
+    const packages = [pkg('@baser/source', '0.0.0', { private: true })];
     expect(said(plan(packages, NOTHING_RELEASED), packages)).toMatch(
       /невыпускаемый/,
     );
   });
 
   it('уезжающее перечислено номерами', () => {
-    const packages = [pkg('@omnifield/baser-cli', '0.9.0-dev.1')];
+    const packages = [pkg('@baser/cli', '0.9.0-dev.1')];
     expect(said(plan(packages, NOTHING_RELEASED), packages)).toMatch(
-      /уезжает[\s\S]*@omnifield\/baser-cli@0\.9\.0-dev\.1/,
+      /уезжает[\s\S]*@baser\/cli@0\.9\.0-dev\.1/,
     );
   });
 
   it('придержанное названо рядом с уезжающим, а не только в JSON', () => {
     const packages = [
-      pkg('@omnifield/baser-devbox', '0.9.0-dev.1'),
-      pkg('@omnifield/baser-release', '0.1.0-dev.1'),
+      pkg('@baser/devbox', '0.9.0-dev.1'),
+      pkg('@baser/release', '0.1.0-dev.1'),
     ];
     const text = said(
-      plan(packages, new Set(['@omnifield/baser-release@0.1.0-dev.1'])),
+      plan(packages, new Set(['@baser/release@0.1.0-dev.1'])),
       packages,
     );
     expect(text).toMatch(/НЕ уезжает/);
-    expect(text).toMatch(/@omnifield\/baser-release@0\.1\.0-dev\.1/);
+    expect(text).toMatch(/@baser\/release@0\.1\.0-dev\.1/);
   });
 
   it('придержанного нет — про него и не говорится', () => {
-    const packages = [pkg('@omnifield/baser-devbox', '0.9.0-dev.1')];
+    const packages = [pkg('@baser/devbox', '0.9.0-dev.1')];
     expect(said(plan(packages, NOTHING_RELEASED), packages)).not.toMatch(
       /НЕ уезжает/,
     );
@@ -319,13 +319,13 @@ describe('план словами', () => {
 
   it('требования к реестру названы вместе с тем, кому они нужны', () => {
     const packages = [
-      pkg('@omnifield/baser-cli', '0.9.0-dev.1', {
-        dependencies: { '@omnifield/baser-contracts': 'workspace:*' },
+      pkg('@baser/cli', '0.9.0-dev.1', {
+        dependencies: { '@baser/contracts': 'workspace:*' },
       }),
-      pkg('@omnifield/baser-contracts', '0.5.0'),
+      pkg('@baser/contracts', '0.5.0'),
     ];
     expect(said(plan(packages, NOTHING_RELEASED), packages)).toMatch(
-      /@omnifield\/baser-contracts@0\.5\.0 — нужен @omnifield\/baser-cli/,
+      /@baser\/contracts@0\.5\.0 — нужен @baser\/cli/,
     );
   });
 });
@@ -387,24 +387,24 @@ describe('прогон на дереве', () => {
     const root = repo({
       packages: {
         'baser-cli': {
-          name: '@omnifield/baser-cli',
+          name: '@baser/cli',
           version: '0.9.0-dev.1',
-          dependencies: { '@omnifield/baser-contracts': 'workspace:*' },
+          dependencies: { '@baser/contracts': 'workspace:*' },
         },
-        'baser-contracts': { name: '@omnifield/baser-contracts', version: '0.5.0' },
+        'baser-contracts': { name: '@baser/contracts', version: '0.5.0' },
       },
     });
 
     expect(readPackages(root)).toEqual([
       {
-        name: '@omnifield/baser-cli',
+        name: '@baser/cli',
         version: '0.9.0-dev.1',
         dir: 'packages/baser-cli',
         private: false,
-        dependencies: { '@omnifield/baser-contracts': 'workspace:*' },
+        dependencies: { '@baser/contracts': 'workspace:*' },
       },
       {
-        name: '@omnifield/baser-contracts',
+        name: '@baser/contracts',
         version: '0.5.0',
         dir: 'packages/baser-contracts',
         private: false,
@@ -418,9 +418,9 @@ describe('прогон на дереве', () => {
   });
 
   it('теги выпуска читаются из git', () => {
-    const root = repo({ tags: ['@omnifield/baser-cli@0.9.0-dev.1', 'веха'] });
+    const root = repo({ tags: ['@baser/cli@0.9.0-dev.1', 'веха'] });
     expect(releasedTags(root)).toEqual(
-      new Set(['@omnifield/baser-cli@0.9.0-dev.1', 'веха']),
+      new Set(['@baser/cli@0.9.0-dev.1', 'веха']),
     );
   });
 
@@ -428,11 +428,11 @@ describe('прогон на дереве', () => {
     const root = repo({
       packages: {
         'baser-cli': {
-          name: '@omnifield/baser-cli',
+          name: '@baser/cli',
           version: '0.9.0-dev.1',
-          dependencies: { '@omnifield/baser-contracts': 'workspace:*' },
+          dependencies: { '@baser/contracts': 'workspace:*' },
         },
-        'baser-contracts': { name: '@omnifield/baser-contracts', version: '0.5.0' },
+        'baser-contracts': { name: '@baser/contracts', version: '0.5.0' },
       },
     });
 
@@ -441,17 +441,17 @@ describe('прогон на дереве', () => {
     expect(JSON.parse(got.stdout)).toEqual({
       publish: [
         {
-          name: '@omnifield/baser-cli',
+          name: '@baser/cli',
           version: '0.9.0-dev.1',
           dir: 'packages/baser-cli',
-          tag: '@omnifield/baser-cli@0.9.0-dev.1',
+          tag: '@baser/cli@0.9.0-dev.1',
         },
       ],
       requires: [
         {
-          name: '@omnifield/baser-contracts',
+          name: '@baser/contracts',
           version: '0.5.0',
-          neededBy: '@omnifield/baser-cli',
+          neededBy: '@baser/cli',
         },
       ],
       held: [],
@@ -461,10 +461,10 @@ describe('прогон на дереве', () => {
   it('живой тег придерживает пакет — тот самый случай BASER2-168', () => {
     const root = repo({
       packages: {
-        'baser-devbox': { name: '@omnifield/baser-devbox', version: '0.9.0-dev.1' },
-        'baser-release': { name: '@omnifield/baser-release', version: '0.1.0-dev.1' },
+        'baser-devbox': { name: '@baser/devbox', version: '0.9.0-dev.1' },
+        'baser-release': { name: '@baser/release', version: '0.1.0-dev.1' },
       },
-      tags: ['@omnifield/baser-release@0.1.0-dev.1'],
+      tags: ['@baser/release@0.1.0-dev.1'],
     });
 
     const got = run('--root', root);
@@ -472,17 +472,17 @@ describe('прогон на дереве', () => {
 
     const { publish, held } = JSON.parse(got.stdout);
     expect(publish.map((entry) => entry.tag)).toEqual([
-      '@omnifield/baser-devbox@0.9.0-dev.1',
+      '@baser/devbox@0.9.0-dev.1',
     ]);
     expect(held.map((entry) => entry.tag)).toEqual([
-      '@omnifield/baser-release@0.1.0-dev.1',
+      '@baser/release@0.1.0-dev.1',
     ]);
     expect(got.stderr).toMatch(/НЕ уезжает/);
   });
 
   it('выпускать нечего — выход 1 и пустой stdout: воркфлоу нечего читать', () => {
     const root = repo({
-      packages: { 'baser-cli': { name: '@omnifield/baser-cli', version: '0.9.0' } },
+      packages: { 'baser-cli': { name: '@baser/cli', version: '0.9.0' } },
     });
 
     const got = run('--root', root);
@@ -494,9 +494,9 @@ describe('прогон на дереве', () => {
   it('всё выпущено — тоже выход 1, но причина названа своя', () => {
     const root = repo({
       packages: {
-        'baser-cli': { name: '@omnifield/baser-cli', version: '0.9.0-dev.1' },
+        'baser-cli': { name: '@baser/cli', version: '0.9.0-dev.1' },
       },
-      tags: ['@omnifield/baser-cli@0.9.0-dev.1'],
+      tags: ['@baser/cli@0.9.0-dev.1'],
     });
 
     const got = run('--root', root);
@@ -513,7 +513,7 @@ describe('прогон на дереве', () => {
   it('корень не репозиторий — выход 2: без тегов план врал бы составом', () => {
     const root = repo({
       packages: {
-        'baser-cli': { name: '@omnifield/baser-cli', version: '0.9.0-dev.1' },
+        'baser-cli': { name: '@baser/cli', version: '0.9.0-dev.1' },
       },
       git: false,
     });

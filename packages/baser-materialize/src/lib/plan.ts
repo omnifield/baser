@@ -93,7 +93,7 @@ import type { Manifest, ManifestRecord } from './manifest.js';
 import { MANIFEST_PATH, hashContent, readManifest } from './manifest.js';
 import type { TraceRecorder, TraceSpan } from './trace.js';
 import { createTrace } from './trace.js';
-import type { SourceWarning } from '@omnifield/baser-contracts';
+import type { SourceWarning } from '@baser/contracts';
 import { carriedWarning } from './warning.js';
 import {
   byBytes,

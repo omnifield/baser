@@ -30,8 +30,8 @@ import { cli, type CliOutcome } from './cli.js';
 import { run } from './run.js';
 import { renderText } from './report.js';
 import type { DoorResult, SourceRun } from './result.js';
-import { MANIFEST_PATH } from '@omnifield/baser-materialize';
-import { sourceConfigPath, FORM_VERSION } from '@omnifield/baser-contracts';
+import { MANIFEST_PATH } from '@baser/materialize';
+import { sourceConfigPath, FORM_VERSION } from '@baser/contracts';
 
 const DEVBOX_ID = 'omnifield/devbox';
 const AGENTS_ID = 'omnifield/agent-harness';

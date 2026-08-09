@@ -38,8 +38,8 @@ import {
   resolveWarning,
   type SourceDeclaration,
   type SourceWarning,
-} from '@omnifield/baser-contracts';
-import type { LocatedPackage } from '@omnifield/baser-contracts/locate';
+} from '@baser/contracts';
+import type { LocatedPackage } from '@baser/contracts/locate';
 import type { Repo } from './repo.js';
 import { loadResolvers } from './resolvers.js';
 

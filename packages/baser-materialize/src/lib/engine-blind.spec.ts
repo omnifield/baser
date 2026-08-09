@@ -53,7 +53,7 @@ const FORBIDDEN = [
  * против которого программируют все зоны. Всякое другое имя пакета `@omnifield/`
  * в коде движка означало бы знание про конкретную поставку.
  */
-const ALLOWED_PACKAGE = '@omnifield/baser-contracts';
+const ALLOWED_PACKAGE = '@baser/contracts';
 
 /** Файлы поставки: пробы и фикстуры в неё не уезжают и под правило не подпадают. */
 function shippedSources(): readonly string[] {
@@ -108,14 +108,14 @@ describe('движок не знает про конкретные обвесы'
       ...Object.keys(manifest['optionalDependencies'] ?? {}),
     ];
 
-    expect(shipped.filter((name) => name.startsWith('@omnifield/'))).toEqual([
+    expect(shipped.filter((name) => name.startsWith('@baser/'))).toEqual([
       ALLOWED_PACKAGE,
     ]);
   });
 
   it.each(files)('%s не называет чужих пакетов', (name) => {
     const code = codeOf(readFileSync(join(LIB, name), 'utf-8'));
-    const named = code.match(/@omnifield\/[a-z0-9-]+/g) ?? [];
+    const named = code.match(/@baser\/[a-z0-9-]+/g) ?? [];
 
     expect([...new Set(named)].filter((item) => item !== ALLOWED_PACKAGE)).toEqual(
       [],

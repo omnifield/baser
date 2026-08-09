@@ -1,5 +1,5 @@
 {
-  "name": "@omnifield/baser-check",
+  "name": "@baser/check",
   "version": "0.0.5-dev.1",
   "description": "Проверка «обвес подходит посадочному месту»: форма объявления обвеса и его поставка",
   "license": "MIT",
@@ -15,7 +15,7 @@
   "exports": {
     "./package.json": "./package.json",
     ".": {
-      "@omnifield/baser-source": "./src/index.ts",
+      "@baser/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
@@ -26,7 +26,7 @@
     "!**/*.tsbuildinfo"
   ],
   "dependencies": {
-    "@omnifield/baser-contracts": "workspace:*",
+    "@baser/contracts": "workspace:*",
     "tslib": "^2.3.0"
   },
   "publishConfig": {

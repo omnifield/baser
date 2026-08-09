@@ -4,7 +4,7 @@ export default defineConfig(() => ({
   root: __dirname,
   cacheDir: '../../node_modules/.vite/packages/baser-materialize',
   test: {
-    name: '@omnifield/baser-materialize',
+    name: '@baser/materialize',
     watch: false,
     globals: true,
     environment: 'node',

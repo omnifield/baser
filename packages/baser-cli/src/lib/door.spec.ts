@@ -16,7 +16,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { FORM_VERSION } from '@omnifield/baser-contracts';
+import { FORM_VERSION } from '@baser/contracts';
 import {
   installDevbox,
   soleRun,

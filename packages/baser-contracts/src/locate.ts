@@ -1,5 +1,5 @@
 /**
- * `@omnifield/baser-contracts/locate` — ВХОД ДЛЯ РАНТАЙМ-КОДА ОБВЕСА.
+ * `@baser/contracts/locate` — ВХОД ДЛЯ РАНТАЙМ-КОДА ОБВЕСА.
  *
  * Отдельный вход пакета, и это не украшение. Основной вход обещает, что форма
  * **ничего не читает и ничего не исполняет**; здесь читают файловую систему и
@@ -12,8 +12,8 @@
  * потребителя ему делать нечего (`tasker:BASER2-122`).
  *
  * ```js
- * import { locateSourceContent } from '@omnifield/baser-contracts/locate';
- * import { describeProblems } from '@omnifield/baser-contracts';
+ * import { locateSourceContent } from '@baser/contracts/locate';
+ * import { describeProblems } from '@baser/contracts';
  *
  * const эталон = locateSourceContent('brainer/agent-harness', 'settings.hooks.json');
  * if (!эталон.ok) {

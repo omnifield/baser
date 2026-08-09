@@ -48,7 +48,7 @@ export const PACKAGE_DIR = resolve(here, '..');
 /** Корень ЭТОГО репозитория: живая обвязка — эталон приёмки. */
 export const REPO_ROOT = resolve(here, '../../..');
 
-export const GIT_PACKAGE = '@omnifield/baser-git';
+export const GIT_PACKAGE = '@baser/git';
 
 /** `dest` артефактов обвеса — они же адреса в живом репозитории. */
 export const RULE = '.github/scripts/pr-title.mjs';

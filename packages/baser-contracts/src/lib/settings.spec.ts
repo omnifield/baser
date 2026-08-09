@@ -340,7 +340,7 @@ describe('разрешение значений', () => {
           repo: { name: 'baser', root: '/репо' },
           source: {
             id: 'omnifield/devbox',
-            packageName: '@omnifield/baser-devbox',
+            packageName: '@baser/devbox',
             version,
           },
         };

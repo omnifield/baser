@@ -50,7 +50,7 @@ import {
   FORM_VERSION,
   readSourceDeclaration,
   type SourceDeclaration,
-} from '@omnifield/baser-contracts';
+} from '@baser/contracts';
 
 import { CheckProblemLog } from './problems.js';
 import {

@@ -20,7 +20,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { checkPackage } from '@omnifield/baser-check';
+import { checkPackage } from '@baser/check';
 
 import {
   cleanupBoxes,

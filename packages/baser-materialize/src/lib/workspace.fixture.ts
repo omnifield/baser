@@ -13,7 +13,7 @@
 
 import type { Tree } from '@nx/devkit';
 import { createTreeWithEmptyWorkspace } from '@nx/devkit/testing';
-import type { SourceWarning } from '@omnifield/baser-contracts';
+import type { SourceWarning } from '@baser/contracts';
 import type { Declaration, LayoutEntry } from './declaration.js';
 import type { ManifestRecord } from './manifest.js';
 import { MANIFEST_PATH, readManifest, serializeManifest } from './manifest.js';

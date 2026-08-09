@@ -38,11 +38,11 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
     const result = parseConsumerConfig({
       $schema: 'https://omnifield.dev/baser.json',
       formVersion: FORM_VERSION,
-      sources: [{ use: '@omnifield/baser-devbox' }],
+      sources: [{ use: '@baser/devbox' }],
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.sources[0]).toEqual({ use: '@omnifield/baser-devbox' });
+    expect(result.value.sources[0]).toEqual({ use: '@baser/devbox' });
   });
 
   it('НАСТРОЙКИ И ПРЕСЕТЫ ЗДЕСЬ БОЛЬШЕ НЕ ЖИВУТ — сказано, куда уехали', () => {
@@ -51,7 +51,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
     const problems = refusals({
       sources: [
         {
-          use: '@omnifield/baser-devbox',
+          use: '@baser/devbox',
           presets: ['omnifield'],
           settings: { runtimeVersion: '24' },
         },
@@ -117,13 +117,13 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
       const result = parseConsumerConfig(
         consumerConfig({
           formVersion: PINNED_VERSION_SINCE,
-          sources: [{ use: '@omnifield/baser-devbox', version: '0.2.0' }],
+          sources: [{ use: '@baser/devbox', version: '0.2.0' }],
         }),
       );
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.value.sources[0]).toEqual({
-        use: '@omnifield/baser-devbox',
+        use: '@baser/devbox',
         version: '0.2.0',
       });
     });
@@ -145,7 +145,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
       // baser назовёт опечаткой вместо «обнови baser».
       const problems = refusals({
         formVersion: PINNED_VERSION_SINCE - 1,
-        sources: [{ use: '@omnifield/baser-devbox', version: '0.2.0' }],
+        sources: [{ use: '@baser/devbox', version: '0.2.0' }],
       });
       expect(codesOf(problems)).toEqual([
         `form-version-unsupported @ ${CONSUMER_CONFIG_PATH}.sources[0].version`,
@@ -158,7 +158,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
 
     it('и так же — в конфиге БЕЗ версии формы: молчание значит самую старую', () => {
       const problems = refusals({
-        sources: [{ use: '@omnifield/baser-devbox', version: '0.2.0' }],
+        sources: [{ use: '@baser/devbox', version: '0.2.0' }],
       });
       expect(codesOf(problems)).toEqual([
         `form-version-unsupported @ ${CONSUMER_CONFIG_PATH}.sources[0].version`,
@@ -178,7 +178,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
       ]) {
         const problems = refusals({
           formVersion: FORM_VERSION,
-          sources: [{ use: '@omnifield/baser-devbox', version }],
+          sources: [{ use: '@baser/devbox', version }],
         });
         expect([version, codesOf(problems)]).toEqual([
           version,
@@ -188,7 +188,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
       expect(
         refusals({
           formVersion: FORM_VERSION,
-          sources: [{ use: '@omnifield/baser-devbox', version: 'latest' }],
+          sources: [{ use: '@baser/devbox', version: 'latest' }],
         })[0].message,
       ).toContain('не пиши поле вовсе');
     });
@@ -198,7 +198,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
         consumerConfig({
           formVersion: FORM_VERSION,
           sources: [
-            { use: '@omnifield/baser-devbox', version: '1.2.3-beta.1+build.5' },
+            { use: '@baser/devbox', version: '1.2.3-beta.1+build.5' },
           ],
         }),
       );
@@ -210,7 +210,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
         codesOf(
           refusals({
             formVersion: FORM_VERSION,
-            sources: [{ use: '@omnifield/baser-devbox', version: 2 }],
+            sources: [{ use: '@baser/devbox', version: 2 }],
           }),
         ),
       ).toEqual([`wrong-type @ ${CONSUMER_CONFIG_PATH}.sources[0].version`]);
@@ -238,13 +238,13 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
       const result = parseConsumerConfig(
         consumerConfig({
           formVersion: CHANNEL_SINCE,
-          sources: [{ use: '@omnifield/baser-devbox', channel: 'dev' }],
+          sources: [{ use: '@baser/devbox', channel: 'dev' }],
         }),
       );
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.value.sources[0]).toEqual({
-        use: '@omnifield/baser-devbox',
+        use: '@baser/devbox',
         channel: 'dev',
       });
     });
@@ -266,14 +266,14 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
         consumerConfig({
           formVersion: CHANNEL_SINCE,
           sources: [
-            { use: '@omnifield/baser-devbox', version: '0.2.0', channel: 'dev' },
+            { use: '@baser/devbox', version: '0.2.0', channel: 'dev' },
           ],
         }),
       );
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.value.sources[0]).toEqual({
-        use: '@omnifield/baser-devbox',
+        use: '@baser/devbox',
         version: '0.2.0',
         channel: 'dev',
       });
@@ -284,7 +284,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
       // опечаткой и отправил человека искать её там, где её нет.
       const problems = refusals({
         formVersion: CHANNEL_SINCE - 1,
-        sources: [{ use: '@omnifield/baser-devbox', channel: 'dev' }],
+        sources: [{ use: '@baser/devbox', channel: 'dev' }],
       });
       expect(codesOf(problems)).toEqual([
         `form-version-unsupported @ ${CONSUMER_CONFIG_PATH}.sources[0].channel`,
@@ -299,7 +299,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
       expect(
         codesOf(
           refusals({
-            sources: [{ use: '@omnifield/baser-devbox', channel: 'dev' }],
+            sources: [{ use: '@baser/devbox', channel: 'dev' }],
           }),
         ),
       ).toEqual([
@@ -315,7 +315,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
       for (const channel of ['', '  ', '1.2.3', 'v1.4', '^1.2.0', 'dev/next']) {
         const problems = refusals({
           formVersion: FORM_VERSION,
-          sources: [{ use: '@omnifield/baser-devbox', channel }],
+          sources: [{ use: '@baser/devbox', channel }],
         });
         expect([channel, codesOf(problems)]).toEqual([
           channel,
@@ -325,7 +325,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
       expect(
         refusals({
           formVersion: FORM_VERSION,
-          sources: [{ use: '@omnifield/baser-devbox', channel: '1.2.3' }],
+          sources: [{ use: '@baser/devbox', channel: '1.2.3' }],
         })[0].message,
       ).toContain('закрепляется полем "version"');
     });
@@ -335,7 +335,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
         const result = parseConsumerConfig(
           consumerConfig({
             formVersion: FORM_VERSION,
-            sources: [{ use: '@omnifield/baser-devbox', channel }],
+            sources: [{ use: '@baser/devbox', channel }],
           }),
         );
         expect([channel, result.ok]).toEqual([channel, true]);
@@ -347,7 +347,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
         codesOf(
           refusals({
             formVersion: FORM_VERSION,
-            sources: [{ use: '@omnifield/baser-devbox', channel: 2 }],
+            sources: [{ use: '@baser/devbox', channel: 2 }],
           }),
         ),
       ).toEqual([`wrong-type @ ${CONSUMER_CONFIG_PATH}.sources[0].channel`]);
@@ -368,7 +368,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
 
   it('перечень источников — список с первого дня, а не единственный корень', () => {
     const result = parseConsumerConfig({
-      sources: [{ use: '@omnifield/baser-devbox' }, { use: '@чужой/обвес' }],
+      sources: [{ use: '@baser/devbox' }, { use: '@чужой/обвес' }],
     });
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -388,8 +388,8 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
   it('называет один и тот же пакет, перечисленный дважды', () => {
     const problems = refusals({
       sources: [
-        { use: '@omnifield/baser-devbox' },
-        { use: '@omnifield/baser-devbox' },
+        { use: '@baser/devbox' },
+        { use: '@baser/devbox' },
       ],
     });
     expect(codesOf(problems)).toEqual([
@@ -400,7 +400,7 @@ describe('baser.json — ЧТО ПОСТАВЛЕНО', () => {
   it('путей в конфиге потребителя не бывает — раскладку объявляет обвес', () => {
     const problems = refusals({
       sources: [
-        { use: '@omnifield/baser-devbox', layout: [{ src: 'a', dest: 'b' }] },
+        { use: '@baser/devbox', layout: [{ src: 'a', dest: 'b' }] },
       ],
     });
     expect(codesOf(problems)).toEqual([

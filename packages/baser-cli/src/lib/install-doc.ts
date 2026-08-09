@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
-import { sourceConfigPath } from '@omnifield/baser-contracts';
-import type { PackReport, PayloadArtifact } from '@omnifield/baser-pack';
+import { sourceConfigPath } from '@baser/contracts';
+import type { PackReport, PayloadArtifact } from '@baser/pack';
 
 /**
  * ЦЕНА ПОДТВЕРЖДЕНИЯ — по классам из ОПИСИ, а не одним обещанием на оба.

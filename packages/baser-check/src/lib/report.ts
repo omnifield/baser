@@ -14,7 +14,7 @@
  * данными, а не подразумеваются.
  */
 
-import type { SourceDeclaration } from '@omnifield/baser-contracts';
+import type { SourceDeclaration } from '@baser/contracts';
 import type { CheckProblem } from './problems.js';
 import type { ShippingList } from './shipping.js';
 

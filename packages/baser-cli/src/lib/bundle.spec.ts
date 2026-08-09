@@ -28,7 +28,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sourceConfigPath } from '@omnifield/baser-contracts';
+import { sourceConfigPath } from '@baser/contracts';
 import { bundle } from './bundle.js';
 import { DOOR_SCHEMA_VERSION } from './schema.js';
 import { runSealed, streamsSealed } from './sealed.fixture.js';
@@ -96,7 +96,7 @@ describe('бандл из живого обвеса', () => {
     const report = bundle(DEVBOX, { into });
     const names = report.runtime.map((item) => item.name);
 
-    expect(names).toContain('@omnifield/baser-cli');
+    expect(names).toContain('@baser/cli');
     expect(names).toContain('ejs');
     // `nx` и `@nx/devkit` в рантайме не нужны: дерево дверь держит сама. Это
     // одно решение сняло 21 МБ и платформенные бинари, без которых бандл не
@@ -326,7 +326,7 @@ describe('УНЕСЛИ И ЗАРАБОТАЛО', () => {
     // Уводить прозу в никуда было бы починкой за счёт человека: он по-прежнему
     // обязан узнать, ОТКУДА взялся обвес, который ему сейчас разложат.
     JSON.parse(streams.stdout);
-    expect(streams.stderr).toContain('@omnifield/baser-devbox');
+    expect(streams.stderr).toContain('@baser/devbox');
     expect(streams.stderr).toMatch(/из этой папки|не копируется/);
   });
 

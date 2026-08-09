@@ -11,7 +11,7 @@
  * — и расходиться они начали бы в первый же выпуск.
  */
 
-import { cli } from '@omnifield/baser-cli';
+import { cli } from '@baser/cli';
 
 const outcome = await cli(process.argv.slice(2), process.cwd());
 

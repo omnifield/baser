@@ -31,7 +31,7 @@ export function consumerConfig(
   patch: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    sources: [{ use: '@omnifield/baser-devbox' }],
+    sources: [{ use: '@baser/devbox' }],
     ...patch,
   };
 }

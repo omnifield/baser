@@ -53,6 +53,20 @@ const SILENT = { event() {}, span: (_name, run) => run() };
  * @property {string} dir      путь каталога пакета от корня репозитория
  * @property {string} zone     зона-владелец (leaf-имя, `cli` для `baser-cli`)
  * @property {boolean} [private] невыпускаемый — гейту нечего утверждать
+ * @property {readonly string[]} [formerNames] имена, под которыми пакет выпускался
+ *   раньше; факты подаёт `repo.mjs`, суждению они видны только через выпуски
+ */
+
+/**
+ * Выпуск, найденный в реестре тегов: номер и ТЕГ, которым он уехал. Имя тега —
+ * то, как пакет звался в момент выпуска, и после переименования оно не равно
+ * нынешнему. Судить это различие суждению не нужно, а НАЗЫВАТЬ — нужно: человек
+ * ищет тег глазами, и тег, собранный из нынешнего имени, он не найдёт.
+ *
+ * @typedef {object} Release
+ * @property {string} tag      тег как он есть в репозитории
+ * @property {string} name     имя пакета в теге
+ * @property {string} version  номер из тега
  */
 
 /**
@@ -66,19 +80,14 @@ const SILENT = { event() {}, span: (_name, run) => run() };
  *
  * @param {object} facts
  * @param {readonly Manifest[]} facts.packages
- * @param {(name: string) => readonly string[]} facts.releasedVersions
- *   номера, выпущенные тегами этого пакета (в любом порядке)
+ * @param {(pkg: Manifest) => readonly Release[]} facts.releases
+ *   выпуски этого пакета — под нынешним именем и под прежними, в любом порядке
  * @param {(tag: string, pkg: Manifest) => readonly Commit[]} facts.breakingSince
  *   ломающие коммиты, задевшие каталог пакета с указанного тега
  * @param {Trace} [facts.trace]
  * @returns {{said: string[], problems: string[]}}
  */
-export function judge({
-  packages,
-  releasedVersions,
-  breakingSince,
-  trace = SILENT,
-}) {
+export function judge({ packages, releases, breakingSince, trace = SILENT }) {
   /** @type {string[]} */
   const said = [];
   /** @type {string[]} */
@@ -94,7 +103,7 @@ export function judge({
       continue;
     }
 
-    const verdict = judgeOne(pkg, releasedVersions(name), breakingSince, trace);
+    const verdict = judgeOne(pkg, releases(pkg), breakingSince, trace);
     trace.event('release.verdict', {
       package: name,
       version,
@@ -112,18 +121,19 @@ export function judge({
  * порядке, `problem` — выпуск не поедет.
  *
  * @param {Manifest} pkg
- * @param {readonly string[]} tags
+ * @param {readonly Release[]} found
  * @param {(tag: string, pkg: Manifest) => readonly Commit[]} breakingSince
  * @param {Trace} trace
  * @returns {Verdict}
  */
-function judgeOne(pkg, tags, breakingSince, trace) {
+function judgeOne(pkg, found, breakingSince, trace) {
   const { name, version } = pkg;
 
-  const released = tags
-    .flatMap((raw) => {
-      const parsed = parse(raw);
-      return parsed === null ? [] : [parsed];
+  /** @type {(import('./version.mjs').Version & Release)[]} */
+  const released = found
+    .flatMap((entry) => {
+      const parsed = parse(entry.version);
+      return parsed === null ? [] : [{ ...parsed, ...entry }];
     })
     .sort(compare);
 
@@ -148,10 +158,11 @@ function judgeOne(pkg, tags, breakingSince, trace) {
   // Правило 3: занятый номер не переиспользуется. Формально это частный случай
   // «назад не идёт», но причина у него своя и человеку она нужна отдельной:
   // «этот номер уже выпущен» чинится другим действием, чем «номер младше».
-  if (released.some((entry) => entry.raw === version)) {
+  const occupied = released.find((entry) => entry.raw === version);
+  if (occupied !== undefined) {
     return fail(
       [
-        `${name}: номер ${version} уже выпущен тегом ${name}@${version} — занятый номер не переиспользуется.`,
+        `${name}: номер ${version} уже выпущен тегом ${occupied.tag}${formerly(occupied, name)} — занятый номер не переиспользуется.`,
         `  Номер — адрес содержимого, а не имя черновика: под одним номером не может лежать двух разных сборок.`,
       ].join('\n'),
     );
@@ -162,7 +173,7 @@ function judgeOne(pkg, tags, breakingSince, trace) {
   // `0.3.0-dev.1` старше `0.2.0`, но младше `0.3.0`.
   if (compare(now, latest) <= 0) {
     return fail(
-      `${name}: версия ${version} не старше выпущенной ${latest.raw} — выпуск назад не идёт`,
+      `${name}: версия ${version} не старше выпущенной ${latest.raw}${formerly(latest, name)} — выпуск назад не идёт`,
     );
   }
 
@@ -180,10 +191,13 @@ function judgeOne(pkg, tags, breakingSince, trace) {
     );
   }
 
+  // Окно ломающих коммитов открывается ТЕМ ТЕГОМ, который нашёлся, а не тегом,
+  // собранным из нынешнего имени: после переименования такой ревизии нет вовсе,
+  // и поход в git упал бы на ровном месте.
   const breaking = trace.span(
     'release.breaking-scan',
-    () => breakingSince(`${name}@${stable.raw}`, pkg),
-    { package: name, since: stable.raw },
+    () => breakingSince(stable.tag, pkg),
+    { package: name, since: stable.raw, tag: stable.tag },
   );
 
   // Предвыпускной номер судится по тройке ПЕРЕД суффиксом: дев-сборка едет к
@@ -226,6 +240,17 @@ function judgeOne(pkg, tags, breakingSince, trace) {
       `  Потребитель узнает о снятом имени, только сломавшись, — номер обязан сказать это раньше.`,
     ].join('\n'),
   );
+}
+
+/**
+ * Пометка «уехало под ПРЕЖНИМ именем» — без неё отказ выглядит опечаткой: гейт
+ * называет тег, которого под нынешним именем пакета в репозитории нет.
+ *
+ * @param {Release} entry
+ * @param {string} name нынешнее имя пакета
+ */
+function formerly(entry, name) {
+  return entry.name === name ? '' : ' (прежнее имя пакета)';
 }
 
 /**
