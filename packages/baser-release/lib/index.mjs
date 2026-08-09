@@ -17,7 +17,7 @@ export {
   readPackages,
   readFormerNames,
   readPublicNames,
-  nameCard,
+  publicNames,
   releases,
   allTags,
   breakingSince,

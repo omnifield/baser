@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { nameCard, readPackages, readPublicNames } from '../lib/repo.mjs';
+import { publicNames, readPackages, readPublicNames } from '../lib/repo.mjs';
 
 /**
  * КАРТА ИМЁН ПРОТИВ ЖИВОЙ РАСКЛАДКИ — и печать, какой её видит конвейер.
@@ -63,26 +63,23 @@ describe('карта имён этого репозитория', () => {
   });
 
   it('карта собирается целиком — обе стороны согласованы', () => {
-    const { packages } = nameCard(ROOT);
+    const карта = publicNames(ROOT);
 
-    expect(packages).toHaveLength(readPackages(ROOT).length);
-    for (const pkg of packages) {
-      expect(pkg.publicName, `${pkg.name}: публичное имя пусто`).toBeTruthy();
-      expect(pkg.dir).toContain('packages');
+    expect(карта.size).toBe(readPackages(ROOT).length);
+    for (const [name, публичное] of карта) {
+      expect(публичное, `${name}: публичное имя пусто`).toBeTruthy();
     }
   });
 
   /**
    * Публичное имя — не прежнее. Совпадение сегодня историческое: до переезда на
    * `kb:MECH-15` обе роли играло одно имя, и путать их нельзя — прежнее имя
-   * мёртвое (по нему ищут теги), публичное живое (под ним публикуют).
+   * мёртвое (по нему ищут теги выпуска), публичное живое (под ним публикуют).
    */
   it('публичное имя пакета живёт своей жизнью от прежних', () => {
-    const cli = nameCard(ROOT).packages.find(
-      (pkg) => pkg.name === '@baser/cli',
-    );
+    const cli = readPackages(ROOT).find((pkg) => pkg.name === '@baser/cli');
 
-    expect(cli?.publicName).toBe('@omnifield/baser-cli');
+    expect(publicNames(ROOT).get('@baser/cli')).toBe('@omnifield/baser-cli');
     expect(cli?.formerNames).toEqual(['@omnifield/baser-cli']);
   });
 });
@@ -93,15 +90,33 @@ describe('печать для конвейера', () => {
 
     expect(code).toBe(0);
     // Разбор без единой поблажки: лишняя строка приветствия здесь сломала бы
-    // `jq` в шаге конвейера, а у нас прогон остался бы зелёным.
-    expect(JSON.parse(stdout)).toEqual(nameCard(ROOT));
+    // разбор в шаге конвейера, а у нас прогон остался бы зелёным.
+    expect(JSON.parse(stdout)).toEqual(Object.fromEntries(publicNames(ROOT)));
+  });
+
+  /**
+   * ФОРМА — ЧАСТЬ ОБЕЩАНИЯ, А НЕ ПОДРОБНОСТЬ ПЕЧАТИ. Шаг переименования зоны
+   * git берёт эту печать файлом (`public-rename.mjs --names <файл>`) и читает
+   * её как `{"<внутреннее>": "<публичное>"}` целиком. Заверни мы карту в свою
+   * структуру — между зонами появилась бы переходная логика в YAML, ровно та,
+   * которую здесь и вычищают (`tasker:BASER2-261`).
+   */
+  it('форма плоская — объект «строка → строка», без обёртки', () => {
+    const напечатано = JSON.parse(run().stdout);
+
+    for (const [внутреннее, публичное] of Object.entries(напечатано)) {
+      expect(typeof публичное, `${внутреннее}: значение не строка`).toBe(
+        'string',
+      );
+      expect(внутреннее.startsWith('@')).toBe(true);
+    }
   });
 
   it('карту зовут не из нашего каталога — судится названный корень', () => {
     const { code, stdout } = run(['--root', ROOT]);
 
     expect(code).toBe(0);
-    expect(JSON.parse(stdout).packages.length).toBeGreaterThan(0);
+    expect(Object.keys(JSON.parse(stdout)).length).toBeGreaterThan(0);
   });
 
   it('пакет не объявлен — отказ в stderr, а stdout ПУСТ', () => {
