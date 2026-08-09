@@ -11,7 +11,15 @@ const SCRIPT = fileURLToPath(new URL('./release-refusal.mjs', import.meta.url));
 const NOTHING_LEFT = 'не уехало ничего';
 
 /** Рубежи, на которых публикация уже могла что-то сделать в реестре. */
-const AFTER_PUBLISH_STARTED = ['publishing', 'published', 'unknown'];
+const AFTER_PUBLISH_STARTED = [
+  'publishing',
+  'published',
+  'delivered',
+  'unknown',
+];
+
+/** Рубежи, где состояние реестра неясно и его надо спросить. */
+const REGISTRY_UNCERTAIN = ['publishing', 'published', 'unknown'];
 
 const text = (stage) => render(refusal(stage)).join('\n');
 
@@ -31,13 +39,29 @@ describe('рубеж читается из состояния шага публ�
     expect(stageOf('cancelled')).toBe('publishing');
   });
 
-  it('шаг публикации прошёл — упало то, что идёт после него', () => {
+  it('публикация прошла, а запись в main — нет: реестр ушёл вперёд репозитория', () => {
     expect(stageOf('success')).toBe('published');
+    expect(stageOf('success', 'failure')).toBe('published');
+    expect(stageOf('success', 'cancelled')).toBe('published');
+    expect(stageOf('success', 'skipped')).toBe('published');
+  });
+
+  it('уехало всё и main в курсе — значит упала приёмка, а не доставка', () => {
+    // Оба шага отвечают `success`, и по одной публикации эти два случая
+    // неразличимы — а лечатся они по-разному.
+    expect(stageOf('success', 'success')).toBe('delivered');
+  });
+
+  it('до публикации запись в main ничего не различает', () => {
+    // В реестр не уехало ничего независимо от того, что там с репозиторием.
+    expect(stageOf('', 'success')).toBe('readiness');
+    expect(stageOf('failure', 'success')).toBe('publishing');
   });
 
   it('движок сказал незнакомое — рубеж НЕ опознан, а не угадан', () => {
     expect(stageOf('успех')).toBe('unknown');
     expect(stageOf('neutral')).toBe('unknown');
+    expect(stageOf('success', 'что-то новое')).toBe('unknown');
   });
 });
 
@@ -56,14 +80,11 @@ describe('отказ не обещает нетронутый реестр та�
     },
   );
 
-  it.each(AFTER_PUBLISH_STARTED)(
-    'рубеж «%s» зовёт спросить реестр',
-    (stage) => {
-      // Отказ, который не назвал команду сверки, оставляет человека решать на
-      // догадке — а догадка здесь стоит сожжённого номера.
-      expect(text(stage)).toContain('npm view');
-    },
-  );
+  it.each(REGISTRY_UNCERTAIN)('рубеж «%s» зовёт спросить реестр', (stage) => {
+    // Отказ, который не назвал команду сверки, оставляет человека решать на
+    // догадке — а догадка здесь стоит сожжённого номера.
+    expect(text(stage)).toContain('npm view');
+  });
 });
 
 describe('перезапуск назван безопасным ровно там, где он безопасен', () => {
@@ -89,6 +110,30 @@ describe('перезапуск назван безопасным ровно та
 
   it('уехавший номер назван невозвратным, а не «пока занятым»', () => {
     expect(text('publishing')).toContain('не переиспользуется');
+  });
+});
+
+describe('приёмка и доставка — разные отказы, а не общий «после публикации»', () => {
+  it('репозиторий назван отставшим ТОЛЬКО там, где он отстал', () => {
+    expect(text('published')).toContain('не знает');
+    expect(text('delivered')).toContain('сходятся');
+    expect(text('delivered')).not.toContain('не знает');
+  });
+
+  it('на приёмке сказано, что выпуск не работает У ПОТРЕБИТЕЛЯ', () => {
+    // Иначе красную приёмку прочитают как «прогон подвис» и перезапустят
+    // выпуск — а он упрётся в занятые номера.
+    expect(text('delivered')).toContain('потребител');
+    expect(text('delivered')).toContain('СЛЕДУЮЩИМ номером');
+  });
+
+  it('починка приёмки не зовёт снимать выпущенное — она зовёт пометить', () => {
+    // Снять нельзя: номер не переиспользуется. Предупредить — можно.
+    expect(text('delivered')).toContain('npm deprecate');
+  });
+
+  it('на приёмке человека отправляют к её сводке, а не к логу вообще', () => {
+    expect(text('delivered')).toContain('приёмк');
   });
 });
 
@@ -118,6 +163,14 @@ describe('как это зовёт воркфлоу', () => {
     });
     expect(run.status).toBe(0);
     expect(run.stdout).toContain('Опубликовано ВСЁ');
+  });
+
+  it('оба состояния берутся из аргументов, а не одно из них', () => {
+    const run = spawnSync(process.execPath, [SCRIPT, 'success', 'success'], {
+      encoding: 'utf8',
+    });
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain('приёмка выпуск не приняла');
   });
 
   it('без аргумента — рубеж «до публикации»: шаг не запускался, outcome пуст', () => {
