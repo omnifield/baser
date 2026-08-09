@@ -4,10 +4,15 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { readFormerNames, readPackages } from './repo.mjs';
+import {
+  nameCard,
+  readFormerNames,
+  readPackages,
+  readPublicNames,
+} from './repo.mjs';
 
 /**
- * ОБЪЯВЛЕНИЕ ПРЕЖНИХ ИМЁН — здесь проверяется чтение факта, а не суждение о нём.
+ * ОБЪЯВЛЕНИЯ ИМЁН — здесь проверяется чтение факта, а не суждение о нём.
  *
  * Читается оно с диска судимого репозитория, поэтому пробы строят репозиторий
  * целиком — из каталога и файлов, а не из подменённого модуля: подмена доказала
@@ -30,11 +35,11 @@ afterEach(() => {
 });
 
 /**
- * Репозиторий-времянка: объявление зоны release и, по надобности, пакеты.
+ * Репозиторий-времянка: объявления зоны release и, по надобности, пакеты.
  *
- * @param {{declaration?: string, packages?: Record<string, object>}} shape
+ * @param {{declaration?: string, publicDeclaration?: string, packages?: Record<string, object>}} shape
  */
-function репозиторий({ declaration, packages = {} } = {}) {
+function репозиторий({ declaration, publicDeclaration, packages = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'baser-release-'));
   времянки.push(root);
 
@@ -43,6 +48,12 @@ function репозиторий({ declaration, packages = {} } = {}) {
     writeFileSync(
       join(root, 'packages', 'baser-release', 'former-names.json'),
       declaration,
+    );
+  }
+  if (publicDeclaration !== undefined) {
+    writeFileSync(
+      join(root, 'packages', 'baser-release', 'public-names.json'),
+      publicDeclaration,
     );
   }
 
@@ -98,6 +109,163 @@ describe('объявление прежних имён', () => {
 
     expect(() => readFormerNames(root)).toThrowError(
       /прежние имена "@новое\/p" — ожидался список непустых строк/,
+    );
+  });
+});
+
+/**
+ * ОБЪЯВЛЕНИЕ ПУБЛИЧНЫХ ИМЁН.
+ *
+ * Разница с прежними именами — в том, чем считается ОТСУТСТВИЕ. Там пустая
+ * карта это факт: репозиторий без переименований объявлять нечего. Здесь
+ * отсутствие — неотвеченный вопрос: у пакета, который едет наружу, публичное
+ * имя есть, вопрос лишь в том, знаем мы его или гадаем. Поэтому тут отказ там,
+ * где рядом молчание, и эту асимметрию держат пробы ниже.
+ */
+describe('объявление публичных имён', () => {
+  it('файла нет — ОТКАЗ, а не пустая карта: гадать имя наружу нельзя', () => {
+    expect(() => readPublicNames(репозиторий())).toThrowError(
+      /public-names\.json: объявления публичных имён нет/,
+    );
+  });
+
+  it('объявленное имя читается как есть', () => {
+    const root = репозиторий({
+      publicDeclaration: JSON.stringify({
+        publicNames: { '@продукт/инструмент': '@бренд/продукт-инструмент' },
+      }),
+    });
+
+    expect(readPublicNames(root).get('@продукт/инструмент')).toBe(
+      '@бренд/продукт-инструмент',
+    );
+  });
+
+  it('битый JSON — ошибка с названным файлом, а не пустая карта', () => {
+    const root = репозиторий({ publicDeclaration: '{ publicNames: }' });
+
+    expect(() => readPublicNames(root)).toThrowError(
+      /public-names\.json: объявление публичных имён не разбирается как JSON/,
+    );
+  });
+
+  it('не тот вид — ошибка называет ожидаемую форму', () => {
+    const root = репозиторий({
+      publicDeclaration: JSON.stringify({ publicNames: ['@бренд/п-и'] }),
+    });
+
+    expect(() => readPublicNames(root)).toThrowError(/ожидался объект/);
+  });
+
+  it('публичное имя не строкой — ошибка называет пакет', () => {
+    const root = репозиторий({
+      publicDeclaration: JSON.stringify({ publicNames: { '@п/и': '' } }),
+    });
+
+    expect(() => readPublicNames(root)).toThrowError(
+      /публичное имя "@п\/и" — ожидалась непустая строка/,
+    );
+  });
+
+  it('одно публичное имя на два пакета — отказ: в реестре второй затрёт первого', () => {
+    const root = репозиторий({
+      publicDeclaration: JSON.stringify({
+        publicNames: { '@п/первый': '@бренд/п-и', '@п/второй': '@бренд/п-и' },
+      }),
+    });
+
+    expect(() => readPublicNames(root)).toThrowError(
+      /публичное имя "@бренд\/п-и" объявлено дважды/,
+    );
+  });
+});
+
+/**
+ * КАРТА ИМЁН — то, что уходит конвейеру. Проверяется не только содержимое, но и
+ * то, что неполную карту отдать нельзя: по половине карты конвейер доезжает до
+ * публикации и выпускает внутреннее имя наружу, а это уже не откатывается.
+ */
+describe('карта имён', () => {
+  /** Репозиторий из двух пакетов, у одного — прежнее имя. */
+  function двухпакетный(
+    /** @type {{publicNames: Record<string, string>}} */ объявление,
+  ) {
+    return репозиторий({
+      declaration: JSON.stringify({
+        formerNames: { '@новое/cli': ['@старое/cli'] },
+      }),
+      publicDeclaration: JSON.stringify(объявление),
+      packages: {
+        'baser-cli': { name: '@новое/cli', version: '0.2.0' },
+        'baser-pack': { name: '@новое/pack', version: '0.1.0', private: true },
+      },
+    });
+  }
+
+  const ОБА = {
+    publicNames: {
+      '@новое/cli': '@бренд/продукт-cli',
+      '@новое/pack': '@бренд/продукт-pack',
+    },
+  };
+
+  it('несёт оба регистра, прежние имена и раскладку — всё, чем публикуют', () => {
+    const { packages } = nameCard(двухпакетный(ОБА));
+
+    // Порядок задан именем, а не обходом каталога: печать бинаря — вход
+    // конвейера, и её различие между прогонами читалось бы как изменение карты.
+    expect(packages.map((pkg) => pkg.name)).toEqual([
+      '@новое/cli',
+      '@новое/pack',
+    ]);
+    expect(packages[0]).toEqual({
+      name: '@новое/cli',
+      publicName: '@бренд/продукт-cli',
+      formerNames: ['@старое/cli'],
+      dir: join('packages', 'baser-cli'),
+      private: false,
+    });
+    // Непубликуемый пакет публичное имя всё равно имеет: «наружу не едет» —
+    // свойство выпуска, а не признак того, что имени нет.
+    expect(packages[1].private).toBe(true);
+  });
+
+  it('пакет без публичного имени — назван, а не пропущен молча', () => {
+    const root = двухпакетный({
+      publicNames: { '@новое/cli': '@бренд/продукт-cli' },
+    });
+
+    expect(() => nameCard(root)).toThrowError(
+      /публичное имя не объявлено: @новое\/pack/,
+    );
+  });
+
+  it('публичное имя пакета, которого нет, — отказ с названным объявлением', () => {
+    const root = двухпакетный({
+      publicNames: {
+        ...ОБА.publicNames,
+        '@новое/снятый': '@бренд/продукт-снятый',
+      },
+    });
+
+    expect(() => nameCard(root)).toThrowError(
+      /имена пакетов, которых в репозитории нет: @новое\/снятый \(.*public-names\.json\)/,
+    );
+  });
+
+  it('прежнее имя пакета, которого нет, — такой же отказ', () => {
+    const root = репозиторий({
+      declaration: JSON.stringify({
+        formerNames: { '@новое/снятый': ['@старое/снятый'] },
+      }),
+      publicDeclaration: JSON.stringify({
+        publicNames: { '@новое/cli': '@бренд/продукт-cli' },
+      }),
+      packages: { 'baser-cli': { name: '@новое/cli', version: '0.2.0' } },
+    });
+
+    expect(() => nameCard(root)).toThrowError(
+      /@новое\/снятый \(.*former-names\.json\)/,
     );
   });
 });

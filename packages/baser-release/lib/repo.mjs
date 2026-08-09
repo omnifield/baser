@@ -1,6 +1,10 @@
 /**
- * ФАКТЫ РЕПОЗИТОРИЯ, по которым судит гейт: какие пакеты есть, какие номера уже
+ * ФАКТЫ РЕПОЗИТОРИЯ: какие пакеты есть и как они зовутся, какие номера уже
  * выпущены тегами, какие коммиты с прошлого выпуска ломающие.
+ *
+ * Часть фактов судит гейт, часть — отдаётся наружу как есть (карта имён,
+ * `nameCard`): факт репозитория не перестаёт им быть оттого, что спрашивает его
+ * не гейт, а конвейер выпуска.
  *
  * Всё, что читает диск и git, живёт здесь и только здесь. Суждение
  * (`guard.mjs`) фактов не добывает — иначе его нельзя было бы прогнать на
@@ -23,6 +27,13 @@ const PACKAGES = 'packages';
  * корня. Что там лежит и почему именно там — в самом файле и в README.
  */
 const FORMER_NAMES = join(PACKAGES, 'baser-release', 'former-names.json');
+
+/**
+ * Объявление публичных имён — тоже данные СУДИМОГО репозитория, рядом с
+ * прежними. Почему объявление, а не правило вида «приклей скоуп бренда» — в
+ * самом файле и в README.
+ */
+const PUBLIC_NAMES = join(PACKAGES, 'baser-release', 'public-names.json');
 
 /** Ломающее в заголовке — `feat(cli)!: …`; форма из conventional commits. */
 const BANG = /^[a-z]+(\([^)]*\))?!:/;
@@ -65,6 +76,21 @@ function git(root, ...args) {
  * @typedef {import('./guard.mjs').Manifest} Manifest
  * @typedef {import('./guard.mjs').Release} Release
  * @typedef {import('./trace.mjs').Trace} Trace
+ */
+
+/**
+ * Пакет в карте имён: оба регистра имени и где он лежит.
+ *
+ * Номера здесь нет намеренно — карта отвечает на вопрос «как этот пакет
+ * зовётся», а не «что уезжает»: номер судит гейт, и смешивать два ответа в
+ * одном факте значило бы завести третье место, где написана версия.
+ *
+ * @typedef {object} NamedPackage
+ * @property {string} name внутреннее имя — рабочее, им пакет зовётся в контуре
+ * @property {string} publicName полное имя, под которым пакет уезжает в комьюнити
+ * @property {readonly string[]} formerNames имена, под которыми он выпускался раньше
+ * @property {string} dir каталог пакета от корня репозитория
+ * @property {boolean} private наружу не едет вовсе
  */
 
 /**
@@ -119,6 +145,130 @@ export function readFormerNames(root) {
       return [name, former];
     }),
   );
+}
+
+/**
+ * ПУБЛИЧНЫЕ ИМЕНА ПАКЕТОВ — читаются из объявления, а не выводятся из строки.
+ *
+ * У имени два регистра (`kb:MECH-15`): внутри контура пакет зовётся
+ * `@<продукт>/<инструмент>`, в комьюнити уезжает как
+ * `@<бренд>/<продукт>-<инструмент>`. Догадка «приклей скоуп бренда» здесь
+ * запрещена по той же причине, что и «отрежь прежний скоуп» у прежних имён:
+ * она верна до первого исключения и молчит, когда врёт, — а наружу имя уезжает
+ * навсегда.
+ *
+ * ОТКАЗ, А НЕ ПУСТАЯ КАРТА — и в этом отличие от `readFormerNames`. Там
+ * отсутствие файла само по себе факт: репозиторий без переименований объявлять
+ * нечего. Здесь отсутствие — не факт, а неотвеченный вопрос: у пакета, который
+ * едет наружу, публичное имя ЕСТЬ, вопрос только в том, знаем мы его или нет.
+ * Ответь мы «имён не объявлено», конвейер опубликовал бы внутреннее.
+ *
+ * @param {string} root корень судимого репозитория
+ * @returns {Map<string, string>} внутреннее имя → публичное
+ */
+export function readPublicNames(root) {
+  const file = join(root, PUBLIC_NAMES);
+  if (!existsSync(file)) {
+    throw new Error(
+      `${PUBLIC_NAMES}: объявления публичных имён нет — под какими именами пакеты уезжают в комьюнити, неизвестно`,
+    );
+  }
+
+  let declared;
+  try {
+    declared = JSON.parse(readFileSync(file, 'utf-8'));
+  } catch (cause) {
+    throw new Error(
+      `${PUBLIC_NAMES}: объявление публичных имён не разбирается как JSON`,
+      { cause },
+    );
+  }
+
+  const map = declared?.publicNames;
+  if (map === null || typeof map !== 'object' || Array.isArray(map)) {
+    throw new Error(
+      `${PUBLIC_NAMES}: ожидался объект "publicNames" вида {"<внутреннее имя>": "<публичное имя>"}`,
+    );
+  }
+
+  /** @type {Map<string, string>} */
+  const taken = new Map();
+  for (const [name, published] of Object.entries(map)) {
+    if (typeof published !== 'string' || published === '') {
+      throw new Error(
+        `${PUBLIC_NAMES}: публичное имя "${name}" — ожидалась непустая строка`,
+      );
+    }
+    // Два внутренних имени под одним публичным — не опечатка в данных, а
+    // столкновение в реестре: второй выпуск затрёт первый, и узнать об этом
+    // снаружи уже не у кого.
+    const already = taken.get(published);
+    if (already !== undefined) {
+      throw new Error(
+        `${PUBLIC_NAMES}: публичное имя "${published}" объявлено дважды — у "${already}" и у "${name}"`,
+      );
+    }
+    taken.set(published, name);
+  }
+
+  return new Map(Object.entries(map));
+}
+
+/**
+ * КАРТА ИМЁН РЕПОЗИТОРИЯ — оба регистра каждого пакета в одном ответе.
+ *
+ * Это то, что зона release отдаёт наружу: конвейеру выпуска нужен факт «под
+ * каким именем этот пакет уезжает» — и по всем пакетам сразу, потому что вместе
+ * с именем самого пакета переписываются имена межпакетных зависимостей.
+ *
+ * СОГЛАСОВАННОСТЬ КАРТ ПРОВЕРЯЕТСЯ ЗДЕСЬ, а не только пробой: карта, в которой
+ * пакета нет, — это карта, по которой нельзя выпускать, и молчаливо отдать её
+ * половиной значило бы дать конвейеру доехать до `npm publish` с внутренним
+ * именем. Лишняя запись отвергается по той же причине с другого конца: она
+ * говорит о пакете, которого нет, — либо его удалили и забыли карту, либо в
+ * имени опечатка, и тогда настоящий пакет не объявлен вовсе.
+ *
+ * @param {string} root корень судимого репозитория
+ * @returns {{packages: NamedPackage[]}}
+ */
+export function nameCard(root) {
+  const packages = readPackages(root);
+  const publicNames = readPublicNames(root);
+  const formerNames = readFormerNames(root);
+  const known = new Set(packages.map((pkg) => pkg.name));
+
+  const безымянные = packages
+    .filter((pkg) => !publicNames.has(pkg.name))
+    .map((pkg) => pkg.name);
+  if (безымянные.length > 0) {
+    throw new Error(
+      `${PUBLIC_NAMES}: публичное имя не объявлено: ${безымянные.join(', ')}. Новый пакет объявляется здесь — иначе он уедет наружу под внутренним именем`,
+    );
+  }
+
+  const ничьи = [
+    ...[...publicNames.keys()].map((name) => ({ file: PUBLIC_NAMES, name })),
+    ...[...formerNames.keys()].map((name) => ({ file: FORMER_NAMES, name })),
+  ].filter(({ name }) => !known.has(name));
+  if (ничьи.length > 0) {
+    throw new Error(
+      `объявлены имена пакетов, которых в репозитории нет: ${ничьи
+        .map(({ file, name }) => `${name} (${file})`)
+        .join(', ')}`,
+    );
+  }
+
+  return {
+    packages: packages
+      .map((pkg) => ({
+        name: pkg.name,
+        publicName: /** @type {string} */ (publicNames.get(pkg.name)),
+        formerNames: pkg.formerNames ?? [],
+        dir: pkg.dir,
+        private: Boolean(pkg.private),
+      }))
+      .sort((a, b) => (a.name < b.name ? -1 : 1)),
+  };
 }
 
 /**
