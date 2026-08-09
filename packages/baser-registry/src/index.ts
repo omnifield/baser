@@ -22,10 +22,11 @@ export {
   clientAddress,
   listenAddress,
   logPath,
+  reachOf,
   readSettings,
   settingsTemplate,
 } from './lib/settings.js';
-export type { ShopSettings } from './lib/settings.js';
+export type { ShopReach, ShopSettings } from './lib/settings.js';
 
 export { locateBuilding } from './lib/locate.js';
 export type { BuildingOrigin, LocatedBuilding } from './lib/locate.js';

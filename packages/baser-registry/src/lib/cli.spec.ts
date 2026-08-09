@@ -32,6 +32,18 @@ describe('разбор вызова', () => {
     expect(outcome.stdout).toContain('baser-registry status');
   });
 
+  it('--help называет видимость: кому раздача отвечает из коробки', async () => {
+    // Человек поднимает магазин РАДИ соседей. Узнавать, отвечает ли он им,
+    // чтением исходника — не работа человека (tasker:BASER2-267).
+    const outcome = await cli(['--help'], process.cwd());
+
+    expect(outcome.stdout).toContain('ВИДИМОСТЬ');
+    expect(outcome.stdout).toContain('СОСЕДЯМ');
+    // И чем это меняется — тоже в подсказке, иначе выбор остаётся спрятанным.
+    expect(outcome.stdout).toContain('host: 127.0.0.1');
+    expect(outcome.stdout).toContain('reach');
+  });
+
   it('--version отдаёт форму ответа и версию пакета — они про разное', async () => {
     const outcome = await cli(['--version'], process.cwd());
     const versions = JSON.parse(outcome.stdout) as Record<string, unknown>;

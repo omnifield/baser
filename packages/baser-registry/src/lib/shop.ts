@@ -47,6 +47,7 @@ import {
   listenAddress,
   logPath,
   readSettings,
+  reachOf,
   settingsTemplate,
   type ShopSettings,
 } from './settings.js';
@@ -491,6 +492,11 @@ async function prepare(
     shop: {
       address,
       listen: listenAddress(settings),
+      // Считается из настроек, а не из ответа раздачи: спросить «кому ты
+      // виден» у самого процесса нечем — он отвечает всем, кто дошёл. Знание
+      // тут ровно одно, и лежит оно в том, что мы отдали ему как `--listen`.
+      reach: reachOf(settings),
+      port: settings.port,
       uplink: settings.uplink,
       pid,
       claimed: existsSync(layout.claim),

@@ -44,7 +44,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -282,6 +282,58 @@ describe('7 · чего у нас нет — берётся наверху и к
     ).toBe(true);
   });
 });
+
+describe('8 · раздача отвечает не только петле — иначе соседу она бесполезна', () => {
+  it('по адресу контейнера в сети магазин отвечает тем же реестром', async () => {
+    // ПРОБА СТОИТ РОВНО ЗДЕСЬ, ЧТОБЫ ДЕФОЛТ НЕ СЪЕХАЛ МОЛЧА. Магазин заводят,
+    // чтобы соседний контейнер взял пакет; проверка на 127.0.0.1 этого не
+    // меряет вовсе — петля отвечает и при запертой раздаче. Поэтому спрашиваем
+    // по НЕ-петлевому адресу самого контейнера: он у соседа маршрутизируется
+    // так же, как алиас локации (tasker:BASER2-267).
+    //
+    // Нет ни одного не-петлевого адреса — проба КРАСНАЯ, а не пропущенная:
+    // молчаливый пропуск здесь неотличим от исправной видимости, а это ровно
+    // тот способ, которым дефолт уезжает незамеченным.
+    const outside = outsideAddress();
+    expect(
+      outside,
+      'у контейнера нет ни одного не-петлевого адреса — видимость проверить нечем',
+    ).not.toBeNull();
+
+    const response = await fetch(`http://${outside}:${shop.port}/-/ping`, {
+      signal: AbortSignal.timeout(5_000),
+    });
+
+    expect(response.ok).toBe(true);
+    expect(await response.json()).toBeTypeOf('object');
+  });
+
+  it('и магазин говорит про это данными, а имя локации не выдумывает', async () => {
+    const asked = await status({ cwd: shop.root, environment: shop.environment });
+
+    expect(asked.shop.reach).toBe('network');
+    expect(asked.shop.port).toBe(shop.port);
+    // Адрес остаётся верным ХОЗЯИНУ: по 0.0.0.0 ходить некуда, а алиас
+    // локации магазину неоткуда знать.
+    expect(asked.shop.address).toBe(`http://127.0.0.1:${shop.port}`);
+  });
+});
+
+/**
+ * Адрес этого контейнера в сети — не петля.
+ *
+ * Тот же адрес, по которому в него приходит сосед: алиас локации в docker-сети
+ * разрешается именно в него. Берём первый не-внутренний IPv4; `null` — таких
+ * интерфейсов нет вовсе.
+ */
+function outsideAddress(): string | null {
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const one of addresses ?? []) {
+      if (one.family === 'IPv4' && !one.internal) return one.address;
+    }
+  }
+  return null;
+}
 
 /** Заводит постройку и магазин её локации; отдаёт то, чем в него ходить. */
 async function makeShop(options: { uplink: string | null }): Promise<Shop> {
