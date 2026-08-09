@@ -19,6 +19,7 @@ export function renderText(result: ShopResult): string {
   lines.push(headline(result));
   lines.push('');
   lines.push(`адрес     ${result.shop.address}`);
+  lines.push(`видимость ${visibility(result)}`);
   lines.push(`магазин   ${result.location.shopHome}`);
   lines.push(
     `товар     ${plural(result.stock.packages)} · ${result.stock.storage}`,
@@ -27,6 +28,33 @@ export function renderText(result: ShopResult): string {
 
   if (result.state === 'running' && result.shop.pid !== null) {
     lines.push(`процесс   ${result.shop.pid}`);
+  }
+
+  // АДРЕС ВЕРЕН ХОЗЯИНУ, А СПРАШИВАЮТ И СОСЕДИ. `127.0.0.1` у соседа свой,
+  // поэтому строку выше без этой пометки он унесёт к себе и не придёт никуда
+  // (`tasker:BASER2-259`). Имя локации мы не выдумываем — называем порт и то,
+  // у кого имя спрашивать.
+  //
+  // Печатается независимо от того, работает ли раздача сейчас: видимость —
+  // свойство настройки, а не текущего процесса.
+  lines.push('');
+  if (result.shop.reach === 'network') {
+    lines.push(
+      `адрес выше — для этой локации. Сосед по сети придёт на порт ${result.shop.port}`,
+    );
+    lines.push(
+      `по имени вашей локации: http://<имя локации>:${result.shop.port}.`,
+    );
+    lines.push(
+      'Имя задаёт тот, кто поднимал контейнер, — магазин его не знает и не выдумывает.',
+    );
+  } else {
+    lines.push(
+      'раздача заперта в петле — сосед по сети к ней не придёт, даже зная имя.',
+    );
+    lines.push(
+      'Открыть соседям: host: 0.0.0.0 в config.yml магазина (наружу машины это не выводит).',
+    );
   }
 
   // ПРАВДА ПРО УРОВНИ. «Магазин работает» верно для всей локации, но постройка,
@@ -96,6 +124,18 @@ export function renderText(result: ShopResult): string {
   }
 
   return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Кому раздача отвечает — одной строкой и без выдуманного адреса.
+ *
+ * Слово берётся из данных (`shop.reach`), а не считается здесь заново: текст
+ * рисуется поверх ответа и второй правдой быть не должен.
+ */
+function visibility(result: ShopResult): string {
+  return result.shop.reach === 'network'
+    ? `соседям по сети локации, порт ${result.shop.port}`
+    : 'только этой локации — раздача слушает петлю';
 }
 
 function headline(result: ShopResult): string {

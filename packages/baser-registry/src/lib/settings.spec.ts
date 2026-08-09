@@ -7,6 +7,7 @@ import {
   clientAddress,
   listenAddress,
   logPath,
+  reachOf,
   readSettings,
   settingsTemplate,
 } from './settings.js';
@@ -127,20 +128,48 @@ describe('непригодное названо кодом, а не молчан
   });
 });
 
-describe('магазин по умолчанию виден только своей локации', () => {
-  it('дефолтом слушается петлевой адрес, а не все интерфейсы', () => {
-    // Наружу у нас выходит одна дверь :8080 (kb:FUND-5). Дефолт 0.0.0.0 раздал
-    // бы склад всей docker-сети, и этого никто не выбирал — проба стоит здесь,
-    // чтобы возврат к нему был красным, а не незамеченным.
-    expect(DEFAULT_SETTINGS.host).toBe('127.0.0.1');
-    expect(listenAddress(DEFAULT_SETTINGS)).toBe('127.0.0.1:4873');
+describe('магазин по умолчанию отвечает соседям по сети локации', () => {
+  it('дефолтом слушается вся сеть локации, а не петля', () => {
+    // Магазин существует ради одной работы — отдать товар соседу. Дефолт
+    // 127.0.0.1 запирал раздачу в петле, и из коробки инструмент этой работы не
+    // делал (tasker:BASER2-266 — потребитель отложил переезд, -267 — решение).
+    // Проба стоит здесь, чтобы возврат к петле был красным, а не незамеченным.
+    expect(DEFAULT_SETTINGS.host).toBe('0.0.0.0');
+    expect(listenAddress(DEFAULT_SETTINGS)).toBe('0.0.0.0:4873');
+    expect(reachOf(DEFAULT_SETTINGS)).toBe('network');
   });
 
-  it('открыться всей сети можно — но это выбор человека, а не наш', () => {
-    const { settings, problems } = read('host: 0.0.0.0\n');
+  it('запереться в петле можно — но это выбор человека, а не наш', () => {
+    const { settings, problems } = read('host: 127.0.0.1\n');
 
-    expect(settings.host).toBe('0.0.0.0');
+    expect(settings.host).toBe('127.0.0.1');
+    expect(reachOf(settings)).toBe('self-only');
     expect(problems).toEqual([]);
+  });
+});
+
+describe('видимость названа данными, а адрес соседа не выдумывается', () => {
+  it('петля во всех её видах — это self-only', () => {
+    // Петля — сеть 127.0.0.0/8, а не один адрес, и `localhost` человек пишет
+    // чаще, чем цифры. Ответить на них «сосед придёт» значило бы соврать.
+    for (const host of ['127.0.0.1', '127.0.0.2', 'localhost', '::1', '[::1]']) {
+      expect(reachOf({ ...DEFAULT_SETTINGS, host }), host).toBe('self-only');
+    }
+  });
+
+  it('всё остальное — network: сосед придёт, если знает имя локации', () => {
+    for (const host of ['0.0.0.0', '::', '172.18.0.5', 'eth0.локация']) {
+      expect(reachOf({ ...DEFAULT_SETTINGS, host }), host).toBe('network');
+    }
+  });
+
+  it('адрес назначения от видимости не зависит — это разные вопросы', () => {
+    // `reach` отвечает соседу, `clientAddress` — хозяину локации. Слить их
+    // нельзя: по 0.0.0.0 ходить некуда, а сосед по 127.0.0.1 не придёт.
+    const open = { ...DEFAULT_SETTINGS, host: '0.0.0.0' };
+
+    expect(reachOf(open)).toBe('network');
+    expect(clientAddress(open)).toBe('http://127.0.0.1:4873');
   });
 });
 
