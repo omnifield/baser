@@ -200,14 +200,14 @@ describe('выпущенный пакет ставится и работает',
       expect(said.code, said.said).toBe(0);
       const answer = JSON.parse(said.said) as {
         outcome: string;
-        published: { manager: string; destination: string } | null;
+        published: { manager: string; destination: string }[];
       };
 
       expect(answer.outcome).toBe('published');
-      expect(answer.published?.manager).toBe('npm');
+      expect(answer.published[0]?.manager).toBe('npm');
       // Скоуп @omnifield в этом девбоксе настроен на GitHub Packages: без
       // защиты выпущенной команды товар уехал бы туда молча.
-      expect(answer.published?.destination).toBe(`http://127.0.0.1:${port}`);
+      expect(answer.published[0]?.destination).toBe(`http://127.0.0.1:${port}`);
 
       // ПОВТОР на выпущенном пакете — тоже спокойный: «уже на складе» и код 0.
       const again = run(['publish', plain, '--json']);
@@ -265,12 +265,12 @@ describe('выпущенный пакет ставится и работает',
       expect(said.code, said.said).toBe(0);
       const answer = JSON.parse(said.said) as {
         outcome: string;
-        published: { manager: string; needsWorkspace: boolean } | null;
+        published: { manager: string; needsWorkspace: boolean }[];
       };
 
       expect(answer.outcome).toBe('published');
-      expect(answer.published?.manager).toBe('pnpm');
-      expect(answer.published?.needsWorkspace).toBe(true);
+      expect(answer.published[0]?.manager).toBe('pnpm');
+      expect(answer.published[0]?.needsWorkspace).toBe(true);
     },
     CASE_TIMEOUT_MS,
   );

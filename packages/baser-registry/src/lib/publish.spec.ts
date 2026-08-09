@@ -77,8 +77,8 @@ describe('одна команда кладёт товар на склад — б
     const answer = await publish({ cwd: root, directory: where, ...options });
 
     expect(answer.outcome, JSON.stringify(answer.problems)).toBe('published');
-    expect(answer.published?.manager).toBe('npm');
-    expect(answer.published?.destination).toBe(address);
+    expect(answer.published[0]?.manager).toBe('npm');
+    expect(answer.published[0]?.destination).toBe(address);
     expect(await onShelfHere('@omnifield/publish-plain')).toBe(true);
   }, 120_000);
 
@@ -106,8 +106,8 @@ describe('одна команда кладёт товар на склад — б
       const answer = await publish({ cwd: root, directory: where, ...options });
 
       expect(answer.outcome, JSON.stringify(answer.problems)).toBe('published');
-      expect(answer.published?.manager).toBe('npm');
-      expect(answer.published?.destination).toBe(address);
+      expect(answer.published[0]?.manager).toBe('npm');
+      expect(answer.published[0]?.destination).toBe(address);
     } finally {
       if (was === undefined) delete process.env[key];
       else process.env[key] = was;
@@ -122,8 +122,8 @@ describe('одна команда кладёт товар на склад — б
     const answer = await publish({ cwd: root, directory: app, ...options });
 
     expect(answer.outcome, JSON.stringify(answer.problems)).toBe('published');
-    expect(answer.published?.manager).toBe('pnpm');
-    expect(answer.published?.needsWorkspace).toBe(true);
+    expect(answer.published[0]?.manager).toBe('pnpm');
+    expect(answer.published[0]?.needsWorkspace).toBe(true);
 
     const manifest = await fromShelf('@omnifield/publish-app-plain', '0.2.0');
     expect(manifest.dependencies).toEqual({
@@ -148,8 +148,8 @@ describe('одна команда кладёт товар на склад — б
     expect(exitCodeOf(again)).toBe(0);
     expect(again.problems).toEqual([]);
     // И товар при этом назван — человеку видно, о чём речь.
-    expect(again.published?.name).toBe('@omnifield/publish-twice');
-    expect(again.published?.version).toBe('0.1.0');
+    expect(again.published[0]?.name).toBe('@omnifield/publish-twice');
+    expect(again.published[0]?.version).toBe('0.1.0');
   }, 180_000);
 
   it('и склад повтором НЕ меняется — то же состояние, а не перезапись', async () => {

@@ -39,6 +39,7 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { readDecisions } from './decisions.js';
 import { buildingLayout, shopLayout, type ShopLayout } from './layout.js';
 import { locateBuilding } from './locate.js';
 import { ShopProblemLog } from './problems.js';
@@ -263,26 +264,72 @@ export async function down(options: ShopOptions): Promise<ShopResult> {
 }
 
 /**
- * Положить товар на склад локации.
+ * Отгрузить товар на склад локации.
  *
  * Команда делает правильное независимо от менеджера и от того, что настроено у
  * человека: чистит окружение, называет адрес и на скоуп, выбирает менеджера по
  * содержимому манифеста и сверяет назначение ДО живой публикации. Человеку
  * знать про `.npmrc`, флаги скоупа и разницу менеджеров не нужно — в этом вся
  * причина, по которой команда существует (`publish.ts`).
+ *
+ * ЧТО ИМЕННО УЕЗЖАЕТ, РЕШАЕТ ПОСТРОЙКА, А НЕ КАТАЛОГ, ИЗ КОТОРОГО ПОЗВАЛИ.
+ * Названный путь сильнее объявленного: человек, назвавший папку, просил именно
+ * её. Не названо ничего — уезжает ПАРТИЯ из решений постройки (`decisions.ts`),
+ * и только если решений нет вовсе, командой остаётся прежнее «пакет отсюда».
+ *
+ * ПОЛОВИНЫ ПАРТИИ НЕ БЫВАЕТ ПО НЕВНИМАТЕЛЬНОСТИ: всё, что можно проверить, не
+ * трогая склада, проверяется до первой живой публикации — каталоги на месте,
+ * манифесты читаются, менеджер в системе есть. Отказ на третьем пакете из пяти
+ * оставил бы склад в состоянии, которого никто не выбирал.
  */
 export async function publish(options: PublishOptions): Promise<ShopResult> {
   const run = await prepare('publish', options, { create: false });
   if (run.refused) return run.finish('refused', 'closed');
 
-  const { settings, trace } = run;
-  const address = clientAddress(settings);
-  const directory = resolve(options.cwd, options.directory ?? '.');
+  const { trace } = run;
+  const address = clientAddress(run.settings);
 
-  const manifest = await trace.span('manifest', () =>
-    readManifest(directory, run.problems),
-  );
-  if (manifest === null) return run.finish('refused', 'closed');
+  const asked = whatToShip(run, options);
+  if (asked === null) return run.finish('refused', 'closed');
+
+  const cargo: Cargo[] = [];
+  for (const directory of asked) {
+    if (!existsSync(directory)) {
+      run.problems.add(
+        'batch-missing',
+        directory,
+        `в партии назван ${directory}, а такого каталога в постройке нет. ` +
+          `Партия — объявление о своём товаре: пути в ней считаются от корня ` +
+          `постройки (${run.building.root})`,
+      );
+      continue;
+    }
+    const manifest = await trace.span(
+      'manifest',
+      () => readManifest(directory, run.problems),
+      { directory },
+    );
+    if (manifest !== null) cargo.push({ directory, ...manifest });
+  }
+  if (!run.problems.empty) return run.finish('refused', 'closed');
+
+  // Менеджер спрашивается ОДИН раз на каждого, кто нужен партии: `--version`
+  // стоит запуска процесса, а ответ у него один на весь прогон.
+  for (const manager of new Set(
+    cargo.map((one) => chooseManager(one.needsWorkspace)),
+  )) {
+    if (managerAvailable(manager)) continue;
+    run.problems.add(
+      manager === 'pnpm' ? 'pnpm-required' : 'publish-failed',
+      run.building.root,
+      manager === 'pnpm'
+        ? `у пакета есть зависимости workspace:, а pnpm в системе нет. ` +
+            `npm опубликовал бы его УСПЕШНО и сломанным — с workspace:* в манифесте, ` +
+            `который не ставится нигде`
+        : `npm в системе нет — публиковать нечем`,
+    );
+  }
+  if (!run.problems.empty) return run.finish('refused', 'running');
 
   // Склад закрыт — класть некуда. Спрашиваем ДО того, как трогать чужой
   // `.npmrc`: отказ не должен оставлять следов в каталоге человека.
@@ -296,79 +343,139 @@ export async function publish(options: PublishOptions): Promise<ShopResult> {
     return run.finish('refused', 'closed');
   }
 
-  const manager = chooseManager(manifest.needsWorkspace);
+  const shipped: PublishReport[] = [];
+  for (const one of cargo) {
+    shipped.push(await shipOne(run, one, address));
+  }
 
-  const report = {
-    name: manifest.name,
-    version: manifest.version,
-    directory,
+  return run.finish(outcomeOf(shipped), 'running', null, shipped);
+}
+
+/** Один пакет партии: каталог и то, что прочитано из его манифеста. */
+interface Cargo {
+  readonly directory: string;
+  readonly name: string;
+  readonly version: string;
+  readonly needsWorkspace: boolean;
+}
+
+/**
+ * Что уезжает этим прогоном.
+ *
+ * `null` — отгружать нечего, и причина названа отказом. Пустая партия при
+ * заведённом органе решения — это «есть, но не отдаю»: законное состояние, а не
+ * недоделка, и молча подменять его пакетом из текущего каталога значило бы
+ * отгрузить то, чего постройка не объявляла.
+ */
+function whatToShip(run: Run, options: PublishOptions): string[] | null {
+  if (options.directory !== undefined) {
+    return [resolve(options.cwd, options.directory)];
+  }
+
+  const decisions = run.decisions;
+  if (decisions === null) {
+    // Постройка ничего не объявила — команда остаётся тем, чем была: «положи
+    // пакет отсюда». Требовать решений от того, кто их не заводил, значило бы
+    // сделать законное состояние отказом.
+    return [resolve(options.cwd, '.')];
+  }
+
+  if (decisions.batch.length === 0) {
+    run.problems.add(
+      'batch-empty',
+      run.inBuilding.decisions,
+      `эта постройка не отгружает ничего: партия в её решениях пуста. ` +
+        `Отгрузить конкретный пакет всё равно можно — назовите его путём: ` +
+        `baser-registry publish <папка>`,
+    );
+    return null;
+  }
+
+  return decisions.batch.map((one) => resolve(run.building.root, one));
+}
+
+/** Отгружает ОДИН пакет партии и рассказывает, что с ним стало. */
+async function shipOne(
+  run: Run,
+  cargo: Cargo,
+  address: string,
+): Promise<PublishReport> {
+  const manager = chooseManager(cargo.needsWorkspace);
+  const card = {
+    name: cargo.name,
+    version: cargo.version,
+    directory: cargo.directory,
     manager,
-    needsWorkspace: manifest.needsWorkspace,
+    needsWorkspace: cargo.needsWorkspace,
     destination: address,
   };
 
   // УЖЕ ЛЕЖИТ — делать нечего, и менеджера мы даже не запускаем: незачем
   // тратить секунды и трогать чужой `.npmrc` ради работы, которой нет.
   if (
-    await trace.span('on-shelf', () =>
-      onShelf(address, manifest.name, manifest.version),
+    await run.trace.span(
+      'on-shelf',
+      () => onShelf(address, cargo.name, cargo.version),
+      { package: cargo.name },
     )
   ) {
-    return run.finish('already-published', 'running', null, report);
+    return { outcome: 'already-published', ...card };
   }
 
-  if (!managerAvailable(manager)) {
-    run.problems.add(
-      manager === 'pnpm' ? 'pnpm-required' : 'publish-failed',
-      directory,
-      manager === 'pnpm'
-        ? `у пакета есть зависимости workspace:, а pnpm в системе нет. ` +
-            `npm опубликовал бы его УСПЕШНО и сломанным — с workspace:* в манифесте, ` +
-            `который не ставится нигде`
-        : `npm в системе нет — публиковать нечем`,
-    );
-    return run.finish('refused', 'running');
-  }
-
-  const outcome = await trace.span('publish', () =>
-    runPublish({
-      manager,
-      directory,
-      address,
-      packageName: manifest.name,
-    }),
+  const outcome = await run.trace.span(
+    'publish',
+    () =>
+      runPublish({
+        manager,
+        directory: cargo.directory,
+        address,
+        packageName: cargo.name,
+      }),
+    { package: cargo.name },
   );
 
-  const said = {
-    ...report,
-    destination: outcome.destination ?? 'неизвестно',
-  };
+  const said = { ...card, destination: outcome.destination ?? 'неизвестно' };
 
-  if (!outcome.published) {
-    // ГОНКА: между нашим вопросом складу и нашей попыткой ту же версию мог
-    // положить кто-то другой. Спрашиваем склад ещё раз — исход тот же, что и
-    // при обычном повторе, и узнаём мы его снова замером, а не разбором
-    // чужого текста.
-    if (await onShelf(address, manifest.name, manifest.version)) {
-      return run.finish('already-published', 'running', null, said);
-    }
-
-    // Менеджер отказал сам — причина в пакете, а не в адресе.
-    const wrongPlace =
-      !outcome.refusedByManager &&
-      (outcome.destination === null || outcome.destination !== address);
-    run.problems.add(
-      wrongPlace ? 'wrong-destination' : 'publish-failed',
-      wrongPlace ? (outcome.destination ?? directory) : directory,
-      wrongPlace
-        ? `${manager} собрался публиковать в ${outcome.destination ?? 'неизвестно куда'}, ` +
-            `а магазин локации — ${address}. Живой публикации не было`
-        : `${manager} отказал на публикации:\n${outcome.said.trim()}`,
-    );
-    return run.finish('failed', 'running', null, said);
+  if (outcome.published) {
+    return { outcome: 'published', ...said };
   }
 
-  return run.finish('published', 'running', null, said);
+  // ГОНКА: между нашим вопросом складу и нашей попыткой ту же версию мог
+  // положить кто-то другой. Спрашиваем склад ещё раз — исход тот же, что и
+  // при обычном повторе, и узнаём мы его снова замером, а не разбором
+  // чужого текста.
+  if (await onShelf(address, cargo.name, cargo.version)) {
+    return { outcome: 'already-published', ...said };
+  }
+
+  // Менеджер отказал сам — причина в пакете, а не в адресе.
+  const wrongPlace =
+    !outcome.refusedByManager &&
+    (outcome.destination === null || outcome.destination !== address);
+  run.problems.add(
+    wrongPlace ? 'wrong-destination' : 'publish-failed',
+    wrongPlace ? (outcome.destination ?? cargo.directory) : cargo.directory,
+    wrongPlace
+      ? `${manager} собрался публиковать в ${outcome.destination ?? 'неизвестно куда'}, ` +
+          `а магазин локации — ${address}. Живой публикации не было`
+      : `${manager} отказал на публикации:\n${outcome.said.trim()}`,
+  );
+  return { outcome: 'failed', ...said };
+}
+
+/**
+ * Общий исход отгрузки из построчных.
+ *
+ * Один упавший пакет красит весь прогон: конвейеру нужно знать, идти ли
+ * разбираться, а с ЧЕМ именно — он прочитает построчно. «Уже на складе» на всю
+ * партию остаётся успехом по той же причине, по которой им остаётся второй
+ * `up`: то же состояние без крика.
+ */
+function outcomeOf(shipped: readonly PublishReport[]): ShopOutcome {
+  if (shipped.some((one) => one.outcome === 'failed')) return 'failed';
+  return shipped.every((one) => one.outcome === 'already-published')
+    ? 'already-published'
+    : 'published';
 }
 
 /** Спросить, что сейчас. Ничего не меняет — в том числе не прибирает заявку. */
@@ -408,7 +515,7 @@ async function prepare(
     locateBuilding(options.cwd),
   );
   const layout = shopLayout(options.environment);
-  const legacy = buildingLayout(building.root);
+  const inBuilding = buildingLayout(building.root);
 
   const text = existsSync(layout.config)
     ? readFileSync(layout.config, 'utf8')
@@ -420,28 +527,39 @@ async function prepare(
   // МАГАЗИН СТАЛ ВЕЩЬЮ ЛОКАЦИИ, И ПОСТРОЙКА СО СТАРЫМИ НАСТРОЙКАМИ УЗНАЁТ ОБ
   // ЭТОМ ОТКАЗОМ.
   //
-  // Мест два, потому что переездов было два: сперва настройки лежали в папке
-  // магазина внутри клона, потом в `.omnifield/` клона. Оба уровня оказались
-  // неверными — раздача принадлежит контейнеру. Читать их мы не станем: молча
-  // подхватить значения, писанные для другой раскладки, — тот же тихий эффект,
-  // от которого уходим.
+  // Раздача принадлежит контейнеру, и её настройки не могут жить внутри одного
+  // клона. Читать их мы не станем: молча подхватить значения, писанные для
+  // другой раскладки, — тот же тихий эффект, от которого уходим.
   //
   // Проверяется только там, где нового файла ещё нет: перенёс человек значения
   // или начал с чистого листа — его дело, и напоминать про старый файл, когда
-  // новый уже заполнен, значит мешать работать.
-  if (text === null) {
-    for (const stale of [legacy.legacySettings, legacy.legacyShopConfig]) {
-      if (!existsSync(stale)) continue;
-      problems.add(
-        'config-in-old-place',
-        stale,
-        `настройки раздачи переехали на уровень локации — в ${layout.config}, ` +
-          `а заполненный файл лежит в постройке (${stale}). Раздача одна на весь ` +
-          `контейнер, поэтому её настройки не могут жить внутри одного клона. ` +
-          `Перенесите значения: mv ${stale} ${layout.config}`,
-      );
-    }
+  // новый уже заполнен, значит мешать работать. Второе прежнее место
+  // (`.omnifield/omnifield-registry.yaml`) сюда не входит: путь занят решениями
+  // постройки, и старое содержимое ловится там по ключам — всегда, а не только
+  // на пустом конфиге локации.
+  if (text === null && existsSync(inBuilding.legacyShopConfig)) {
+    problems.add(
+      'config-in-old-place',
+      inBuilding.legacyShopConfig,
+      `настройки раздачи переехали на уровень локации — в ${layout.config}, ` +
+        `а заполненный файл лежит в постройке (${inBuilding.legacyShopConfig}). ` +
+        `Раздача одна на весь контейнер, поэтому её настройки не могут жить ` +
+        `внутри одного клона. Перенесите значения: ` +
+        `mv ${inBuilding.legacyShopConfig} ${layout.config}`,
+    );
   }
+
+  // РЕШЕНИЯ ПОСТРОЙКИ — читаются каждой командой, а не только публикацией.
+  //
+  // Спрашивают их у `status` ровно затем, зачем орган решения и заводился:
+  // узнать, что эта постройка отгружает, не запуская отгрузку. Файла нет —
+  // решений нет, и это законное состояние, а не пробел (`decisions.ts`).
+  const decisionsText = existsSync(inBuilding.decisions)
+    ? readFileSync(inBuilding.decisions, 'utf8')
+    : null;
+  const decisions = await trace.span('decisions', () =>
+    readDecisions(decisionsText, inBuilding.decisions, layout.config, problems),
+  );
 
   // Файл человека рождается один раз и только у команд, которые вообще пишут:
   // `status` — вопрос, а вопрос ничего не создаёт.
@@ -471,7 +589,7 @@ async function prepare(
     outcome: ShopOutcome,
     state: ShopState,
     pid: number | null = null,
-    published: PublishReport | null = null,
+    published: readonly PublishReport[] = [],
   ): ShopResult => ({
     schemaVersion: SCHEMA_VERSION,
     command,
@@ -488,6 +606,8 @@ async function prepare(
       // дороге, и признак, снятый заранее, соврал бы про собственный запуск —
       // поймано живым прогоном сразу после переезда.
       startedShop: readClaim(layout)?.building === building.root,
+      decisions:
+        decisions === null ? null : { at: inBuilding.decisions, ...decisions },
     },
     shop: {
       address,
@@ -516,8 +636,10 @@ async function prepare(
 
   return {
     building,
+    inBuilding,
     layout,
     settings,
+    decisions,
     trace: trace as TraceRecorder,
     problems,
     refused: !problems.empty,
@@ -526,6 +648,9 @@ async function prepare(
     finish,
   };
 }
+
+/** Прогон команды: всё, что прочитано до первого действия. */
+type Run = Awaited<ReturnType<typeof prepare>>;
 
 /**
  * Стучится по адресу магазина.
