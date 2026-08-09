@@ -7,12 +7,25 @@
  */
 
 export {
-  LEGACY_SETTINGS_PATH,
   LEGACY_SHOP_DIRECTORY,
   buildingLayout,
   shopLayout,
 } from './lib/layout.js';
 export type { BuildingLayout, ShopLayout } from './lib/layout.js';
+
+export {
+  DECISIONS_PATH,
+  DECISION_DECLARATIONS,
+  DEFAULT_DECISIONS,
+  LOCATION,
+  readDecisions,
+  registerOf,
+} from './lib/decisions.js';
+export type {
+  BuildingDecisions,
+  NameRegister,
+  ShipTo,
+} from './lib/decisions.js';
 
 export { HOME_VARIABLE, SHOP_DIRECTORY, shopHome } from './lib/location.js';
 export type { ShopHome, ShopHomeOrigin } from './lib/location.js';
@@ -40,12 +53,17 @@ export type { TraceRecorder, TraceSpan } from './lib/trace.js';
 export { down, publish, status, up } from './lib/shop.js';
 export type { PublishOptions, ShopOptions } from './lib/shop.js';
 
-export type { Manager, PublishReport } from './lib/publish.js';
+export type {
+  Manager,
+  PublishReport,
+  ShipmentOutcome,
+} from './lib/publish.js';
 
 export { exitCodeOf, SCHEMA_VERSION } from './lib/result.js';
 export type {
   AccessReport,
   BuildingReport,
+  DecisionsReport,
   LocationReport,
   ScopeConflict,
   ShopCommand,

@@ -106,7 +106,7 @@ describe('публикация из второй постройки кладёт
 
     // Прежде здесь был `failed` при том, что пакет уже лежал у соседа.
     expect(answer.outcome, JSON.stringify(answer.problems)).toBe('published');
-    expect(answer.published?.destination).toBe(`http://127.0.0.1:${port}`);
+    expect(answer.published[0]?.destination).toBe(`http://127.0.0.1:${port}`);
   }, 120_000);
 
   it('склад один на локацию — товар виден и первой постройке', async () => {

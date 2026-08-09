@@ -69,16 +69,32 @@ export function renderText(result: ShopResult): string {
     lines.push('Это не конфликт: у построек одного участка магазин один.');
   }
 
-  if (result.published !== null) {
-    // Чем публиковали — не деталь реализации: человек не выбирал менеджера, и
-    // если выбор был вынужденным, он должен видеть, чем именно.
-    lines.push(
-      `положено  ${result.published.manager}` +
-        (result.published.needsWorkspace
-          ? ' (у пакета есть зависимости workspace: — иначе нельзя)'
-          : ''),
-    );
-    lines.push(`уехало в  ${result.published.destination}`);
+  // ЧТО ПОСТРОЙКА РЕШИЛА — печатается всегда, когда решения есть: человек,
+  // спрашивающий магазин, спрашивает и «а что отсюда вообще уезжает». Решений
+  // нет — строк нет: выдумывать за постройку «ничего не отгружает» мы не будем,
+  // это разные состояния (`decisions.ts`).
+  const decisions = result.building.decisions;
+  if (decisions !== null) {
+    lines.push('');
+    lines.push(`отгрузка  ${shipment(decisions.batch.length)} → ${decisions.address}`);
+    for (const one of decisions.batch) {
+      lines.push(`  ${one}`);
+    }
+    lines.push(`имена     ${decisions.names} · решения: ${decisions.at}`);
+  }
+
+  // Каждая строка партии со своим исходом: у пакетов они разные, и общий
+  // заголовок отвечает только на вопрос «идти ли разбираться».
+  if (result.published.length > 0) {
+    lines.push('');
+    for (const one of result.published) {
+      // Чем публиковали — не деталь реализации: человек не выбирал менеджера, и
+      // если выбор был вынужденным, он должен видеть, чем именно.
+      lines.push(
+        `${said(one.outcome)} ${one.name}@${one.version} → ${one.destination}` +
+          ` (${one.manager}${one.needsWorkspace ? ', иначе нельзя: workspace:' : ''})`,
+      );
+    }
   }
   if (result.state === 'closed' && result.shop.claimed) {
     // Ровно то состояние, ради которого инструмент существует: контейнер
@@ -138,6 +154,23 @@ function visibility(result: ShopResult): string {
     : 'только этой локации — раздача слушает петлю';
 }
 
+/** Что стало с одним пакетом — словом, а не кодом. */
+function said(outcome: 'published' | 'already-published' | 'failed'): string {
+  switch (outcome) {
+    case 'published':
+      return 'положено';
+    case 'already-published':
+      return 'уже лежало';
+    case 'failed':
+      return 'НЕ ПОЕХАЛО';
+  }
+}
+
+/** Партия числом: «отгружает 3 пакета» читается, «batch: 3» — нет. */
+function shipment(count: number): string {
+  return count === 0 ? 'ничего не отгружает' : plural(count);
+}
+
 function headline(result: ShopResult): string {
   switch (result.outcome) {
     case 'started':
@@ -153,15 +186,15 @@ function headline(result: ShopResult): string {
         ? 'раздача локации работает'
         : 'магазин закрыт';
     case 'published':
-      return result.published === null
-        ? 'товар положен на склад'
-        : `положено на склад: ${result.published.name}@${result.published.version}`;
+      return result.published.length === 1
+        ? `положено на склад: ${result.published[0].name}@${result.published[0].version}`
+        : `партия на складе: ${plural(result.published.length)}`;
     case 'already-published':
       // Не «не получилось», а «делать нечего»: то же слово, каким отвечают
       // второй `up` и второй `down`.
-      return result.published === null
-        ? 'эта версия уже на складе'
-        : `уже на складе: ${result.published.name}@${result.published.version}`;
+      return result.published.length === 1
+        ? `уже на складе: ${result.published[0].name}@${result.published[0].version}`
+        : `вся партия уже на складе: ${plural(result.published.length)}`;
     case 'failed':
       return 'не вышло';
     case 'refused':

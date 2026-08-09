@@ -50,7 +50,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { shopLayout } from './layout.js';
 import { HOME_VARIABLE } from './location.js';
-import { down, status, up } from './shop.js';
+import { down, publish as shopPublish, status, up } from './shop.js';
 import type { ShopResult } from './result.js';
 
 /** Локация с магазином: корень, порт и конфиг, которым в неё ходят. */
@@ -317,6 +317,104 @@ describe('8 · раздача отвечает не только петле — 
     // локации магазину неоткуда знать.
     expect(asked.shop.address).toBe(`http://127.0.0.1:${shop.port}`);
   });
+});
+
+describe('9 · клон в чистой локации знает, что и куда отгружать', () => {
+  // ПРОБА ТЗ ДОСЛОВНО (`tasker:BASER2-270`): постройка приезжает в локацию, и
+  // отгрузка идёт БЕЗ ЕДИНОЙ РУЧНОЙ НАСТРОЙКИ — ни адреса, ни списка пакетов
+  // команде не называют. Всё, что она знает, приехало вместе с клоном: решения
+  // лежат в его схеме и потому переживают пересоздание контейнера, а склад
+  // лежит на участке и потому переживает остановку.
+  let clone: string;
+
+  beforeAll(() => {
+    clone = mkdtempSync(join(tmpdir(), 'baser-registry-clone-'));
+    mkdirSync(join(clone, '.git'), { recursive: true });
+
+    for (const [where, name] of [
+      ['packages/один', '@omnifield/registry-batch-one'],
+      ['packages/два', '@omnifield/registry-batch-two'],
+      // Третий пакет собран, но в партию НЕ объявлен: «есть, но не отдаю» —
+      // решение владельца, и проверяется оно тем, что он не уехал.
+      ['packages/не-в-партии', '@omnifield/registry-batch-kept'],
+    ] as const) {
+      const directory = join(clone, where);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(
+        join(directory, 'package.json'),
+        JSON.stringify({ name, version: '1.0.0', license: 'MIT' }),
+        'utf8',
+      );
+    }
+
+    const decisions = join(clone, '.omnifield', 'omnifield-registry.yaml');
+    mkdirSync(dirname(decisions), { recursive: true });
+    writeFileSync(
+      decisions,
+      ['shop: true', 'batch:', '  - packages/один', '  - packages/два', ''].join(
+        '\n',
+      ),
+      'utf8',
+    );
+  });
+
+  afterAll(() => {
+    if (clone) rmSync(clone, { recursive: true, force: true });
+  });
+
+  it('status читает решения из схемы клона, ничего не запуская', async () => {
+    const asked = await status({ cwd: clone, environment: shop.environment });
+
+    expect(asked.building.decisions?.batch).toEqual([
+      'packages/один',
+      'packages/два',
+    ]);
+    expect(asked.building.decisions?.address).toBe('location');
+    // «Под какими именами» отвечено, но вторым списком имён не спрошено.
+    expect(asked.building.decisions?.names).toBe('internal');
+  });
+
+  it('publish без единого аргумента отгружает объявленную ПАРТИЮ', async () => {
+    const done = await shopPublish({ cwd: clone, environment: shop.environment });
+
+    expect(done.outcome, JSON.stringify(done.problems)).toBe('published');
+    expect(done.published.map((one) => one.name).sort()).toEqual([
+      '@omnifield/registry-batch-one',
+      '@omnifield/registry-batch-two',
+    ]);
+    for (const one of done.published) {
+      expect(one.destination).toBe(`http://127.0.0.1:${shop.port}`);
+    }
+  }, 180_000);
+
+  it('на складе лежит объявленное — и НЕ лежит то, что не объявляли', async () => {
+    for (const name of [
+      '@omnifield/registry-batch-one',
+      '@omnifield/registry-batch-two',
+    ]) {
+      const response = await fetch(
+        `http://127.0.0.1:${shop.port}/${encodeURIComponent(name)}`,
+      );
+      expect(response.ok, name).toBe(true);
+    }
+
+    const kept = await fetch(
+      `http://127.0.0.1:${shop.port}/${encodeURIComponent('@omnifield/registry-batch-kept')}`,
+    );
+    expect(kept.ok, 'непартийный пакет уехал сам — партия ничего не значит').toBe(
+      false,
+    );
+  });
+
+  it('повтор той же партии спокоен: «уже на складе», а не «сломалось»', async () => {
+    const again = await shopPublish({
+      cwd: clone,
+      environment: shop.environment,
+    });
+
+    expect(again.outcome).toBe('already-published');
+    expect(again.problems).toEqual([]);
+  }, 180_000);
 });
 
 /**

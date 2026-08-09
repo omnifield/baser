@@ -1,8 +1,8 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { DECISIONS_PATH } from './decisions.js';
 import {
-  LEGACY_SETTINGS_PATH,
   LEGACY_SHOP_DIRECTORY,
   buildingLayout,
   shopLayout,
@@ -76,15 +76,30 @@ describe('место магазина называет локация, а не �
   });
 });
 
-describe('прежние места названы, чтобы их ЗАМЕТИТЬ', () => {
-  it('оба лежат в постройке — оба были неверным уровнем', () => {
-    const building = buildingLayout('/участок/постройка');
+describe('в постройке магазин ищет решения, а прежнее место — чтобы ЗАМЕТИТЬ', () => {
+  const building = buildingLayout('/участок/постройка');
 
+  it('орган решения лежит в схеме постройки, рядом с настройками остальных', () => {
+    expect(building.decisions).toBe(`/участок/постройка/${DECISIONS_PATH}`);
+    expect(building.decisions.startsWith(`${building.root}/.omnifield/`)).toBe(
+      true,
+    );
+  });
+
+  it('прежнее место настроек раздачи лежало в постройке — неверный уровень', () => {
     expect(building.legacyShopConfig).toBe(
       `/участок/постройка/${LEGACY_SHOP_DIRECTORY}/config.yml`,
     );
-    expect(building.legacySettings).toBe(
-      `/участок/постройка/${LEGACY_SETTINGS_PATH}`,
-    );
+  });
+
+  it('решения и склад — на РАЗНЫХ уровнях, и это вся суть переезда', () => {
+    // Решения переживают пересоздание контейнера, потому что лежат в схеме;
+    // склад переживает остановку, потому что лежит на участке. Одно место на
+    // двоих вернуло бы ровно ту склейку, которую разбирал мир
+    // (`tasker:BASER2-273`).
+    const shop = shopLayout({ [HOME_VARIABLE]: '/участок/магазин' });
+
+    expect(building.decisions.startsWith(shop.home.path)).toBe(false);
+    expect(shop.storage.startsWith(building.root)).toBe(false);
   });
 });

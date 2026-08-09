@@ -124,6 +124,65 @@ describe('текст рисуется поверх данных и ничего 
     expect(text).toContain('http://127.0.0.1:4873');
   });
 
+  it('решения постройки печатаются, когда они есть', () => {
+    const text = renderText(
+      sampleResult({
+        building: {
+          ...sampleResult().building,
+          decisions: {
+            at: '/участок/постройка/.omnifield/omnifield-registry.yaml',
+            shop: true,
+            batch: ['packages/один', 'packages/два'],
+            address: 'location',
+            names: 'internal',
+          },
+        },
+      }),
+    );
+
+    expect(text).toContain('packages/один');
+    expect(text).toContain('packages/два');
+    expect(text).toContain('location');
+    expect(text).toContain('internal');
+  });
+
+  it('решений нет — строк про отгрузку нет: это не «ничего не отгружает»', () => {
+    // Два разных состояния, и выдумывать за постройку второе значило бы
+    // объявить её решение вместо неё.
+    const text = renderText(sampleResult());
+
+    expect(text).not.toContain('отгрузка');
+  });
+
+  it('у партии виден исход КАЖДОГО пакета, а не только общий', () => {
+    const card = {
+      directory: '/постройка/packages/штука',
+      manager: 'npm' as const,
+      needsWorkspace: false,
+      destination: 'http://127.0.0.1:4873',
+    };
+    const text = renderText(
+      sampleResult({
+        command: 'publish',
+        outcome: 'published',
+        published: [
+          { outcome: 'published', name: '@baser/один', version: '1.0.0', ...card },
+          {
+            outcome: 'already-published',
+            name: '@baser/два',
+            version: '2.0.0',
+            ...card,
+          },
+        ],
+      }),
+    );
+
+    expect(text).toContain('положено @baser/один@1.0.0');
+    expect(text).toContain('уже лежало @baser/два@2.0.0');
+    // Общий заголовок отвечает только на вопрос «идти ли разбираться».
+    expect(text).toContain('партия на складе: 2 пакета');
+  });
+
   it('число товара склоняется по-русски', () => {
     const at = (packages: number) =>
       renderText(sampleResult({ stock: { ...sampleResult().stock, packages } }));

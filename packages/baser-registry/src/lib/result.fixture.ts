@@ -21,6 +21,9 @@ export function sampleResult(patch: Partial<ShopResult> = {}): ShopResult {
       root: '/участок/постройка',
       origin: 'git',
       startedShop: true,
+      // Постройка ничего не объявила — законное состояние и самое частое:
+      // орган решения заводит тот, кто отгружает.
+      decisions: null,
     },
     shop: {
       // Состояние по умолчанию: слушается сеть локации, а ходит хозяин по
@@ -46,7 +49,7 @@ export function sampleResult(patch: Partial<ShopResult> = {}): ShopResult {
         '//127.0.0.1:4873/:_authToken=baser-registry',
       ],
     },
-    published: null,
+    published: [],
     writes: [],
     trace: [],
     problems: [],
