@@ -228,7 +228,7 @@ describe('стена без указателя: проверка ловит об
         config: consumerConfig(),
         tuning: tuning({
           presets: ['omnifield'],
-          settings: { npmScope: SCOPE, installAssistant: false },
+          settings: { npmScope: SCOPE, globalTools: {} },
         }),
       });
       await run({ command: 'apply', cwd: consumer.root });

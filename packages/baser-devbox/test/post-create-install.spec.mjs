@@ -443,7 +443,7 @@ describe('ЦЕПОЧКА ПОСТСОЗДАНИЯ: шаг без предмет�
     // `$CLAUDE_CONFIG_DIR` ставит секрет-модель, то есть `secretsVolume`. Без
     // тома переменная пуста, а `mkdir -p ""` отвечает кодом 1 — и `&&` роняет
     // постсоздание ДО установки (`tasker:BASER2-188` П5).
-    const { json } = await materialize({ installAssistant: true });
+    const { json } = await materialize({ globalTools: { '@anthropic-ai/claude-code': 'latest' } });
 
     expect(json.postCreateCommand).not.toContain('CLAUDE_CONFIG_DIR');
 
@@ -459,7 +459,7 @@ describe('ЦЕПОЧКА ПОСТСОЗДАНИЯ: шаг без предмет�
     // среде, где переменной нет, — то есть контроль меряет ровно тот разрыв, а
     // не переписанную в пробу строку.
     const withVolume = await materialize({
-      installAssistant: true,
+      globalTools: { '@anthropic-ai/claude-code': 'latest' },
       secretsVolume: 'omnifield-secrets',
     });
     const seed = withVolume.json.postCreateCommand

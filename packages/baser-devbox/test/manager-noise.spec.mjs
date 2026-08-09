@@ -92,7 +92,7 @@ async function materialize(settings = {}) {
     config: consumerConfig(),
     tuning: tuning({
       presets: ['omnifield'],
-      settings: { npmScope: SCOPE, installAssistant: false, ...settings },
+      settings: { npmScope: SCOPE, globalTools: {}, ...settings },
     }),
   });
   const result = await run({ command: 'apply', cwd: consumer.root });
@@ -277,7 +277,9 @@ describe('проверка реестра спрашивает ТОГО, КЕМ 
 
 describe('одноразовая настройка тома тоже идёт без имени стора', () => {
   it('УСТАНОВКА АССИСТЕНТА: npm позвали — и имени, которого он не знает, не показали', async () => {
-    const artifact = await materialize({ installAssistant: true });
+    const artifact = await materialize({
+      globalTools: { '@anthropic-ai/claude-code': 'latest' },
+    });
     const step = assistantStep(artifact);
     const trap = npmTrap();
 

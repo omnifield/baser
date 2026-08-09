@@ -129,7 +129,7 @@ const PROFILES = {
       'tasker-data': { target: '/data/tasker' },
     },
     npmScope: '@omnifield',
-    installAssistant: true,
+    globalTools: { '@anthropic-ai/claude-code': 'latest' },
     editorExtensions: [],
     editorFormatter: null,
     installCommand:
@@ -152,7 +152,7 @@ const PROFILES = {
       'knowledger-data': { target: '/data/knowledger' },
     },
     npmScope: '@omnifield',
-    installAssistant: true,
+    globalTools: { '@anthropic-ai/claude-code': 'latest' },
     editorExtensions: ['biomejs.biome'],
     editorFormatter: 'biomejs.biome',
     startCommand: processes('knowledger'),
