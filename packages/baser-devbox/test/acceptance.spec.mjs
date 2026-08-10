@@ -84,6 +84,8 @@ import {
   packedManifest,
   parseJsonc,
   run,
+  stepRun,
+  steps,
   tuning,
 } from './packed.mjs';
 
@@ -323,8 +325,12 @@ describe('ВТОРОЙ ПОТРЕБИТЕЛЬ: тот же обвес под с�
 
     const post = parseJsonc(consumer.read(LIVE)).postCreateCommand;
 
-    expect(post).toContain('pnpm config get @omnifield:registry');
-    expect(post.endsWith(' && pnpm install')).toBe(true);
+    expect(stepRun(post, 'registry')).toContain(
+      'pnpm config get @omnifield:registry',
+    );
+    // Своя команда установки — последним шагом и БЕЗ единого дописанного символа.
+    expect(steps(post).at(-1).id).toBe('install');
+    expect(stepRun(post, 'install')).toBe('pnpm install');
     expect(post).not.toContain('--frozen-lockfile');
     // Комментарий над шагом собран из тех же частей — он назвал проверку.
     expect(consumer.read(LIVE)).toContain('проверка доступа к реестру');

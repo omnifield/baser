@@ -58,6 +58,8 @@ import {
   packedManifest,
   parseJsonc,
   run,
+  stepRun,
+  steps,
   tuning,
 } from './packed.mjs';
 
@@ -100,27 +102,29 @@ async function materialize(settings = {}) {
   return parseJsonc(consumer.read(LIVE));
 }
 
-/** Шаг проверки реестра — вырезанный из АРТЕФАКТА, а не написанный здесь заново. */
+/**
+ * Шаг проверки реестра — взятый из АРТЕФАКТА ПО ИМЕНИ (`tasker:BASER2-291`).
+ *
+ * Раньше он выкусывался позициями подстрок (`indexOf('( reg=')` до
+ * `indexOf(' && ' + INSTALL)`) — то есть опознавался по куску тела и по соседу.
+ * Шаги названы, поэтому спрашивается имя; заодно проверяется, что установка
+ * по-прежнему последняя, — раньше это следовало из среза, теперь сказано вслух.
+ */
 function checkStep(artifact) {
   const post = artifact.postCreateCommand;
-  const from = post.indexOf('( reg=');
-  const to = post.indexOf(` && ${INSTALL}`);
-  expect(
-    from !== -1 && to > from,
-    `шага проверки нет в постсоздании: ${post}`,
-  ).toBe(true);
-  return post.slice(from, to);
+  expect(steps(post).at(-1).run, 'постсоздание кончается не установкой').toBe(
+    INSTALL,
+  );
+  return stepRun(post, 'registry');
 }
 
-/** Шаг установки ассистента — тоже вырезанный из АРТЕФАКТА, а не собранный здесь. */
+/** Шаг установки инструментов локации — тоже по имени, а не по куску тела. */
 function assistantStep(artifact) {
-  const step = artifact.onCreateCommand
-    .split(' && ')
-    .find((part) => part.includes('@anthropic-ai/claude-code'));
+  const step = stepRun(artifact.onCreateCommand, 'tools');
   expect(
-    step,
-    `шага установки ассистента нет в постсоздании: ${artifact.onCreateCommand}`,
-  ).toBeTruthy();
+    step.includes('@anthropic-ai/claude-code'),
+    `шаг инструментов не ставит ассистента: ${step}`,
+  ).toBe(true);
   return step;
 }
 

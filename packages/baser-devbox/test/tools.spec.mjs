@@ -51,6 +51,7 @@ import {
   LIVE,
   parseJsonc,
   run,
+  steps,
   tuning,
 } from './packed.mjs';
 import { containerEnv } from './env.mjs';
@@ -102,16 +103,18 @@ function refusal({ result, text }, code = 'render-failed') {
 }
 
 /**
- * Шаг установки инструментов — ВЫРЕЗАННЫЙ ИЗ АРТЕФАКТА, а не написанный здесь.
+ * Шаг установки инструментов — ВЗЯТЫЙ ИЗ АРТЕФАКТА ПО ИМЕНИ (`tasker:BASER2-291`).
+ *
+ * Раньше шаг искался по куску его тела (`part.includes('npm install -g')`) — это и
+ * была цена безымянности, заплаченная в пробе. Теперь у шага есть имя, и адресуется
+ * он именем; тело перестало быть опознавательным знаком и стало только предметом.
  *
  * `null`, если шага нет вовсе: «инструментов не объявлено» — рабочее состояние, и
  * проба обязана уметь его назвать, а не упасть на поиске.
  */
 function toolsStep(json) {
   return (
-    json.onCreateCommand
-      .split(' && ')
-      .find((part) => part.includes('npm install -g')) ?? null
+    steps(json.onCreateCommand).find((step) => step.id === 'tools')?.run ?? null
   );
 }
 
@@ -121,7 +124,11 @@ describe('перечень инструментов: пустой — рабоч
 
     // Не «пустая установка» и не установка ничего: шага нет. Локация без
     // ассистента и без магазина — законная раскладка, а не недонастроенная.
-    expect(json.onCreateCommand).toBe('sudo corepack enable');
+    // Читается это теперь СОСТАВОМ ЦЕПОЧКИ, а не сравнением всей строки: шаг без
+    // предмета не существует, значит в перечне остаётся один corepack.
+    expect(steps(json.onCreateCommand).map((step) => step.id)).toEqual([
+      'corepack',
+    ]);
     expect(toolsStep(json)).toBe(null);
   });
 

@@ -43,6 +43,8 @@ import {
   LIVE,
   parseJsonc,
   run,
+  stepRun,
+  steps,
   tuning,
 } from './packed.mjs';
 
@@ -271,9 +273,11 @@ describe('ПОСЛЕ СТАРТА: локация объявляет свои П
 
     // `installCommand` — последний шаг ПОСТСОЗДАНИЯ, один раз на жизнь контейнера.
     // `startCommand` — при каждом подъёме. Обещать одно другим нельзя, поэтому
-    // проверяется и то, что каждая осталась в своей точке.
-    expect(json.postCreateCommand.endsWith('pnpm install --frozen-lockfile')).toBe(
-      true,
+    // проверяется и то, что каждая осталась в своей точке. Шаг постсоздания
+    // спрашивается ИМЕНЕМ (`tasker:BASER2-291`), а не хвостом строки.
+    expect(steps(json.postCreateCommand).at(-1).id).toBe('install');
+    expect(stepRun(json.postCreateCommand, 'install')).toBe(
+      'pnpm install --frozen-lockfile',
     );
     expect(json.postCreateCommand).not.toContain('go run');
     expect(json.postStartCommand).toEqual(PROCESSES);

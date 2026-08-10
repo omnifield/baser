@@ -85,6 +85,8 @@ import {
   parseJsonc,
   REPO_ROOT,
   run,
+  stepRun,
+  steps,
   tuning,
 } from './packed.mjs';
 
@@ -133,16 +135,17 @@ async function materialize(settings) {
  * Шаг установки — ЗНАЧЕНИЕМ НАСТРОЙКИ из ответа двери, а не нарезкой строки.
  *
  * Заодно проверяется инвариант зоны: постсоздание кончается установкой. Возьми проба
- * последний кусок сама — она доказывала бы собственную нарезку.
+ * последний кусок сама — она доказывала бы собственную нарезку. Сверяются оба конца:
+ * последний шаг цепочки НАЗЫВАЕТСЯ установкой (`tasker:BASER2-291`) и несёт ровно то
+ * значение, которое дверь объявила настройкой.
  */
 function installStep({ result, json }) {
   const declared = soleRun(result).settings.find(
     (setting) => setting.key === 'installCommand',
   );
-  expect(
-    json.postCreateCommand.endsWith(` && ${declared.value}`),
-    json.postCreateCommand,
-  ).toBe(true);
+  const last = steps(json.postCreateCommand).at(-1);
+  expect(last.id, json.postCreateCommand).toBe('install');
+  expect(last.run, json.postCreateCommand).toBe(declared.value);
   return declared.value;
 }
 
@@ -462,10 +465,8 @@ describe('ЦЕПОЧКА ПОСТСОЗДАНИЯ: шаг без предмет�
       globalTools: { '@anthropic-ai/claude-code': 'latest' },
       secretsVolume: 'omnifield-secrets',
     });
-    const seed = withVolume.json.postCreateCommand
-      .split(' && ')
-      .find((step) => step.startsWith('mkdir -p "$CLAUDE_CONFIG_DIR"'));
-    expect(seed, withVolume.json.postCreateCommand).toBeTruthy();
+    const seed = stepRun(withVolume.json.postCreateCommand, 'assistant');
+    expect(seed.startsWith('mkdir -p "$CLAUDE_CONFIG_DIR"')).toBe(true);
 
     const attempt = await postCreate(
       `${seed} && echo ДОШЛИ-ДО-УСТАНОВКИ`,
