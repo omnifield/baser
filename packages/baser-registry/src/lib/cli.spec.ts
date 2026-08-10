@@ -44,6 +44,23 @@ describe('разбор вызова', () => {
     expect(outcome.stdout).toContain('reach');
   });
 
+  it('--help называет ТРИ ДЕЙСТВИЯ и чем отказывает каждое', async () => {
+    // Человек, которому отказали, обязан понять из подсказки, какой шаг сказал
+    // «нет» и что с этим делать: у выпуска и у отгрузки лечение разное —
+    // поднять номер против поднять магазин (`tasker:BASER2-287`).
+    const outcome = await cli(['--help'], process.cwd());
+
+    for (const step of ['выпуск', 'отгрузка', 'объявление']) {
+      expect(outcome.stdout, step).toContain(step);
+    }
+    // Отказ выпуска назван вместе с его лечением.
+    expect(outcome.stdout).toContain('правите выпущенное');
+    expect(outcome.stdout).toContain('поднятием номера');
+    // И тишина объявления названа, а не пропущена.
+    expect(outcome.stdout).toContain('ПРИСУТСТВУЕТ и молчит');
+    expect(outcome.stdout).toContain('publication');
+  });
+
   it('--version отдаёт форму ответа и версию пакета — они про разное', async () => {
     const outcome = await cli(['--version'], process.cwd());
     const versions = JSON.parse(outcome.stdout) as Record<string, unknown>;

@@ -54,10 +54,20 @@ export { down, publish, status, up } from './lib/shop.js';
 export type { PublishOptions, ShopOptions } from './lib/shop.js';
 
 export type {
+  Fingerprint,
   Manager,
   PublishReport,
+  ReleaseVerdict,
   ShipmentOutcome,
 } from './lib/publish.js';
+
+export type {
+  PublicationSteps,
+  PublishStep,
+  StepOutcome,
+  StepReport,
+  StepSilence,
+} from './lib/steps.js';
 
 export { exitCodeOf, SCHEMA_VERSION } from './lib/result.js';
 export type {
