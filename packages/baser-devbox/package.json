@@ -1,6 +1,6 @@
 {
   "name": "@baser/devbox",
-  "version": "0.11.0-dev.1",
+  "version": "0.12.0-dev.1",
   "description": "Обвес девбокса: .devcontainer как шаблон с пресетом omnifield",
   "license": "MIT",
   "repository": {
