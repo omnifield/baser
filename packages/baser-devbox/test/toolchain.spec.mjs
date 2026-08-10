@@ -35,12 +35,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { soleRun } from '../../baser-cli/src/index.ts';
 import {
+  chainBefore,
   consumerConfig,
   installConsumer,
   LIVE,
   packedManifest,
   parseJsonc,
   run,
+  steps,
   tuning,
   tuningPath,
 } from './packed.mjs';
@@ -69,12 +71,20 @@ async function materialize(settings) {
   return { result, text, json: text === null ? null : parseJsonc(text) };
 }
 
-/** Шаг названных потерь — первый в постсоздании, вырезается по своему хвосту. */
+/**
+ * Шаг названных потерь — берётся ПО ИМЕНИ, а не вырезается по своему хвосту.
+ *
+ * До `tasker:BASER2-291` шаг опознавался куском тела (`startsWith('( lost=;')`
+ * плюс `indexOf('; fi )')`), и правка внутри шага двигала срез. Имя у шага теперь
+ * есть — заодно проверяется, что он по-прежнему ПЕРВЫЙ: постсоздание кончается
+ * установкой, и предупреждение в хвосте сместило бы конец.
+ */
 function toolchainStep(json) {
-  const post = json.postCreateCommand;
-  const end = post.indexOf('; fi )');
-  expect(post.startsWith('( lost=;') && end !== -1, post).toBe(true);
-  return post.slice(0, end + '; fi )'.length);
+  const chain = steps(json.postCreateCommand);
+  expect(chain[0].id, `первый шаг постсоздания — не потери тулчейна`).toBe(
+    'toolchain',
+  );
+  return chain[0].run;
 }
 
 /**
@@ -391,9 +401,14 @@ describe('НЕ МОЛЧАТЬ: тулчейн, объявленный репоз
     // чужого дефолта краснела бы у него на правке в чужой настройке.
     const install = packedManifest().baser.settings.installCommand.default;
     const post = json.postCreateCommand;
-    expect(post.endsWith(install)).toBe(true);
-    const upToInstall = post.slice(0, -` && ${install}`.length);
-    const result = await sh(upToInstall, repo({ files: ['.python-version'] }));
+    expect(steps(post).at(-1).id).toBe('install');
+    expect(steps(post).at(-1).run).toBe(install);
+    // Режется по ОБЪЯВЛЕННОЙ границе шага, а не по «последнему &&»: границу теперь
+    // называет сама цепочка, и срез перестал зависеть от того, что внутри шагов.
+    const result = await sh(
+      chainBefore(post, 'install'),
+      repo({ files: ['.python-version'] }),
+    );
     expect(result.code).toBe(0);
   });
 });

@@ -449,6 +449,85 @@ export function liveArtifact(dest) {
   return readFileSync(join(REPO_ROOT, dest), 'utf-8');
 }
 
+/**
+ * ЦЕПОЧКА, ПРОЧИТАННАЯ ИЗ АРТЕФАКТА ШАГАМИ (`tasker:BASER2-291`).
+ *
+ * До именованных шагов пробы зоны резали цепочку СТРОКОВОЙ ХИРУРГИЕЙ, и каждая
+ * своей: `post.startsWith('( lost=;')`, `indexOf('( reg=')`,
+ * `endsWith(' && ' + install)`, `split(' && ')`. Все они верно работали и все
+ * держались на одном и том же — на том, что шаг можно опознать по КУСКУ ЕГО
+ * ТЕЛА. Это и есть цена безымянности, только заплаченная не человеком в
+ * контейнере, а нами в пробах: правка внутри шага двигала срез у соседей.
+ *
+ * Теперь у шага есть имя, поэтому и здесь адресуются по имени. Читается по-прежнему
+ * АРТЕФАКТ, а не шаблон: проба, разбирающая собственную копию цепочки, доказывает
+ * только её.
+ */
+const STEP =
+  /\{ devbox_step '(\d+)\/(\d+) (\S+) — ([^']*)'; \( ([\s\S]*?) \); \} \|\| devbox_stop/g;
+
+/** Пролог цепочки: два помощника, без которых имена не назовёт ничто. */
+const HELPERS = 'devbox_step() {';
+
+/**
+ * Шаги цепочки: `{ position, total, id, title, label, run }` по порядку.
+ *
+ * Пустой список не возвращается молча: цепочка без единого разобранного шага —
+ * это либо сломанный рендер, либо разъехавшийся разбор, и в обоих случаях
+ * дальнейшие проверки доказывали бы пустоту.
+ */
+export function steps(command) {
+  if (!command.startsWith(HELPERS)) {
+    throw new Error(`цепочка начинается не с помощников шага:\n${command}`);
+  }
+  const found = [...command.matchAll(STEP)].map((match) => ({
+    position: Number(match[1]),
+    total: Number(match[2]),
+    id: match[3],
+    title: match[4],
+    label: `${match[1]}/${match[2]} ${match[3]} — ${match[4]}`,
+    run: match[5],
+  }));
+  if (found.length === 0) {
+    throw new Error(`в цепочке не разобрано ни одного шага:\n${command}`);
+  }
+  // Объявленное число шагов и число разобранных обязаны совпадать: разойдись они,
+  // проба тихо проверяла бы часть цепочки, считая, что видит её целиком.
+  if (found.some((step) => step.total !== found.length)) {
+    throw new Error(
+      `цепочка объявляет ${found[0].total} шагов, разобрано ${found.length}:\n${command}`,
+    );
+  }
+  return found;
+}
+
+/** Команда НАЗВАННОГО шага — то, что раньше выкусывалось по куску тела. */
+export function stepRun(command, id) {
+  const step = steps(command).find((item) => item.id === id);
+  if (step === undefined) {
+    throw new Error(
+      `шага "${id}" в цепочке нет; есть: ${steps(command).map((item) => item.id).join(' · ')}`,
+    );
+  }
+  return step.run;
+}
+
+/**
+ * Цепочка ДО названного шага — вместе с прологом, то есть исполнимая.
+ *
+ * Нужна там, где пробе надо дойти до шага, но не исполнять его (установка
+ * зависимостей стоит настоящих минут и настоящего реестра). Срез идёт по границе
+ * шага, а не по «последнему &&»: границу объявляет сама цепочка.
+ */
+export function chainBefore(command, id) {
+  const step = steps(command).find((item) => item.id === id);
+  if (step === undefined) {
+    throw new Error(`шага "${id}" в цепочке нет, резать не по чему`);
+  }
+  const at = command.indexOf(`{ devbox_step '${step.label}'`);
+  return command.slice(0, at).replace(/ && $/, '');
+}
+
 /** JSONC → JSON: комментарии разрешены спецификацией Dev Containers. */
 export function parseJsonc(text) {
   return JSON.parse(text.replace(/^\s*\/\/.*$/gm, ''));

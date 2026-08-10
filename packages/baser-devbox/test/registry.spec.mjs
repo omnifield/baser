@@ -32,12 +32,15 @@ import { containerEnv } from './env.mjs';
 // Порог помеченных им проб — с причиной и замером на ЗАГРУЖЕННОЙ машине там же.
 import { MANAGER_PROBE_MS } from './limits.mjs';
 import {
+  chainBefore,
   consumerConfig,
   installConsumer,
   LIVE,
   packedManifest,
   parseJsonc,
   run,
+  stepRun,
+  steps,
   tuning,
 } from './packed.mjs';
 
@@ -54,21 +57,25 @@ const SCOPE = '@omnifield';
 const INSTALL = packedManifest().baser.settings.installCommand.default;
 
 /**
- * Постсоздание БЕЗ первого шага — названных потерь тулчейна.
+ * Постсоздание ИМЕНАМИ ШАГОВ, без первого — названных потерь тулчейна.
  *
  * Он стоит первым в любом профиле (`tasker:BASER2-110`) и к реестру отношения не
- * имеет, поэтому пробы этого файла говорят про то, что осталось. Срез идёт по
- * хвосту самого шага, а не по «первому &&»: внутри проверки свои `&&`, и наивный
- * срез отрезал бы половину, продолжая выглядеть работающим.
+ * имеет, поэтому пробы этого файла говорят про то, что осталось.
+ *
+ * До `tasker:BASER2-291` это выглядело срезом строки по хвосту шага
+ * (`indexOf('; fi )')` при `startsWith('( lost=;')`) — и держалось на том, что шаг
+ * опознаётся по куску тела. Шаги названы, поэтому и здесь спрашивается ИМЯ: список
+ * оставшихся шагов, а не остаток текста. Заодно исчезла ловушка, ради которой тот
+ * срез и был устроен именно так: внутри шагов свои `&&`, и «по первому &&» резать
+ * было нельзя.
  */
-const TOOLCHAIN_END = '; fi )';
 function afterToolchain(post) {
-  const cut = post.indexOf(TOOLCHAIN_END);
+  const ids = steps(post).map((step) => step.id);
   expect(
-    post.startsWith('( lost=;') && cut !== -1,
-    `постсоздание начинается не с проверки тулчейна: ${post}`,
-  ).toBe(true);
-  return post.slice(cut + TOOLCHAIN_END.length).replace(/^ && /, '');
+    ids[0],
+    `постсоздание начинается не с проверки тулчейна: ${ids.join(' · ')}`,
+  ).toBe('toolchain');
+  return ids.slice(1);
 }
 
 let consumer = null;
@@ -79,12 +86,12 @@ afterEach(() => {
 });
 
 /**
- * Кладёт обвес с заданным `npmScope` и вырезает из артефакта ШАГ ПРОВЕРКИ.
+ * Кладёт обвес с заданным `npmScope` и берёт из артефакта ШАГ ПРОВЕРКИ — ПО ИМЕНИ.
  *
- * Профиль минимальный намеренно: без томов и ассистента шагов ровно два — проверка и
- * установка, — поэтому шаг отрезается по хвосту, а не выкусывается регуляркой. Заодно
- * это и есть доказательство порядка: проверка стоит ПЕРЕД установкой, иначе она
- * рассказывала бы про уже случившийся невнятный отказ.
+ * Профиль минимальный намеренно: без томов и ассистента шагов ровно три — потери
+ * тулчейна, проверка и установка. Порядок при этом проверяется здесь же и остаётся
+ * доказательством: проверка стоит ПЕРЕД установкой, иначе она рассказывала бы про
+ * уже случившийся невнятный отказ.
  */
 function checkStep(npmScope = SCOPE) {
   consumer = installConsumer({
@@ -93,15 +100,13 @@ function checkStep(npmScope = SCOPE) {
     tuning: tuning({ settings: { npmScope } }),
   });
   return run({ command: 'apply', cwd: consumer.root }).then(() => {
-    const post = afterToolchain(
-      parseJsonc(consumer.read(LIVE)).postCreateCommand,
-    );
-    const tail = ` && ${INSTALL}`;
-    expect(
-      post.endsWith(tail),
-      `постсоздание кончается не установкой: ${post}`,
-    ).toBe(true);
-    return post.slice(0, -tail.length);
+    const post = parseJsonc(consumer.read(LIVE)).postCreateCommand;
+    expect(afterToolchain(post)).toEqual(['registry', 'install']);
+    // Установка — по-прежнему последний шаг цепочки, и значением она по-прежнему
+    // ровно дефолт объявления: инвариант зоны никуда не делся, он просто перестал
+    // проверяться нарезкой строки.
+    expect(steps(post).at(-1).run).toBe(INSTALL);
+    return stepRun(post, 'registry');
   });
 }
 
@@ -233,11 +238,7 @@ describe('стена без указателя: проверка ловит об
       });
       await run({ command: 'apply', cwd: consumer.root });
       const artifact = parseJsonc(consumer.read(LIVE));
-      const post = artifact.postCreateCommand;
-      const step = post.slice(
-        post.indexOf('( reg='),
-        post.indexOf(` && ${INSTALL}`),
-      );
+      const step = stepRun(artifact.postCreateCommand, 'registry');
 
       const result = await sh(step, npmrc());
 
@@ -370,7 +371,7 @@ describe('внешнему потребителю приватный реест�
     expect(text).not.toContain('_authToken');
     // Постсоздание — ровно установка зависимостей, и ничего больше (первый шаг,
     // названные потери тулчейна, стоит в любом профиле и про реестр не говорит).
-    expect(afterToolchain(parseJsonc(text).postCreateCommand)).toBe(INSTALL);
+    expect(afterToolchain(parseJsonc(text).postCreateCommand)).toEqual(['install']);
   });
 
   it('проверка НЕ в пресете omnifield: baser сам публикует @omnifield/*', async () => {
@@ -437,7 +438,7 @@ describe('scope публичный — сказано ЗНАЧЕНИЕМ, а н�
     // Артефакт — как у того, кто про реестр вообще не говорил: делать нечего.
     expect(text).not.toContain('pnpm whoami');
     expect(text).not.toContain('_authToken');
-    expect(afterToolchain(parseJsonc(text).postCreateCommand)).toBe(INSTALL);
+    expect(afterToolchain(parseJsonc(text).postCreateCommand)).toEqual(['install']);
 
     // А конфиг говорит РОВНО ТО, ЧТО ЕСТЬ: scope такой-то, и он публичный.
     // Оба значения заполнены человеком — «подумали» видно по origin, а не по
@@ -494,16 +495,14 @@ describe('scope публичный — сказано ЗНАЧЕНИЕМ, а н�
         npmScope: SCOPE,
         npmScopeIsPrivate: false,
       });
-      const post = afterToolchain(parseJsonc(text).postCreateCommand);
-      const before = post.endsWith(INSTALL)
-        ? post.slice(0, -INSTALL.length).replace(/ && $/, '')
-        : post;
+      const post = parseJsonc(text).postCreateCommand;
 
       // Всё, что публичный профиль делает до установки СВЕРХ названных потерь
-      // тулчейна, — ничто. Исполняем это ничто в том же окружении: отказу взяться
-      // неоткуда.
-      expect(before).toBe('');
-      expect((await sh(before || 'true', env)).code).toBe(0);
+      // тулчейна, — ничто, и теперь это читается ПЕРЕЧНЕМ ШАГОВ: между первым
+      // шагом и установкой нет ни одного. Исполняется вся цепочка ДО установки в
+      // том же окружении: отказу взяться неоткуда.
+      expect(afterToolchain(post)).toEqual(['install']);
+      expect((await sh(chainBefore(post, 'install'), env)).code).toBe(0);
     },
   );
 
@@ -525,7 +524,7 @@ describe('scope публичный — сказано ЗНАЧЕНИЕМ, а н�
     // отвечают на разные вопросы и совпадать не обязаны. Артефакт молчит.
     const { text } = await withScope({ npmScopeIsPrivate: true });
 
-    expect(afterToolchain(parseJsonc(text).postCreateCommand)).toBe(INSTALL);
+    expect(afterToolchain(parseJsonc(text).postCreateCommand)).toEqual(['install']);
     expect(text).not.toContain('registry');
   });
 });
@@ -543,14 +542,21 @@ describe('проверка стоит ПЕРЕД установкой, а не �
     await run({ command: 'apply', cwd: consumer.root });
 
     const post = parseJsonc(consumer.read(LIVE)).postCreateCommand;
-    const chown = post.indexOf('sudo chown');
-    const check = post.indexOf('pnpm whoami');
-    const install = post.indexOf(INSTALL);
 
-    // chown раньше проверки не для красоты: креды лежат в томе, права на который он
-    // и выставляет, — проверка до него читала бы чужой по владельцу файл.
-    expect(chown).toBeGreaterThanOrEqual(0);
-    expect(chown).toBeLessThan(check);
-    expect(check).toBeLessThan(install);
+    // Порядок читается ИМЕНАМИ, а не позициями подстрок: chown раньше проверки не
+    // для красоты — креды лежат в томе, права на который он и выставляет, и проверка
+    // до него читала бы чужой по владельцу файл. Сравнение имён вместо `indexOf`
+    // заодно перестаёт зависеть от того, встретилось ли слово `sudo chown` где-то
+    // ещё в цепочке.
+    expect(steps(post).map((step) => step.id)).toEqual([
+      'toolchain',
+      'volumes',
+      'assistant',
+      'registry',
+      'install',
+    ]);
+    expect(stepRun(post, 'volumes')).toContain('sudo chown -R');
+    expect(stepRun(post, 'registry')).toContain('pnpm whoami');
+    expect(stepRun(post, 'install')).toBe(INSTALL);
   });
 });

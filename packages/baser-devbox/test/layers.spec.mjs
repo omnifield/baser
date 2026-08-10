@@ -33,6 +33,8 @@ import {
   LIVE,
   parseJsonc,
   run,
+  stepRun,
+  steps,
   tuning,
 } from './packed.mjs';
 
@@ -90,8 +92,10 @@ describe('слой УНИВЕРСАЛЬНОЕ: тот же обвес без п�
     // И БЕЗОПАСЕН К ОТСУТСТВИЮ МАНИФЕСТА: локация, где ставить нечего, — это
     // нормальное состояние, а не отказ, роняющий всё постсоздание разом
     // (`tasker:BASER2-188`, исполняется там же). Установка при этом остаётся
-    // ПОСЛЕДНИМ шагом — инвариант зоны, по которому пробы отрезают её хвост.
-    expect(json.postCreateCommand.endsWith('; fi')).toBe(true);
+    // ПОСЛЕДНИМ шагом — инвариант зоны, и с `tasker:BASER2-291` он читается
+    // ИМЕНЕМ шага, а не хвостом строки.
+    expect(steps(json.postCreateCommand).at(-1).id).toBe('install');
+    expect(steps(json.postCreateCommand).at(-1).run.endsWith('; fi')).toBe(true);
     expect(json.postCreateCommand).toContain('if [ -f package.json ]; then');
     expect(json.postCreateCommand).toContain('command -v uv');
   });
@@ -161,7 +165,7 @@ describe('слой НАСТРОЙКИ: регулировка вместо пр�
     });
 
     expect(json.image).toBe('mcr.microsoft.com/devcontainers/base:20');
-    expect(json.postCreateCommand.endsWith('npm ci')).toBe(true);
+    expect(stepRun(json.postCreateCommand, 'install')).toBe('npm ci');
   });
 
   it('расширения редактора — список, и он едет в customizations целиком', async () => {
@@ -301,7 +305,7 @@ describe('слой НАСТРОЙКИ: регулировка вместо пр�
     expect(json.image).toBe(
       'mcr.microsoft.com/devcontainers/typescript-node:20',
     );
-    expect(json.postCreateCommand).toMatch(/&& npm ci$/);
+    expect(stepRun(json.postCreateCommand, 'install')).toBe('npm ci');
     // Пресет при этом на месте: заполнено одно значение, а не снят слой.
     expect(json.runArgs).toContain('--network=omnifield-gateway');
     expect(json.postCreateCommand).toContain('/home/node/.secrets');
