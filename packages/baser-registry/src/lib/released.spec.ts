@@ -209,12 +209,38 @@ describe('выпущенный пакет ставится и работает',
       // защиты выпущенной команды товар уехал бы туда молча.
       expect(answer.published[0]?.destination).toBe(`http://127.0.0.1:${port}`);
 
+      // ТРИ ДЕЙСТВИЯ ПРИЕЗЖАЮТ ПОЛЯМИ И ИЗ ВЫПУЩЕННОГО ПАКЕТА, а не только из
+      // исходников: потребителю форма ответа достаётся именно отсюда.
+      const steps = JSON.parse(said.said) as {
+        publication: Record<string, { outcome: string; reason: string | null }>;
+      };
+      expect(steps.publication['release']?.outcome).toBe('done');
+      expect(steps.publication['shipment']?.outcome).toBe('done');
+      expect(steps.publication['announcement']?.reason).toBe('no-storefront');
+
       // ПОВТОР на выпущенном пакете — тоже спокойный: «уже на складе» и код 0.
       const again = run(['publish', plain, '--json']);
       expect(again.code, again.said).toBe(0);
       expect(
         (JSON.parse(again.said) as { outcome: string }).outcome,
       ).toBe('already-published');
+
+      // А ПРАВКА ВЫПУЩЕННОГО — отказ, и он называет ВЫПУСК. Ради этого шага
+      // весь заход: прежде здесь приезжал тот же спокойный успех.
+      writeFileSync(join(plain, 'index.js'), 'правка после выпуска\n', 'utf8');
+      const frozen = run(['publish', plain, '--json']);
+      expect(frozen.code, frozen.said).toBe(2);
+      const refused = JSON.parse(frozen.said) as {
+        outcome: string;
+        publication: Record<string, { outcome: string; reason: string | null }>;
+        problems: { code: string }[];
+      };
+      expect(refused.outcome).toBe('refused');
+      expect(refused.publication['release']?.reason).toBe('release-frozen');
+      expect(refused.publication['shipment']?.outcome).toBe('skipped');
+      expect(refused.problems.map((one) => one.code)).toContain(
+        'release-frozen',
+      );
     },
     CASE_TIMEOUT_MS,
   );

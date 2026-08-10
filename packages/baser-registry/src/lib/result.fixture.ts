@@ -6,6 +6,21 @@
  */
 
 import { SCHEMA_VERSION, type ShopResult } from './result.js';
+import { ANNOUNCEMENT_SILENT, said, type PublicationSteps } from './steps.js';
+
+/**
+ * Три действия удачного прогона: выпустили, отгрузили, промолчали.
+ *
+ * Собрано теми же конструкторами, что и в бою: образец, слепленный литералом,
+ * зеленел бы и после того, как форма шага уедет.
+ */
+export function shippedSteps(): PublicationSteps {
+  return {
+    release: said('release', 'done'),
+    shipment: said('shipment', 'done'),
+    announcement: ANNOUNCEMENT_SILENT,
+  };
+}
 
 export function sampleResult(patch: Partial<ShopResult> = {}): ShopResult {
   return {
@@ -49,6 +64,9 @@ export function sampleResult(patch: Partial<ShopResult> = {}): ShopResult {
         '//127.0.0.1:4873/:_authToken=baser-registry',
       ],
     },
+    // Образец — ответ `status`, а три действия принадлежат публикации: у
+    // спрашивающей команды их нет, и пустых шагов ей не выдумывают.
+    publication: null,
     published: [],
     writes: [],
     trace: [],

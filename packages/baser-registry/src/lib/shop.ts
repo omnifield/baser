@@ -42,7 +42,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { readDecisions } from './decisions.js';
 import { buildingLayout, shopLayout, type ShopLayout } from './layout.js';
 import { locateBuilding } from './locate.js';
-import { ShopProblemLog } from './problems.js';
+import { ShopProblemLog, type ShopProblemCode } from './problems.js';
 import {
   clientAddress,
   listenAddress,
@@ -63,12 +63,21 @@ import {
 } from './result.js';
 import {
   chooseManager,
+  judgeRelease,
+  lookOnShelf,
   managerAvailable,
-  onShelf,
   readManifest,
   runPublish,
   type PublishReport,
+  type ReleaseVerdict,
 } from './publish.js';
+import {
+  ANNOUNCEMENT_SILENT,
+  rollUp,
+  said,
+  stepsNotReached,
+  type PublicationSteps,
+} from './steps.js';
 import { createTrace, type TraceRecorder } from './trace.js';
 import { shopEntry, verdaccioConfig } from './verdaccio.js';
 
@@ -264,33 +273,48 @@ export async function down(options: ShopOptions): Promise<ShopResult> {
 }
 
 /**
- * Отгрузить товар на склад локации.
+ * Опубликовать: ВЫПУСК · ОТГРУЗКА · ОБЪЯВЛЕНИЕ.
  *
- * Команда делает правильное независимо от менеджера и от того, что настроено у
- * человека: чистит окружение, называет адрес и на скоуп, выбирает менеджера по
- * содержимому манифеста и сверяет назначение ДО живой публикации. Человеку
- * знать про `.npmrc`, флаги скоупа и разницу менеджеров не нужно — в этом вся
- * причина, по которой команда существует (`publish.ts`).
+ * Три действия мира (`kb:WORLD-34`), а не одна кнопка, и каждое отказывает
+ * своим словом. Прежде здесь было склеено два из них, и дороже всего обошлась
+ * склейка в одном месте: склад спрашивали «лежит ли эта версия», и ЛЮБОЙ ответ
+ * «лежит» становился успехом `already-published`. Для отгрузки это правильно и
+ * решено сознательно (`tasker:BASER2-257`); для выпуска — это молча
+ * проглоченная порча выпущенного (`tasker:BASER2-287`).
  *
- * ЧТО ИМЕННО УЕЗЖАЕТ, РЕШАЕТ ПОСТРОЙКА, А НЕ КАТАЛОГ, ИЗ КОТОРОГО ПОЗВАЛИ.
+ * ── ПОРЯДОК ИСПОЛНЕНИЯ НЕ РАВЕН ПОРЯДКУ ДЕЙСТВИЙ ────────────────────────────
+ *
+ * Выпуск — первое действие, но судится он ПО СКЛАДУ: что лежит под этим
+ * номером, знает только склад. Значит закрытый магазин обрывает прогон раньше
+ * выпуска, и отказ там принадлежит ОТГРУЗКЕ («до склада нет дороги»), а выпуск
+ * честно говорит `skipped` — не рассудили. Это не обход правила, а его
+ * следствие: суждение о выпуске у нас опирается на склад магазина.
+ *
+ * ── ВЫПУСК СУДИТСЯ НА ВСЮ ПАРТИЮ ДО ПЕРВОЙ ЖИВОЙ ОТГРУЗКИ ───────────────────
+ *
+ * По той же причине, по которой до неё же проверяются каталоги, манифесты и
+ * менеджеры: ПОЛОВИНЫ ПАРТИИ НЕ БЫВАЕТ ПО НЕВНИМАТЕЛЬНОСТИ. Отказ выпуска на
+ * третьем пакете из пяти оставил бы склад в состоянии, которого никто не
+ * выбирал, — а уехавшее со склада не забирается.
+ *
+ * ── ЧТО ИМЕННО УЕЗЖАЕТ, РЕШАЕТ ПОСТРОЙКА ────────────────────────────────────
+ *
  * Названный путь сильнее объявленного: человек, назвавший папку, просил именно
  * её. Не названо ничего — уезжает ПАРТИЯ из решений постройки (`decisions.ts`),
  * и только если решений нет вовсе, командой остаётся прежнее «пакет отсюда».
  *
- * ПОЛОВИНЫ ПАРТИИ НЕ БЫВАЕТ ПО НЕВНИМАТЕЛЬНОСТИ: всё, что можно проверить, не
- * трогая склада, проверяется до первой живой публикации — каталоги на месте,
- * манифесты читаются, менеджер в системе есть. Отказ на третьем пакете из пяти
- * оставил бы склад в состоянии, которого никто не выбирал.
+ * Всё остальное про менеджеров, `.npmrc` и скоупы — по-прежнему работа
+ * инструмента, а не человека (`publish.ts`).
  */
 export async function publish(options: PublishOptions): Promise<ShopResult> {
   const run = await prepare('publish', options, { create: false });
-  if (run.refused) return run.finish('refused', 'closed');
+  if (run.refused) return notReached(run);
 
   const { trace } = run;
   const address = clientAddress(run.settings);
 
   const asked = whatToShip(run, options);
-  if (asked === null) return run.finish('refused', 'closed');
+  if (asked === null) return notReached(run);
 
   const cargo: Cargo[] = [];
   for (const directory of asked) {
@@ -311,27 +335,38 @@ export async function publish(options: PublishOptions): Promise<ShopResult> {
     );
     if (manifest !== null) cargo.push({ directory, ...manifest });
   }
-  if (!run.problems.empty) return run.finish('refused', 'closed');
+  // Разбор входа — не одно из трёх действий: он о том, ЧТО публиковать, а не о
+  // том, как. Не разобрали — до действий не дошли, и все три говорят это прямо.
+  if (!run.problems.empty) return notReached(run);
 
-  // Менеджер спрашивается ОДИН раз на каждого, кто нужен партии: `--version`
-  // стоит запуска процесса, а ответ у него один на весь прогон.
-  for (const manager of new Set(
-    cargo.map((one) => chooseManager(one.needsWorkspace)),
-  )) {
-    if (managerAvailable(manager)) continue;
-    run.problems.add(
-      manager === 'pnpm' ? 'pnpm-required' : 'publish-failed',
-      run.building.root,
-      manager === 'pnpm'
-        ? `у пакета есть зависимости workspace:, а pnpm в системе нет. ` +
-            `npm опубликовал бы его УСПЕШНО и сломанным — с workspace:* в манифесте, ` +
-            `который не ставится нигде`
-        : `npm в системе нет — публиковать нечем`,
+  // ВЕЗТИ НЕЧЕМ — отказ ОТГРУЗКИ. Менеджер спрашивается ОДИН раз на каждого,
+  // кто нужен партии: `--version` стоит запуска процесса, а ответ у него один
+  // на весь прогон.
+  const missing = [
+    ...new Set(cargo.map((one) => chooseManager(one.needsWorkspace))),
+  ].filter((manager) => !managerAvailable(manager));
+  if (missing.length > 0) {
+    for (const manager of missing) {
+      run.problems.add(
+        manager === 'pnpm' ? 'pnpm-required' : 'publish-failed',
+        run.building.root,
+        manager === 'pnpm'
+          ? `у пакета есть зависимости workspace:, а pnpm в системе нет. ` +
+              `npm опубликовал бы его УСПЕШНО и сломанным — с workspace:* в манифесте, ` +
+              `который не ставится нигде`
+          : `npm в системе нет — публиковать нечем`,
+      );
+    }
+    return run.finish(
+      'refused',
+      'running',
+      null,
+      [],
+      refusedAt('shipment', missing[0] === 'pnpm' ? 'pnpm-required' : 'publish-failed'),
     );
   }
-  if (!run.problems.empty) return run.finish('refused', 'running');
 
-  // Склад закрыт — класть некуда. Спрашиваем ДО того, как трогать чужой
+  // ДО СКЛАДА НЕТ ДОРОГИ — тоже отгрузка. Спрашиваем ДО того, как трогать чужой
   // `.npmrc`: отказ не должен оставлять следов в каталоге человека.
   const knock = await trace.span('knock', () => knockOn(address));
   if (knock !== 'registry') {
@@ -340,15 +375,63 @@ export async function publish(options: PublishOptions): Promise<ShopResult> {
       address,
       `магазин закрыт — класть товар некуда. Поднимите его: baser-registry up`,
     );
-    return run.finish('refused', 'closed');
+    return run.finish('refused', 'closed', null, [], refusedAt('shipment', 'shop-closed'));
   }
 
-  const shipped: PublishReport[] = [];
+  // ДЕЙСТВИЕ ПЕРВОЕ: ВЫПУСК. Вся партия целиком, ничего ещё не едет.
+  const verdicts: ReleaseVerdict[] = [];
   for (const one of cargo) {
-    shipped.push(await shipOne(run, one, address));
+    verdicts.push(
+      await trace.span(
+        'release',
+        async () =>
+          judgeRelease(
+            await lookOnShelf(address, one.name, one.version),
+            chooseManager(one.needsWorkspace),
+            one.directory,
+          ),
+        { package: one.name },
+      ),
+    );
   }
 
-  return run.finish(outcomeOf(shipped), 'running', null, shipped);
+  if (verdicts.some((one) => one.kind === 'diverged' || one.kind === 'unjudged')) {
+    const judged = cargo.map((one, at) =>
+      releaseRefusal(run, one, verdicts[at], address),
+    );
+    return run.finish('refused', 'running', null, judged, rollUp(judged.map((one) => one.steps)));
+  }
+
+  // ДЕЙСТВИЕ ВТОРОЕ: ОТГРУЗКА. Третье — объявление — молчит внутри `shipOne`.
+  const shipped: PublishReport[] = [];
+  for (const [at, one] of cargo.entries()) {
+    shipped.push(await shipOne(run, one, address, verdicts[at]));
+  }
+
+  return run.finish(
+    outcomeOf(shipped),
+    'running',
+    null,
+    shipped,
+    rollUp(shipped.map((one) => one.steps)),
+  );
+}
+
+/** Отказ до трёх действий: вход не разобран, шагам сказать нечего. */
+function notReached(run: Run): ShopResult {
+  return run.finish('refused', 'closed', null, [], stepsNotReached());
+}
+
+/** Один шаг сказал «нет», остальные до себя не допустили. */
+function refusedAt(
+  step: 'release' | 'shipment',
+  reason: ShopProblemCode,
+): PublicationSteps {
+  return {
+    release: said('release', step === 'release' ? 'refused' : 'skipped', step === 'release' ? reason : null),
+    shipment: said('shipment', step === 'shipment' ? 'refused' : 'skipped', step === 'shipment' ? reason : null),
+    announcement: said('announcement', 'skipped'),
+  };
 }
 
 /** Один пакет партии: каталог и то, что прочитано из его манифеста. */
@@ -394,36 +477,111 @@ function whatToShip(run: Run, options: PublishOptions): string[] | null {
   return decisions.batch.map((one) => resolve(run.building.root, one));
 }
 
-/** Отгружает ОДИН пакет партии и рассказывает, что с ним стало. */
+/** Карточка пакета: то, что в ответе не зависит от исхода. */
+function cardOf(cargo: Cargo, address: string) {
+  return {
+    name: cargo.name,
+    version: cargo.version,
+    directory: cargo.directory,
+    manager: chooseManager(cargo.needsWorkspace),
+    needsWorkspace: cargo.needsWorkspace,
+    destination: address,
+  };
+}
+
+/**
+ * ВЫПУСК ОТКАЗАЛ ГДЕ-ТО В ПАРТИИ — что сказать про КАЖДЫЙ пакет.
+ *
+ * Отказавшему называем причину кодом и текстом; остальным честно говорим, что
+ * их выпуск-то прошёл, а отгрузки не было: партию не режут пополам. Из-за этого
+ * у пакета бывает `outcome: refused` при `steps.release.outcome: done` — и это
+ * не противоречие, а ровно тот случай, ради которого шаги и разведены.
+ */
+function releaseRefusal(
+  run: Run,
+  cargo: Cargo,
+  verdict: ReleaseVerdict,
+  address: string,
+): PublishReport {
+  const card = cardOf(cargo, address);
+  const at = `${cargo.name}@${cargo.version}`;
+
+  if (verdict.kind === 'diverged') {
+    run.problems.add(
+      'release-frozen',
+      at,
+      `под номером ${cargo.version} на складе уже лежит ДРУГОЕ содержимое. ` +
+        `Либо номер занят чужим, либо вы правите выпущенное — выпуск вещь ` +
+        `замороженная, и содержимое под номером не меняется. Поднимите номер ` +
+        `в ${join(cargo.directory, 'package.json')} и позовите команду снова; ` +
+        `тот же товар под тем же номером уехал бы спокойно`,
+    );
+    return {
+      outcome: 'refused',
+      steps: refusedAt('release', 'release-frozen'),
+      ...card,
+    };
+  }
+
+  if (verdict.kind === 'unjudged') {
+    run.problems.add(
+      'release-unjudged',
+      at,
+      `номер ${cargo.version} на складе занят, а сверить с лежащим нечем: ` +
+        `${verdict.said.trim()}`,
+    );
+    return {
+      outcome: 'refused',
+      steps: refusedAt('release', 'release-unjudged'),
+      ...card,
+    };
+  }
+
+  return {
+    outcome: 'refused',
+    steps: {
+      release: said('release', verdict.kind === 'same' ? 'nothing-to-do' : 'done'),
+      shipment: said('shipment', 'skipped'),
+      announcement: said('announcement', 'skipped'),
+    },
+    ...card,
+  };
+}
+
+/**
+ * Отгружает ОДИН пакет партии, чей выпуск уже рассудили, и рассказывает, что с
+ * ним стало всеми тремя шагами.
+ */
 async function shipOne(
   run: Run,
   cargo: Cargo,
   address: string,
+  verdict: ReleaseVerdict,
 ): Promise<PublishReport> {
-  const manager = chooseManager(cargo.needsWorkspace);
-  const card = {
-    name: cargo.name,
-    version: cargo.version,
-    directory: cargo.directory,
-    manager,
-    needsWorkspace: cargo.needsWorkspace,
-    destination: address,
-  };
+  const card = cardOf(cargo, address);
+  const manager = card.manager;
+  const release = said(
+    'release',
+    verdict.kind === 'same' ? 'nothing-to-do' : 'done',
+  );
 
-  // УЖЕ ЛЕЖИТ — делать нечего, и менеджера мы даже не запускаем: незачем
-  // тратить секунды и трогать чужой `.npmrc` ради работы, которой нет.
-  if (
-    await run.trace.span(
-      'on-shelf',
-      () => onShelf(address, cargo.name, cargo.version),
-      { package: cargo.name },
-    )
-  ) {
-    return { outcome: 'already-published', ...card };
+  // ТОТ ЖЕ ВЫПУСК УЖЕ ЛЕЖИТ — отгружать нечего, и менеджера мы для этого даже
+  // не запускаем. Решение `tasker:BASER2-257` в силе: повторный вызов с тем же
+  // входом даёт то же состояние без крика, ровно как второй `up`.
+  if (verdict.kind === 'same') {
+    return {
+      outcome: 'already-published',
+      steps: {
+        release,
+        shipment: said('shipment', 'nothing-to-do'),
+        announcement: ANNOUNCEMENT_SILENT,
+      },
+      ...card,
+    };
   }
 
   const outcome = await run.trace.span(
-    'publish',
+    'shipment',
     () =>
       runPublish({
         manager,
@@ -434,33 +592,69 @@ async function shipOne(
     { package: cargo.name },
   );
 
-  const said = { ...card, destination: outcome.destination ?? 'неизвестно' };
+  const went = { ...card, destination: outcome.destination ?? 'неизвестно' };
 
   if (outcome.published) {
-    return { outcome: 'published', ...said };
+    return {
+      outcome: 'published',
+      steps: {
+        release,
+        shipment: said('shipment', 'done'),
+        announcement: ANNOUNCEMENT_SILENT,
+      },
+      ...went,
+    };
   }
 
-  // ГОНКА: между нашим вопросом складу и нашей попыткой ту же версию мог
-  // положить кто-то другой. Спрашиваем склад ещё раз — исход тот же, что и
-  // при обычном повторе, и узнаём мы его снова замером, а не разбором
-  // чужого текста.
-  if (await onShelf(address, cargo.name, cargo.version)) {
-    return { outcome: 'already-published', ...said };
+  // ГОНКА: между нашим суждением о выпуске и нашей попыткой ту же версию мог
+  // положить кто-то другой. Спрашиваем склад ещё раз — и снова СУДИМ, а не
+  // просто отмечаем «версия появилась»: положить туда могли и другое
+  // содержимое, и тогда это не спокойный повтор, а занятый номер.
+  const raced = await lookOnShelf(address, cargo.name, cargo.version);
+  if (raced !== null) {
+    const again = await run.trace.span(
+      'release',
+      () => judgeRelease(raced, manager, cargo.directory),
+      { package: cargo.name, race: 'true' },
+    );
+    if (again.kind === 'same') {
+      return {
+        outcome: 'already-published',
+        steps: {
+          release: said('release', 'nothing-to-do'),
+          shipment: said('shipment', 'nothing-to-do'),
+          announcement: ANNOUNCEMENT_SILENT,
+        },
+        ...went,
+      };
+    }
+    return releaseRefusal(run, cargo, again, address);
   }
 
   // Менеджер отказал сам — причина в пакете, а не в адресе.
   const wrongPlace =
     !outcome.refusedByManager &&
     (outcome.destination === null || outcome.destination !== address);
+  const reason: ShopProblemCode = wrongPlace
+    ? 'wrong-destination'
+    : 'publish-failed';
   run.problems.add(
-    wrongPlace ? 'wrong-destination' : 'publish-failed',
+    reason,
     wrongPlace ? (outcome.destination ?? cargo.directory) : cargo.directory,
     wrongPlace
       ? `${manager} собрался публиковать в ${outcome.destination ?? 'неизвестно куда'}, ` +
           `а магазин локации — ${address}. Живой публикации не было`
       : `${manager} отказал на публикации:\n${outcome.said.trim()}`,
   );
-  return { outcome: 'failed', ...said };
+  return {
+    outcome: 'failed',
+    steps: {
+      release,
+      shipment: said('shipment', 'refused', reason),
+      announcement: said('announcement', 'skipped'),
+    },
+    ...went,
+  };
 }
 
 /**
@@ -470,9 +664,15 @@ async function shipOne(
  * разбираться, а с ЧЕМ именно — он прочитает построчно. «Уже на складе» на всю
  * партию остаётся успехом по той же причине, по которой им остаётся второй
  * `up`: то же состояние без крика.
+ *
+ * `failed` СИЛЬНЕЕ `refused`, и порядок здесь означает вопрос «что чинить
+ * первым»: `failed` — это «везли и не довезли», то есть склад или менеджер, а
+ * `refused` — «вход непригоден», и чинится он у себя на диске. Слово прогона
+ * называет ту беду, которая никуда не денется сама.
  */
 function outcomeOf(shipped: readonly PublishReport[]): ShopOutcome {
   if (shipped.some((one) => one.outcome === 'failed')) return 'failed';
+  if (shipped.some((one) => one.outcome === 'refused')) return 'refused';
   return shipped.every((one) => one.outcome === 'already-published')
     ? 'already-published'
     : 'published';
@@ -590,6 +790,10 @@ async function prepare(
     state: ShopState,
     pid: number | null = null,
     published: readonly PublishReport[] = [],
+    // Три действия — работа ПУБЛИКАЦИИ. У `up`, `down` и `status` их нет, и
+    // выдумывать им пустые шаги значило бы обещать действие, которого команда
+    // не делает.
+    publication: PublicationSteps | null = null,
   ): ShopResult => ({
     schemaVersion: SCHEMA_VERSION,
     command,
@@ -628,6 +832,7 @@ async function prepare(
     },
     scopeConflicts,
     access: { npmrc: npmrcLines(address, scopeConflicts) },
+    publication,
     published,
     writes,
     trace: trace.snapshot(),

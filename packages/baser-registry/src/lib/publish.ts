@@ -45,6 +45,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ShopProblemLog } from './problems.js';
+import type { PublicationSteps } from './steps.js';
 
 /** Чем публикуем. Выбирается инструментом из манифеста, а не человеком. */
 export type Manager = 'npm' | 'pnpm';
@@ -57,12 +58,39 @@ export type Manager = 'npm' | 'pnpm';
  * не поехал» одним словом не сказать, а человеку нужно именно это. Общий исход
  * отвечает на вопрос «идти ли разбираться», построчный — «с чем именно».
  */
-export type ShipmentOutcome = 'published' | 'already-published' | 'failed';
+export type ShipmentOutcome =
+  /** Товар положен на склад этим прогоном. */
+  | 'published'
+  /** Тот же выпуск уже лежал: делать было нечего. Успех (`tasker:BASER2-257`). */
+  | 'already-published'
+  /** Везли и не довезли: склад, права, менеджер. */
+  | 'failed'
+  /**
+   * Везти не начали: вход непригоден, и чинит его человек.
+   *
+   * Сюда попадает отказ ВЫПУСКА — «правишь выпущенное». Он не `failed`, потому
+   * что ничего не ломалось: склад исправен, а номер надо поднять. Разные коды
+   * возврата у этих двух исходов — не украшение, а весь смысл различения.
+   */
+  | 'refused';
 
 /** Что сделала публикация — уезжает в ответ данными. */
 export interface PublishReport {
-  /** Что стало с этим пакетом. */
+  /**
+   * Что стало с этим пакетом — одним словом.
+   *
+   * Производная от `steps` и оставлена намеренно: конвейеру, который читает
+   * партию построчно, нужен короткий ответ «идти ли разбираться», а с ЧЕМ
+   * именно — он прочитает шагами.
+   */
   readonly outcome: ShipmentOutcome;
+  /**
+   * Три действия ЭТОГО пакета: выпуск · отгрузка · объявление.
+   *
+   * У пакетов партии они разные — один уехал, второй уже лежал, третьему
+   * отказал выпуск, — поэтому шаги живут на пакете, а не только на прогоне.
+   */
+  readonly steps: PublicationSteps;
   /** Имя пакета из манифеста. */
   readonly name: string;
   readonly version: string;
@@ -293,11 +321,24 @@ function normalize(address: string): string {
 }
 
 /**
- * ЛЕЖИТ ЛИ ЭТА ВЕРСИЯ НА СКЛАДЕ — спрашиваем склад, а не читаем чужой текст.
+ * ОТПЕЧАТОК ТОВАРА — чем сверяют содержимое, не разбирая его глазами.
  *
- * Повторная публикация — не провал, а «делать нечего»: то же состояние без
- * крика, ровно как второй `up` и второй `down`. Отличить этот исход можно двумя
- * способами, и выбран не первый:
+ * Оба поля — про один и тот же тарбол, и оба приезжают ровно в том виде, в
+ * котором их называет и склад, и менеджер: `integrity` (`sha512-…`) и `shasum`
+ * (sha1). Держим оба, потому что назвать своё содержимое склад может любым из
+ * них: лежащее у нас пришло от менеджера, а проксированное сверху — от чужого
+ * реестра, и там набор полей не наш.
+ */
+export interface Fingerprint {
+  readonly integrity: string | null;
+  readonly shasum: string | null;
+}
+
+/**
+ * ЧТО ЛЕЖИТ НА СКЛАДЕ ПОД ЭТИМ НОМЕРОМ — спрашиваем склад, а не читаем чужой
+ * текст. `null` — номер свободен.
+ *
+ * Отличить занятый номер можно двумя способами, и выбран не первый:
  *
  * - **по выводу менеджера** (`E409`, `409 Conflict`, `already present`) — это
  *   разбор ЧУЖОГО ТЕКСТА, который у npm и pnpm разный и меняется с их выпусками.
@@ -305,30 +346,191 @@ function normalize(address: string): string {
  * - **по складу** — один HTTP-вопрос с однозначным ответом. Замер 2026-08-08:
  *   пакет с версией → `200` и список версий, пакета нет вовсе → `400`.
  *
- * Спрашиваем ДВАЖДЫ и по разным поводам: до публикации — чтобы не запускать
- * менеджера впустую и не трогать чужой `.npmrc` ради работы, которой нет; после
- * неудачи — чтобы отличить гонку (кто-то положил ту же версию между нашим
- * вопросом и нашей попыткой) от настоящей беды.
+ * ОТВЕТ СТАЛ ЗАПИСЬЮ, А НЕ «ДА/НЕТ», и это главная правка захода. «Номер занят»
+ * само по себе не отвечает ни на один из двух вопросов, которые здесь на самом
+ * деле задают: тот же это выпуск или уже другой. Пока ответ был булевым, любое
+ * «занят» означало успех — и порча выпуска ехала мимо человека молча
+ * (`tasker:BASER2-287`).
+ *
+ * Спрашиваем ДВАЖДЫ и по разным поводам: до публикации — чтобы судить выпуск и
+ * не запускать менеджера впустую; после неудачи — чтобы отличить гонку (кто-то
+ * положил ту же версию между нашим вопросом и нашей попыткой) от настоящей беды.
  */
-export async function onShelf(
+export async function lookOnShelf(
   address: string,
   name: string,
   version: string,
-): Promise<boolean> {
+): Promise<Fingerprint | null> {
   try {
     const response = await fetch(`${address}/${encodeURIComponent(name)}`, {
       signal: AbortSignal.timeout(5000),
     });
-    if (!response.ok) return false;
+    if (!response.ok) return null;
     const body = (await response.json()) as {
-      versions?: Record<string, unknown>;
+      versions?: Record<string, { dist?: { integrity?: unknown; shasum?: unknown } }>;
     };
-    return Object.hasOwn(body.versions ?? {}, version);
+    const found = body.versions?.[version];
+    if (found === undefined) return null;
+    return {
+      integrity: text(found.dist?.integrity),
+      shasum: text(found.dist?.shasum),
+    };
   } catch {
     // Склад не ответил — утверждать, что версия там есть, нечем. Публикация
     // пойдёт своим путём и упрётся в настоящий отказ, который назовёт причину.
-    return false;
+    return null;
   }
+}
+
+function text(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/**
+ * ОТПЕЧАТОК ТОГО, ЧТО МЫ СОБРАЛИСЬ ПОЛОЖИТЬ, — спрошен у самого менеджера.
+ *
+ * Здесь стоит вся тяжесть отказа «правишь выпущенное», поэтому способ выбран
+ * замером, а не соображением. Замеры 2026-08-10, npm 10.9.8 и pnpm 11.17.0 на
+ * живой раздаче verdaccio 6.9.2:
+ *
+ * | что проверяли                                   | чем кончилось          |
+ * | ----------------------------------------------- | ---------------------- |
+ * | `integrity` сухого прогона против `dist.integrity` на складе | совпадает побайтово ✅ |
+ * | два сухих прогона подряд                        | тот же отпечаток ✅     |
+ * | правка файла в пакете                           | отпечаток разошёлся ✅  |
+ * | bump соседа по `workspace:`                     | отпечаток разошёлся ✅  |
+ * | без `.npmrc`, без токена, с ядовитым скоупом    | тот же отпечаток ✅     |
+ * | пакет, который менеджер не собрал               | код 1, отпечатка нет ✅ |
+ *
+ * Из первой строки и следует, что сверка вообще возможна: отпечаток сухого
+ * прогона — это отпечаток ТОГО САМОГО тарбола, который уехал бы на склад, а не
+ * похожая на него величина. Из последней — что «сверить нечем» отличимо от
+ * «сверили и разошлось», и молча считать первое вторым не придётся.
+ *
+ * Четвёртая строка — не ложное срабатывание, а правда: `pnpm` подставляет в
+ * манифест настоящий номер вместо `workspace:*`, значит выпуск с тем же номером
+ * тянул бы за собой ДРУГОГО соседа. Это и есть правка выпущенного.
+ *
+ * ── ПОЧЕМУ ЭТО ОТДЕЛЬНЫЙ ВЫЗОВ, А НЕ ФЛАГ К СВЕРКЕ НАЗНАЧЕНИЯ ────────────────
+ *
+ * Соблазн был: сухой прогон уже есть в `runPublish`, добавь `--json` и получи
+ * заодно отпечаток. Замер запретил — **`pnpm` с `--json` СЪЕДАЕТ строку
+ * назначения** (`📦 имя@версия → адрес`), а она наш единственный рубеж против
+ * отгрузки в чужой реестр. Менять рубеж на удобство мы не станем.
+ *
+ * Платы это не стоит: два прогона никогда не случаются на одном пакете.
+ * Отпечаток снимается ТОЛЬКО когда номер на складе уже занят, а назначение
+ * сверяется только когда мы реально везём.
+ */
+export function fingerprintOf(
+  manager: Manager,
+  directory: string,
+): { print: Fingerprint | null; said: string } {
+  const outcome = spawnSync(
+    manager,
+    [
+      'publish',
+      '--dry-run',
+      '--json',
+      // Та же причина, что и в живой публикации: склад локации — дев-канал, и
+      // требовать там чистого дерева значило бы запретить им пользоваться.
+      ...(manager === 'pnpm' ? ['--no-git-checks'] : []),
+    ],
+    { cwd: directory, encoding: 'utf8', env: cleanEnvironment() },
+  );
+
+  const said = `${outcome.stdout ?? ''}${outcome.stderr ?? ''}`;
+  if (outcome.status !== 0) return { print: null, said };
+  return { print: printIn(outcome.stdout ?? ''), said };
+}
+
+/**
+ * Достаёт отпечаток из ответа менеджера.
+ *
+ * Разбираем JSON, а не ищем подстроку: «похоже на отпечаток» и «является
+ * отпечатком» — разные утверждения (`kb:BASER3-10`). Замечания менеджеры пишут
+ * в другой поток, но от чужой строки перед телом ответа мы всё равно
+ * прикрываемся — ищем начало объекта, а не считаем весь поток JSON'ом.
+ */
+function printIn(stdout: string): Fingerprint | null {
+  const start = stdout.indexOf('{');
+  if (start < 0) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.slice(start));
+  } catch {
+    return null;
+  }
+
+  const said = parsed as { integrity?: unknown; shasum?: unknown };
+  const print = { integrity: text(said.integrity), shasum: text(said.shasum) };
+  return print.integrity === null && print.shasum === null ? null : print;
+}
+
+/**
+ * Одно ли это содержимое. `null` — сверить нечем, и это НЕ «да».
+ *
+ * Сильное поле вперёд: `integrity` называет и алгоритм, и значение, а `shasum`
+ * остаётся запасным — им отвечают записи, приехавшие не от нашего менеджера.
+ */
+export function sameContent(
+  onShelf: Fingerprint,
+  ours: Fingerprint,
+): boolean | null {
+  if (onShelf.integrity !== null && ours.integrity !== null) {
+    return onShelf.integrity === ours.integrity;
+  }
+  if (onShelf.shasum !== null && ours.shasum !== null) {
+    return onShelf.shasum === ours.shasum;
+  }
+  return null;
+}
+
+/**
+ * ВЫПУСК — ПЕРВОЕ ИЗ ТРЁХ ДЕЙСТВИЙ: вещь замерзает и получает номер.
+ *
+ * Судит ровно один вопрос — вправе ли это содержимое ехать под этим номером, — и
+ * ничего не отгружает. Четыре исхода, и все четыре разные:
+ *
+ * | что на складе                    | вердикт     | что дальше                       |
+ * | -------------------------------- | ----------- | -------------------------------- |
+ * | номера нет                       | `free`      | выпуск состоялся, везём          |
+ * | тот же тарбол                    | `same`      | это повтор, отгрузка идемпотентна |
+ * | другой тарбол                    | `diverged`  | ОТКАЗ: правишь выпущенное        |
+ * | занят, а сверить нечем           | `unjudged`  | ОТКАЗ: молча не пропускаем       |
+ *
+ * Вторая строка — то самое решение `tasker:BASER2-257`, и оно остаётся в силе:
+ * второй `publish` тем же товаром — то же состояние без крика, как второй `up`.
+ * Третья — то, ради чего заход: прежде она была неотличима от второй.
+ */
+export type ReleaseVerdict =
+  | { readonly kind: 'free' }
+  | { readonly kind: 'same' }
+  | { readonly kind: 'diverged' }
+  | { readonly kind: 'unjudged'; readonly said: string };
+
+export function judgeRelease(
+  onShelf: Fingerprint | null,
+  manager: Manager,
+  directory: string,
+): ReleaseVerdict {
+  // Номер свободен — судить нечего, и менеджера ради этого не запускаем.
+  if (onShelf === null) return { kind: 'free' };
+
+  const ours = fingerprintOf(manager, directory);
+  if (ours.print === null) {
+    return { kind: 'unjudged', said: ours.said };
+  }
+
+  const same = sameContent(onShelf, ours.print);
+  if (same === null) {
+    return {
+      kind: 'unjudged',
+      said: 'склад не назвал отпечаток того, что у него лежит',
+    };
+  }
+  return same ? { kind: 'same' } : { kind: 'diverged' };
 }
 
 export interface PublishRun {

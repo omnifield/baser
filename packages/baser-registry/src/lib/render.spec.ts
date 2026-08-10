@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderText } from './render.js';
 import { exitCodeOf } from './result.js';
-import { sampleResult } from './result.fixture.js';
+import { sampleResult, shippedSteps } from './result.fixture.js';
 
 describe('текст рисуется поверх данных и ничего не добавляет от себя', () => {
   it('называет состояние, адрес, товар и апстрим', () => {
@@ -160,11 +160,13 @@ describe('текст рисуется поверх данных и ничего 
       manager: 'npm' as const,
       needsWorkspace: false,
       destination: 'http://127.0.0.1:4873',
+      steps: shippedSteps(),
     };
     const text = renderText(
       sampleResult({
         command: 'publish',
         outcome: 'published',
+        publication: shippedSteps(),
         published: [
           { outcome: 'published', name: '@baser/один', version: '1.0.0', ...card },
           {
@@ -181,6 +183,86 @@ describe('текст рисуется поверх данных и ничего 
     expect(text).toContain('уже лежало @baser/два@2.0.0');
     // Общий заголовок отвечает только на вопрос «идти ли разбираться».
     expect(text).toContain('партия на складе: 2 пакета');
+  });
+
+  it('три действия печатаются ВСЕ ТРИ, и объявление среди них молчит', () => {
+    const text = renderText(
+      sampleResult({
+        command: 'publish',
+        outcome: 'published',
+        publication: shippedSteps(),
+      }),
+    );
+
+    expect(text).toContain('три действия:');
+    expect(text).toContain('выпуск');
+    expect(text).toContain('отгрузка');
+    // Названная тишина: строка есть, и в ней сказано, ПОЧЕМУ тихо.
+    expect(text).toContain('объявление');
+    expect(text).toContain('витрины у магазина локации нет вовсе');
+  });
+
+  it('прогон не про публикацию трёх действий не выдумывает', () => {
+    // У `status` их нет, и печатать ему пустые шаги значило бы обещать
+    // действие, которого команда не делает.
+    const text = renderText(sampleResult());
+
+    expect(text).not.toContain('три действия:');
+  });
+
+  it('ЗАГОЛОВОК называет шаг, который отказал, а не общее «не вышло»', () => {
+    const text = renderText(
+      sampleResult({
+        command: 'publish',
+        outcome: 'refused',
+        publication: {
+          release: {
+            step: 'release',
+            outcome: 'refused',
+            reason: 'release-frozen',
+          },
+          shipment: { step: 'shipment', outcome: 'skipped', reason: null },
+          announcement: {
+            step: 'announcement',
+            outcome: 'skipped',
+            reason: null,
+          },
+        },
+      }),
+    );
+
+    expect(text).toContain('отказ выпуска');
+    expect(text).toContain('правишь выпущенное');
+    // И отгрузка при этом честно говорит, что её не было.
+    expect(text).toContain('не начиналось');
+  });
+
+  it('закрытый магазин заголовком называет ОТГРУЗКУ, а не выпуск', () => {
+    // Два отказа, которые человек лечит по-разному: один — поднять магазин,
+    // другой — поднять номер. Одним словом их не сказать.
+    const text = renderText(
+      sampleResult({
+        command: 'publish',
+        outcome: 'refused',
+        publication: {
+          release: { step: 'release', outcome: 'skipped', reason: null },
+          shipment: {
+            step: 'shipment',
+            outcome: 'refused',
+            reason: 'shop-closed',
+          },
+          announcement: {
+            step: 'announcement',
+            outcome: 'skipped',
+            reason: null,
+          },
+        },
+      }),
+    );
+
+    expect(text).toContain('отказ отгрузки');
+    expect(text).toContain('до склада нет дороги');
+    expect(text).not.toContain('отказ выпуска');
   });
 
   it('число товара склоняется по-русски', () => {
