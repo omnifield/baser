@@ -519,6 +519,25 @@ export function stepRun(command, id) {
  * зависимостей стоит настоящих минут и настоящего реестра). Срез идёт по границе
  * шага, а не по «последнему &&»: границу объявляет сама цепочка.
  */
+/**
+ * Цепочка из ОДНОГО названного шага — вместе с прологом, то есть исполнимая.
+ *
+ * Нужна там, где предмет пробы — поведение ОБЁРТКИ, а не тела: прогнать шаг и
+ * увидеть, что отказ называет именно его. Тело шага для этого не годится (у него
+ * нет имени), а вся цепочка тянет за собой соседей, до которых пробе дела нет.
+ */
+export function chainStep(command, id) {
+  const found = [...command.matchAll(STEP)].find((match) => match[3] === id);
+  if (found === undefined) {
+    throw new Error(`шага "${id}" в цепочке нет, гонять нечего`);
+  }
+  const at = command.indexOf('{ devbox_step');
+  if (at === -1) {
+    throw new Error(`цепочка без пролога, шаг не назовёт себя:\n${command}`);
+  }
+  return command.slice(0, at) + found[0];
+}
+
 export function chainBefore(command, id) {
   const step = steps(command).find((item) => item.id === id);
   if (step === undefined) {

@@ -134,7 +134,7 @@
       "source": "omnifield/devbox",
       "version": "0.12.0-dev.1",
       "class": "regenerated",
-      "hash": "sha256:fe74d8f0b216a1e1e7bf68af7be2070944e4be910a368321a8d78be752992d67"
+      "hash": "sha256:576c1e927acf5fb304d9a3e0e83824b9cbb84b8e03684f475f8d21c71df27a0a"
     },
     {
       "dest": ".git/hooks/pre-commit",
