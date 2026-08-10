@@ -32,17 +32,8 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { createServer } from 'node:http';
-import { execFileSync, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -56,6 +47,7 @@ import {
 } from './packed.mjs';
 import { containerEnv } from './env.mjs';
 import { MANAGER_PROBE_MS } from './limits.mjs';
+import { installEnv, packTool, withRegistry } from './tool-registry.mjs';
 
 /** Инструмент локации, ради которого задача и заведена. */
 const STORE = '@omnifield/baser-registry';
@@ -258,101 +250,24 @@ describe('названные отказы: версия обязана назы�
  * исполняется шаг ИЗ АРТЕФАКТА, и спрашивается не менеджер, а PATH.
  */
 describe('ПРОБА: объявил магазин — команда есть, без единой ручной установки', () => {
-  /** Тарбол фикстуры: настоящий пакет с командой, собранный настоящим `npm pack`. */
-  function packTool() {
-    const source = join(box('tool-src'), 'tool');
-    mkdirSync(source, { recursive: true });
-    writeFileSync(
-      join(source, 'package.json'),
-      `${JSON.stringify(
-        {
-          name: STORE,
-          version: STORE_VERSION,
-          bin: { [STORE_BIN]: 'bin.js' },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    writeFileSync(
-      join(source, 'bin.js'),
-      '#!/usr/bin/env node\nprocess.stdout.write("МАГАЗИН-НА-МЕСТЕ\\n");\n',
-    );
-
-    const out = box('tool-pack');
-    execFileSync(
-      'npm',
-      ['pack', '--ignore-scripts', '--pack-destination', out, source],
-      { stdio: 'pipe' },
-    );
-    const name = readdirSync(out).find((file) => file.endsWith('.tgz'));
-    return readFileSync(join(out, name));
-  }
-
-  /** Реестр, отвечающий на то, что спрашивает установка: манифест и тарбол. */
-  async function withRegistry(tarball, body) {
-    const asked = [];
-    let base = '';
-    const server = createServer((req, res) => {
-      asked.push(decodeURIComponent(req.url));
-      if (req.url.endsWith('.tgz')) {
-        res.setHeader('content-type', 'application/octet-stream');
-        res.end(tarball);
-        return;
-      }
-      if (decodeURIComponent(req.url) !== `/${STORE}`) {
-        res.statusCode = 404;
-        res.setHeader('content-type', 'application/json');
-        res.end('{}');
-        return;
-      }
-      res.setHeader('content-type', 'application/json');
-      res.end(
-        JSON.stringify({
-          name: STORE,
-          'dist-tags': { latest: STORE_VERSION },
-          versions: {
-            [STORE_VERSION]: {
-              name: STORE,
-              version: STORE_VERSION,
-              bin: { [STORE_BIN]: 'bin.js' },
-              dist: {
-                tarball: `${base}/tarball/tool.tgz`,
-                integrity: `sha512-${createHash('sha512').update(tarball).digest('base64')}`,
-              },
-            },
-          },
-        }),
-      );
-    });
-    await new Promise((ready) => server.listen(0, '127.0.0.1', ready));
-    base = `http://127.0.0.1:${server.address().port}`;
-    try {
-      return await body({ base, asked });
-    } finally {
-      server.close();
-    }
-  }
-
   /**
-   * Окружение установки: изображает контейнер и СИДИТ В КЛЕТКЕ.
-   *
-   * Клетка — не аккуратность: глобальная установка без своего префикса легла бы
-   * в машину прогона, а конфиг пользователя привёл бы её в настоящий реестр.
-   * Имена строчные (`npm_config_*`) намеренно: они бьют одноимённые UPPERCASE, и
-   * ровно этим у зоны уже разъезжалась клетка (`test/env.mjs`).
+   * Стаб-реестр, тарбол и клетка вокруг npm живут в `tool-registry.mjs`: с
+   * `tasker:BASER2-292` та же раскладка нужна пробам фиксации редакций, а две
+   * копии клетки разъехались бы — и одна из проб тихо пошла бы в настоящий реестр.
    */
-  function install(base, prefix) {
-    return {
-      npm_config_registry: `${base}/`,
-      npm_config_prefix: prefix,
-      npm_config_cache: box('npm-cache'),
-      npm_config_userconfig: join(box('npm-conf'), 'npmrc'),
-      npm_config_audit: 'false',
-      npm_config_fund: 'false',
-      npm_config_update_notifier: 'false',
-    };
-  }
+  const tool = () => ({
+    name: STORE,
+    version: STORE_VERSION,
+    bin: STORE_BIN,
+    tarball: packTool({
+      name: STORE,
+      version: STORE_VERSION,
+      bin: STORE_BIN,
+      says: 'МАГАЗИН-НА-МЕСТЕ',
+      box,
+    }),
+  });
+  const install = (base, prefix) => installEnv(base, prefix, box);
 
   function sh(script, named) {
     return new Promise((resolve) => {
@@ -373,14 +288,13 @@ describe('ПРОБА: объявил магазин — команда есть,
     'ОБЪЯВЛЕН — и в контейнере появляется команда, которую можно запустить',
     { timeout: MANAGER_PROBE_MS },
     async () => {
-      const tarball = packTool();
       const { json } = await materialize({
         settings: { globalTools: { [STORE]: STORE_VERSION } },
       });
       const step = toolsStep(json);
       expect(step, json.onCreateCommand).toBeTruthy();
 
-      await withRegistry(tarball, async ({ base, asked }) => {
+      await withRegistry(tool(), async ({ base, asked }) => {
         const prefix = box('npm-prefix');
         const put = await sh(step, install(base, prefix));
         expect(put.code, `${put.out}\n${put.err}`).toBe(0);

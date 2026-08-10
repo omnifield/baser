@@ -172,9 +172,12 @@ describe('ЦЕПОЧКА ОБЪЯВЛЕНА ШАГАМИ, а не склеена
     // прогона по шагам» было бы верно ровно наполовину.
     const artifact = await materialize({ presets: ['omnifield'] });
 
+    // Пресет объявляет ассистента ТАБЛИЧКОЙ, поэтому за установкой стоит ещё и
+    // фиксация редакций (`tasker:BASER2-292`) — она такое же звено этой цепочки.
     expect(steps(artifact.onCreateCommand).map((step) => step.id)).toEqual([
       'corepack',
       'tools',
+      'editions',
     ]);
     // Инструментов нет — шага нет, ровно как в постсоздании.
     consumer.cleanup();
